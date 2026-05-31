@@ -1,6 +1,6 @@
 # Evaluating Large Language Models for Code Optimization
 
-This repository contains the code, inference outputs, and documentation for a Master's thesis extending the [PRO-Bench framework (SWE-Pro)](https://github.com/ezgiletta/SWE-Pro) with two new context granularities and five LLM models.
+This repository contains the code, inference outputs, and documentation for a Master's thesis extending the [PRO-Bench framework (SWE-Pro)](https://github.com/probench-swe/SWE-Pro) with two new context granularities and five LLM models.
 
 ## Contributions Over SWE-Pro
 
@@ -13,7 +13,7 @@ This repository contains the code, inference outputs, and documentation for a Ma
 
 ## Experimental Setup
 
-**15 experiments** = 5 models × 3 granularities (full-file, class-level, method-level), evaluated on 25 performance-regression PRs from pandas, scikit-learn, and xarray.
+**15 experiments** = 5 models × 3 granularities (full-file, class-level, method-level), evaluated on 102 performance-regression PRs from pandas, scikit-learn, and xarray.
 
 | Model | Provider | Granularities |
 |---|---|---|
@@ -27,7 +27,7 @@ This repository contains the code, inference outputs, and documentation for a Ma
 
 Full evaluation results (~5 GB) are hosted on Google Drive:
 
-**[Download Results](YOUR_GOOGLE_DRIVE_LINK_HERE)**
+**[Download Results](https://drive.google.com/file/d/1lEVWWITDcpHh0OvRufYVSrzgtV4oEr-n/view?usp=sharing)**
 
 The results directory contains per-PR reports, performance measurements, and experiment summaries for all 15 runs plus the developer reference (anchor) baseline.
 
@@ -38,8 +38,8 @@ probench/
 ├── harness/          # Docker-based evaluation harness (correctness + performance)
 ├── inference/        # LLM client implementations
 │   └── llm_client/
-│       ├── zhipu_client.py           ← new: GLM-5.1 via Zhipu AI
-│       ├── nvidia_nim_client.py      # DeepSeek V4 Pro, Kimi K2.6
+│       ├── zhipu_client.py           # GLM-5.1 via Zhipu AI
+│       ├── nvidia_nim_client.py      ← new: DeepSeek V4 Pro, Kimi K2.6
 │       ├── nvidia_nim_openai_client.py  # MiniMax M2.7
 │       └── openai_chat_client.py    # GPT-5.2
 ├── prep/
@@ -51,9 +51,9 @@ probench/
 └── utils/
 
 data/
-└── dataset.json      # 25-PR benchmark dataset
+└── dataset.json      # 102-PR benchmark dataset
 
-inference/            # LLM completions for all 15 experiments (15 × 25 PRs)
+inference/            # LLM completions for all 15 experiments (15 × 102 PRs)
 ├── oracle_full_file__glm-5.1.../
 ├── oracle_class_and_function_level__glm-5.1.../
 └── ...
@@ -83,7 +83,7 @@ To re-run evaluation from the stored inference outputs:
 
 ```bash
 python -m probench.harness.run_evaluation \
-    --inference_dir inference/oracle_full_file__glm-5.1__tNone__topNone__pd_425f209a1355 \
+    --inference_dir inference/oracle_full_file__glm-5.1__tNone__topNone__pd_4102f209a1355 \
     --config config/config.yaml
 ```
 
@@ -95,7 +95,7 @@ python -m probench.reporting.aggregate_all_experiments --results_dir results/
 
 ## Attribution
 
-This work extends [SWE-Pro](https://github.com/ezgiletta/SWE-Pro) (Mozilla Public License 2.0).  
+This work extends [SWE-Pro](https://github.com/probench-swe/SWE-Pro) (Mozilla Public License 2.0).  
 Original framework by Siemens AG. All original files retain their MPL-2.0 license headers.
 
 ## License
