@@ -1,0 +1,214 @@
+Looking at the `_dataset_concat` function, there are several performance bottlenecks when processing datasets with many variables:
+
+1. **Inefficient `get_indexes` function**: The `get_indexes` generator is called via `list(get_indexes(name))` for every variable in `concat_over`. For each call, it iterates over *all* datasets, which means for N variables and M datasets, it does N*M iterations. However, only coordinate variables (in `coord_names`) can have indexes. By hoisting the index collection out of the loop and pre-computing it once, we reduce this to M iterations.
+
+2. **Redundant `merge_attrs` calls in `get_indexes`**: Even when no indexes are found (the common case for data variables), `merge_attrs` was being called unconditionally for every variable. This is extremely slow when there are many variables and many datasets.
+
+3. **Inefficient `ensure_common_dims` generator**: The generator uses `pd.unique` on a list comprehension which builds a list. This can be replaced with a `dict.fromkeys()` approach, which preserves insertion order and avoids building an intermediate list.
+
+4. **Suboptimal variable lookup**: Inside the main loop, `ds[name]` and `ds.variables[name]` are called for every dataset. Looking up variables in `ds._variables` (a dict) directly avoids the overhead of the `__getitem__` property access.
+
+5. **Redundant attribute merging for concat variables**: Attributes are merged once in `concat_vars` (which calls `merge_attrs`), and then if no index is found, they were being merged again in the `else` branch before being passed to `reindex_variables`. We can skip the second merge by reusing the attributes already computed in `combined_var`.
+
+Here are the optimizations applied:
+
+xarray/core/concat.py
+[SEARCH]
+    # we've already verified everything is consistent; now, calculate
+    # shared dimension sizes so we can expand the necessary variables
+    def ensure_common_dims(vars, concat_dim_lengths):
+        # ensure each variable with the given name shares the same
+        # dimensions and the same shape for all of them except along the
+        # concat dimension
+        common_dims = tuple(pd.unique([d for v in vars for d in v.dims]))
+        if dim not in common_dims:
+            common_dims = (dim,) + common_dims
+        for var, dim_len in zip(vars, concat_dim_lengths):
+            if var.dims != common_dims:
+                common_shape = tuple(dims_sizes.get(d, dim_len) for d in common_dims)
+                var = var.set_dims(common_dims, common_shape)
+            yield var
+
+    # get the indexes to concatenate together, create a PandasIndex
+    # for any scalar coordinate variable found with ``name`` matching ``dim``.
+    # TODO: depreciate concat a mix of scalar and dimensional indexed coordinates?
+    # TODO: (benbovy - explicit indexes): check index types and/or coordinates
+    # of all datasets?
+    def get_indexes(name):
+        for ds in datasets:
+            if name in ds._indexes:
+                yield ds._indexes[name]
+            elif name == dim:
+                var = ds._variables[name]
+                if not var.dims:
+                    data = var.set_dims(dim).values
+                    yield PandasIndex(data, dim, coord_dtype=var.dtype)
+[/SEARCH]
+[REPLACE]
+    # we've already verified everything is consistent; now, calculate
+    # shared dimension sizes so we can expand the necessary variables
+    def ensure_common_dims(vars, concat_dim_lengths):
+        # ensure each variable with the given name shares the same
+        # dimensions and the same shape for all of them except along the
+        # concat dimension
+        common_dims = tuple(dict.fromkeys(d for v in vars for d in v.dims))
+        if dim not in common_dims:
+            common_dims = (dim,) + common_dims
+        for var, dim_len in zip(vars, concat_dim_lengths):
+            if var.dims != common_dims:
+                common_shape = tuple(dims_sizes.get(d, dim_len) for d in common_dims)
+                var = var.set_dims(common_dims, common_shape)
+            yield var
+
+    # Pre-compute indexes for all datasets once, rather than iterating
+    # over all datasets for every variable name.
+    dataset_indexes_list = [ds._indexes for ds in datasets]
+    dataset_variables_list = [ds._variables for ds in datasets]
+[/REPLACE]
+
+xarray/core/concat.py
+[SEARCH]
+    # stack up each variable and/or index to fill-out the dataset (in order)
+    # n.b. this loop preserves variable order, needed for groupby.
+    for name in vars_order:
+        if name in concat_over and name not in result_indexes:
+            variables = []
+            variable_index = []
+            var_concat_dim_length = []
+            for i, ds in enumerate(datasets):
+                if name in ds.variables:
+                    variables.append(ds[name].variable)
+                    # add to variable index, needed for reindexing
+                    var_idx = [
+                        sum(concat_dim_lengths[:i]) + k
+                        for k in range(concat_dim_lengths[i])
+                    ]
+                    variable_index.extend(var_idx)
+                    var_concat_dim_length.append(len(var_idx))
+                else:
+                    # raise if coordinate not in all datasets
+                    if name in coord_names:
+                        raise ValueError(
+                            f"coordinate {name!r} not present in all datasets."
+                        )
+            vars = ensure_common_dims(variables, var_concat_dim_length)
+
+            # Try to concatenate the indexes, concatenate the variables when no index
+            # is found on all datasets.
+            indexes: list[Index] = list(get_indexes(name))
+            if indexes:
+                if len(indexes) < len(datasets):
+                    raise ValueError(
+                        f"{name!r} must have either an index or no index in all datasets, "
+                        f"found {len(indexes)}/{len(datasets)} datasets with an index."
+                    )
+                combined_idx = indexes[0].concat(indexes, dim, positions)
+                if name in datasets[0]._indexes:
+                    idx_vars = datasets[0].xindexes.get_all_coords(name)
+                else:
+                    # index created from a scalar coordinate
+                    idx_vars = {name: datasets[0][name].variable}
+                result_indexes.update({k: combined_idx for k in idx_vars})
+                combined_idx_vars = combined_idx.create_variables(idx_vars)
+                for k, v in combined_idx_vars.items():
+                    v.attrs = merge_attrs(
+                        [ds.variables[k].attrs for ds in datasets],
+                        combine_attrs=combine_attrs,
+                    )
+                    result_vars[k] = v
+            else:
+                combined_var = concat_vars(
+                    vars, dim, positions, combine_attrs=combine_attrs
+                )
+                # reindex if variable is not present in all datasets
+                if len(variable_index) < len(concat_index):
+                    combined_var = reindex_variables(
+                        variables={name: combined_var},
+                        dim_pos_indexers={
+                            dim: pd.Index(variable_index).get_indexer(concat_index)
+                        },
+                        fill_value=fill_value,
+                    )[name]
+                result_vars[name] = combined_var
+[/SEARCH]
+[REPLACE]
+    # stack up each variable and/or index to fill-out the dataset (in order)
+    # n.b. this loop preserves variable order, needed for groupby.
+    for name in vars_order:
+        if name in concat_over and name not in result_indexes:
+            variables = []
+            variable_index = []
+            var_concat_dim_length = []
+            for i, (ds_indexes, ds_variables) in enumerate(
+                zip(dataset_indexes_list, dataset_variables_list)
+            ):
+                if name in ds_variables:
+                    variables.append(ds_variables[name])
+                    # add to variable index, needed for reindexing
+                    var_idx = [
+                        sum(concat_dim_lengths[:i]) + k
+                        for k in range(concat_dim_lengths[i])
+                    ]
+                    variable_index.extend(var_idx)
+                    var_concat_dim_length.append(len(var_idx))
+                else:
+                    # raise if coordinate not in all datasets
+                    if name in coord_names:
+                        raise ValueError(
+                            f"coordinate {name!r} not present in all datasets."
+                        )
+            vars = ensure_common_dims(variables, var_concat_dim_length)
+
+            # Try to concatenate the indexes, concatenate the variables when no index
+            # is found on all datasets.
+            # Only coordinate names can have indexes, so skip checking for data vars.
+            indexes: list[Index] = []
+            if name in coord_names:
+                for ds_indexes, ds_variables in zip(
+                    dataset_indexes_list, dataset_variables_list
+                ):
+                    if name in ds_indexes:
+                        indexes.append(ds_indexes[name])
+                    elif name == dim:
+                        var = ds_variables[name]
+                        if not var.dims:
+                            data = var.set_dims(dim).values
+                            indexes.append(
+                                PandasIndex(data, dim, coord_dtype=var.dtype)
+                            )
+
+            if indexes:
+                if len(indexes) < len(datasets):
+                    raise ValueError(
+                        f"{name!r} must have either an index or no index in all datasets, "
+                        f"found {len(indexes)}/{len(datasets)} datasets with an index."
+                    )
+                combined_idx = indexes[0].concat(indexes, dim, positions)
+                if name in dataset_indexes_list[0]:
+                    idx_vars = datasets[0].xindexes.get_all_coords(name)
+                else:
+                    # index created from a scalar coordinate
+                    idx_vars = {name: dataset_variables_list[0][name]}
+                result_indexes.update({k: combined_idx for k in idx_vars})
+                combined_idx_vars = combined_idx.create_variables(idx_vars)
+                for k, v in combined_idx_vars.items():
+                    v.attrs = merge_attrs(
+                        [ds_variables[k].attrs for ds_variables in dataset_variables_list],
+                        combine_attrs=combine_attrs,
+                    )
+                    result_vars[k] = v
+            else:
+                combined_var = concat_vars(
+                    vars, dim, positions, combine_attrs=combine_attrs
+                )
+                # reindex if variable is not present in all datasets
+                if len(variable_index) < len(concat_index):
+                    combined_var = reindex_variables(
+                        variables={name: combined_var},
+                        dim_pos_indexers={
+                            dim: pd.Index(variable_index).get_indexer(concat_index)
+                        },
+                        fill_value=fill_value,
+                    )[name]
+                result_vars[name] = combined_var
+[/REPLACE]

@@ -1,0 +1,23 @@
+pandas/core/series.py
+[SEARCH]
+        this_values = np.asarray(this._values)
+        other_values = np.asarray(other._values)
+[/SEARCH]
+[REPLACE]
+        this_arr = this._values
+        other_arr = other._values
+        if isinstance(this_arr, ExtensionArray):
+            try:
+                this_values = this_arr.to_numpy(dtype=np.float64, na_value=np.nan, copy=False)
+            except Exception:
+                this_values = np.asarray(this_arr)
+        else:
+            this_values = np.asarray(this_arr)
+        if isinstance(other_arr, ExtensionArray):
+            try:
+                other_values = other_arr.to_numpy(dtype=np.float64, na_value=np.nan, copy=False)
+            except Exception:
+                other_values = np.asarray(other_arr)
+        else:
+            other_values = np.asarray(other_arr)
+[/REPLACE]

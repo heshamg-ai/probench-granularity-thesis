@@ -1,0 +1,79 @@
+pandas/core/internals/blocks.py
+[SEARCH]
+        if is_string_dtype(values.dtype):
+            # Calculate the mask once, prior to the call of comp
+            # in order to avoid repeating the same computations
+            mask = ~isna(values)
+            masks = [
+                compare_or_regex_search(values, s[0], regex=regex, mask=mask)
+                for s in pairs
+            ]
+        else:
+            # GH#38086 faster if we know we dont need to check for regex
+            masks = [missing.mask_missing(values, s[0]) for s in pairs]
+
+        masks = [extract_bool_array(x) for x in masks]
+[/SEARCH]
+[REPLACE]
+        if is_string_dtype(values.dtype):
+            # Calculate the mask once, prior to the call of comp
+            # in order to avoid repeating the same computations
+            base_mask = ~isna(values)
+            _use_string = True
+        else:
+            # GH#38086 faster if we know we dont need to check for regex
+            base_mask = None
+            _use_string = False
+[/REPLACE]
+
+pandas/core/internals/blocks.py
+[SEARCH]
+        for i, (src, dest) in enumerate(pairs):
+            convert = i == src_len  # only convert once at the end
+            new_rb: list[Block] = []
+
+            # GH-39338: _replace_coerce can split a block into
+            # single-column blocks, so track the index so we know
+            # where to index into the mask
+[/SEARCH]
+[REPLACE]
+        for i, (src, dest) in enumerate(pairs):
+            convert = i == src_len  # only convert once at the end
+
+            # Compute mask for this source on the original values to avoid
+            # repeated scans and large intermediate storage
+            if _use_string:
+                pm = compare_or_regex_search(values, src, regex=regex, mask=base_mask)
+            else:
+                pm = missing.mask_missing(values, src)
+            pair_mask = extract_bool_array(pm)
+
+            # Fast-path: if there are no matches for this source and this is
+            # not the final conversion step, carry forward without changes
+            if not pair_mask.any() and not convert:
+                continue
+
+            new_rb: list[Block] = []
+
+            # GH-39338: _replace_coerce can split a block into
+            # single-column blocks, so track the index so we know
+            # where to index into the mask
+[/REPLACE]
+
+pandas/core/internals/blocks.py
+[SEARCH]
+                if len(rb) == 1:
+                    m = masks[i]
+                else:
+                    mib = masks[i]
+                    assert not isinstance(mib, bool)
+                    m = mib[blk_num : blk_num + 1]
+[/SEARCH]
+[REPLACE]
+                if len(rb) == 1:
+                    m = pair_mask
+                else:
+                    mib = pair_mask
+                    assert not isinstance(mib, bool)
+                    m = mib[blk_num : blk_num + 1]
+[/REPLACE]

@@ -1,0 +1,196 @@
+pandas/core/sorting.py
+[SEARCH]
+    # error: Incompatible types in assignment (expression has type
+    # "List[Union[ExtensionArray, ndarray[Any, Any], Index, Series]]", variable
+    # has type "Union[List[Union[ExtensionArray, ndarray[Any, Any]]], List[Series]]")
+    keys = [ensure_key_mapped(k, key) for k in keys]  # type: ignore[assignment]
+
+    for k, order in zip(keys, orders):
+        if na_position not in ["last", "first"]:
+            raise ValueError(f"invalid na_position: {na_position}")
+
+        if codes_given:
+            mask = k == -1
+            codes = k.copy()
+            n = len(codes)
+            mask_n = n
+            # error: Item "ExtensionArray" of "Union[Any, ExtensionArray,
+            # ndarray[Any, Any]]" has no attribute "any"
+            if mask.any():  # type: ignore[union-attr]
+                n -= 1
+
+        else:
+            cat = Categorical(k, ordered=True)
+            n = len(cat.categories)
+            codes = cat.codes.copy()
+            mask = cat.codes == -1
+            if mask.any():
+                mask_n = n + 1
+            else:
+                mask_n = n
+
+        if order:  # ascending
+            if na_position == "last":
+                # error: Argument 1 to "where" has incompatible type "Union[Any,
+                # ExtensionArray, ndarray[Any, Any]]"; expected
+                # "Union[_SupportsArray[dtype[Any]],
+                # _NestedSequence[_SupportsArray[dtype[Any]]], bool, int, float,
+                # complex, str, bytes, _NestedSequence[Union[bool, int, float,
+                # complex, str, bytes]]]"
+                codes = np.where(mask, n, codes)  # type: ignore[arg-type]
+            elif na_position == "first":
+                # error: Incompatible types in assignment (expression has type
+                # "Union[Any, int, ndarray[Any, dtype[signedinteger[Any]]]]",
+                # variable has type "Union[Series, ExtensionArray, ndarray[Any, Any]]")
+                # error: Unsupported operand types for + ("ExtensionArray" and "int")
+                codes += 1  # type: ignore[operator,assignment]
+        else:  # not order means descending
+            if na_position == "last":
+                # error: Unsupported operand types for - ("int" and "ExtensionArray")
+                # error: Argument 1 to "where" has incompatible type "Union[Any,
+                # ExtensionArray, ndarray[Any, Any]]"; expected
+                # "Union[_SupportsArray[dtype[Any]],
+                # _NestedSequence[_SupportsArray[dtype[Any]]], bool, int, float,
+                # complex, str, bytes, _NestedSequence[Union[bool, int, float,
+                # complex, str, bytes]]]"
+                codes = np.where(
+                    mask, n, n - codes - 1  # type: ignore[operator,arg-type]
+                )
+            elif na_position == "first":
+                # error: Unsupported operand types for - ("int" and "ExtensionArray")
+                # error: Argument 1 to "where" has incompatible type "Union[Any,
+                # ExtensionArray, ndarray[Any, Any]]"; expected
+                # "Union[_SupportsArray[dtype[Any]],
+                # _NestedSequence[_SupportsArray[dtype[Any]]], bool, int, float,
+                # complex, str, bytes, _NestedSequence[Union[bool, int, float,
+                # complex, str, bytes]]]"
+                codes = np.where(mask, 0, n - codes)  # type: ignore[operator,arg-type]
+
+        shape.append(mask_n)
+        labels.append(codes)
+
+    return indexer_from_factorized(labels, tuple(shape))
+[/SEARCH]
+[REPLACE]
+    # Only apply key mapping if a key function is provided
+    if key is not None:
+        # error: Incompatible types in assignment (expression has type
+        # "List[Union[ExtensionArray, ndarray[Any, Any], Index, Series]]", variable
+        # has type "Union[List[Union[ExtensionArray, ndarray[Any, Any]]], List[Series]]")
+        keys = [ensure_key_mapped(k, key) for k in keys]  # type: ignore[assignment]
+
+    labels = []
+    shape = []
+
+    if codes_given:
+        # Fast path: all ascending and NA placed last with no missing values.
+        # We can directly factorize using the existing codes without copying.
+        all_asc = all(orders)
+        if all_asc and na_position == "last":
+            no_na = True
+            shapes_tmp: list[int] = []
+            labels_tmp: list[np.ndarray] = []
+            for k in keys:
+                arr = np.asarray(k)
+                # error: Item "ExtensionArray" of "Union[Any, ExtensionArray,
+                # ndarray[Any, Any]]" has no attribute "any"
+                if (arr == -1).any():  # type: ignore[union-attr]
+                    no_na = False
+                    break
+                if arr.size:
+                    base_n = int(arr.max()) + 1
+                else:
+                    base_n = 0
+                shapes_tmp.append(base_n)
+                labels_tmp.append(arr)
+            if no_na:
+                return indexer_from_factorized(labels_tmp, tuple(shapes_tmp))
+
+        for k, order in zip(keys, orders):
+            if na_position not in ["last", "first"]:
+                raise ValueError(f"invalid na_position: {na_position}")
+
+            arr = np.asarray(k)
+            mask = arr == -1
+            # error: Item "ExtensionArray" of "Union[Any, ExtensionArray,
+            # ndarray[Any, Any]]" has no attribute "any"
+            has_na = bool(mask.any())  # type: ignore[union-attr]
+
+            if has_na:
+                non_na = arr[~mask]
+                if non_na.size:
+                    base = int(non_na.max()) + 1
+                else:
+                    base = 0
+            else:
+                base = int(arr.max()) + 1 if arr.size else 0
+
+            if order:  # ascending
+                if na_position == "last":
+                    if has_na:
+                        codes = arr.copy()
+                        codes[mask] = base
+                        mask_n = base + 1
+                    else:
+                        codes = arr
+                        mask_n = base
+                else:  # na_position == "first"
+                    codes = arr.copy()
+                    # Shift non-NA codes by +1; -1 becomes 0 naturally
+                    codes += 1
+                    mask_n = base + 1
+            else:  # descending
+                if na_position == "last":
+                    if has_na:
+                        codes = arr.copy()
+                        codes[~mask] = base - arr[~mask] - 1
+                        codes[mask] = base
+                        mask_n = base + 1
+                    else:
+                        codes = base - arr - 1
+                        mask_n = base
+                else:  # na_position == "first"
+                    if has_na:
+                        codes = arr.copy()
+                        codes[~mask] = base - arr[~mask]
+                        codes[mask] = 0
+                    else:
+                        codes = base - arr
+                    mask_n = base + 1
+
+            shape.append(mask_n)
+            labels.append(codes)
+
+        return indexer_from_factorized(labels, tuple(shape))
+
+    for k, order in zip(keys, orders):
+        if na_position not in ["last", "first"]:
+            raise ValueError(f"invalid na_position: {na_position}")
+
+        cat = Categorical(k, ordered=True)
+        n = len(cat.categories)
+        codes = cat.codes.copy()
+        mask = cat.codes == -1
+        if mask.any():
+            mask_n = n + 1
+        else:
+            mask_n = n
+
+        if order:  # ascending
+            if na_position == "last":
+                codes = np.where(mask, n, codes)  # type: ignore[arg-type]
+            elif na_position == "first":
+                codes += 1  # type: ignore[operator,assignment]
+        else:  # not order means descending
+            if na_position == "last":
+                codes = np.where(
+                    mask, n, n - codes - 1  # type: ignore[operator,arg-type]
+                )
+            elif na_position == "first":
+                codes = np.where(mask, 0, n - codes)  # type: ignore[operator,arg-type]
+
+        shape.append(mask_n)
+        labels.append(codes)
+
+    return indexer_from_factorized(labels, tuple(shape))
+[/REPLACE]

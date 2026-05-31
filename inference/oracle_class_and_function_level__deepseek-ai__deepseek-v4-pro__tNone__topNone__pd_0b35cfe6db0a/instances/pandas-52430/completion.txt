@@ -1,0 +1,79 @@
+pandas/core/base.py
+[SEARCH]
+        if isinstance(self.dtype, ExtensionDtype):
+            return self.array.to_numpy(dtype, copy=copy, na_value=na_value, **kwargs)
+        elif kwargs:
+            bad_keys = list(kwargs.keys())[0]
+            raise TypeError(
+                f"to_numpy() got an unexpected keyword argument '{bad_keys}'"
+            )
+
+        if na_value is not lib.no_default:
+            values = self._values
+            if not can_hold_element(values, na_value):
+                # if we can't hold the na_value asarray either makes a copy or we
+                # error before modifying values. The asarray later on thus won't make
+                # another copy
+                values = np.asarray(values, dtype=dtype)
+            else:
+                values = values.copy()
+
+            values[np.asanyarray(self.isna())] = na_value
+        else:
+            values = self._values
+
+        result = np.asarray(values, dtype=dtype)
+
+        if (copy and na_value is lib.no_default) or (
+            not copy and using_copy_on_write()
+        ):
+            if np.shares_memory(self._values[:2], result[:2]):
+                # Take slices to improve performance of check
+                if using_copy_on_write() and not copy:
+                    result = result.view()
+                    result.flags.writeable = False
+                else:
+                    result = result.copy()
+
+        return result
+[/SEARCH]
+[REPLACE]
+        if isinstance(self.dtype, ExtensionDtype):
+            return self.array.to_numpy(dtype, copy=copy, na_value=na_value, **kwargs)
+        elif kwargs:
+            bad_keys = list(kwargs.keys())[0]
+            raise TypeError(
+                f"to_numpy() got an unexpected keyword argument '{bad_keys}'"
+            )
+
+        if na_value is not lib.no_default:
+            values = self._values
+            if not can_hold_element(values, na_value):
+                # if we can't hold the na_value asarray either makes a copy or we
+                # error before modifying values. The asarray later on thus won't make
+                # another copy
+                values = np.asarray(values, dtype=dtype)
+            else:
+                values = values.copy()
+
+            values[np.asanyarray(self.isna())] = na_value
+            result = np.asarray(values, dtype=dtype)
+        else:
+            result = np.asarray(self._values, dtype=dtype)
+
+        if copy or not using_copy_on_write():
+            return result
+
+        if (
+            na_value is lib.no_default
+            and np.shares_memory(self._values[:2], result[:2])
+        ):
+            result = result.view()
+            result.flags.writeable = False
+        elif na_value is not lib.no_default:
+            # When na_value was applied we already hold a copy; no copy needed,
+            # just mark read-only when copy_on_write is active.
+            result = result.view()
+            result.flags.writeable = False
+        return result
+[/REPLACE]

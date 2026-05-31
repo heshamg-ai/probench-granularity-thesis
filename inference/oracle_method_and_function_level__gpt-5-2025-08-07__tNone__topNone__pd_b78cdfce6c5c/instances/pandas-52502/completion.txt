@@ -1,0 +1,9 @@
+pandas/core/series.py
+[SEARCH]
+        this_values = np.asarray(this._values)
+        other_values = np.asarray(other._values)
+[/SEARCH]
+[REPLACE]
+        this_values = this._values
+        other_values = other._values
+[/REPLACE]

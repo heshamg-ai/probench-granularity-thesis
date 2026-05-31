@@ -1,0 +1,125 @@
+pandas/core/internals/blocks.py
+[SEARCH]
+    _can_consolidate = True
+    _validate_ndim = True
+[/SEARCH]
+[REPLACE]
+    _can_consolidate = True
+    _validate_ndim = True
+
+    def round(self, decimals: int = 0) -> "Block":
+        if self.is_numeric and not self.is_extension:
+            values = np.round(self.values, decimals)
+            return self.make_block_same_class(values)
+        return self.copy(deep=False)
+[/REPLACE]
+
+pandas/core/internals/managers.py
+[SEARCH]
+    __bool__ = __nonzero__
+[/SEARCH]
+[REPLACE]
+    __bool__ = __nonzero__
+
+    def round(self, decimals: int = 0) -> "BaseBlockManager":
+        if not self.is_numeric_mixed_type:
+            new_blocks = [blk.round(decimals) for blk in self.blocks]
+            return type(self)(new_blocks, self.axes)
+        return self.apply("round", decimals=decimals)
+[/REPLACE]
+
+pandas/core/internals/array_manager.py
+[SEARCH]
+    arrays: list[np.ndarray | ExtensionArray]
+    _axes: list[Index]
+[/SEARCH]
+[REPLACE]
+    arrays: list[np.ndarray | ExtensionArray]
+    _axes: list[Index]
+
+    def round(self, decimals: int = 0) -> "BaseArrayManager":
+        if self.is_numeric_mixed_type:
+            return self.apply("round", decimals=decimals)
+        new_arrays = [
+            np.round(arr, decimals) if isinstance(arr, np.ndarray) else arr.round(decimals)
+            for arr in self.arrays
+        ]
+        return type(self)(new_arrays, self._axes, verify_integrity=False)
+[/REPLACE]
+
+pandas/core/frame.py
+[SEARCH]
+        from pandas.core.reshape.concat import concat
+
+        def _dict_round(df: DataFrame, decimals):
+            for col, vals in df.items():
+                try:
+                    yield _series_round(vals, decimals[col])
+                except KeyError:
+                    yield vals
+
+        def _series_round(ser: Series, decimals: int) -> Series:
+            if is_integer_dtype(ser.dtype) or is_float_dtype(ser.dtype):
+                return ser.round(decimals)
+            return ser
+
+        nv.validate_round(args, kwargs)
+
+        if isinstance(decimals, (dict, Series)):
+            if isinstance(decimals, Series) and not decimals.index.is_unique:
+                raise ValueError("Index of decimals must be unique")
+            if is_dict_like(decimals) and not all(
+                is_integer(value) for _, value in decimals.items()
+            ):
+                raise TypeError("Values in decimals must be integers")
+            new_cols = list(_dict_round(self, decimals))
+        elif is_integer(decimals):
+            # Dispatch to Series.round
+            new_cols = [_series_round(v, decimals) for _, v in self.items()]
+        else:
+            raise TypeError("decimals must be an integer, a dict-like or a Series")
+
+        if len(new_cols) > 0:
+            return self._constructor(
+                concat(new_cols, axis=1), index=self.index, columns=self.columns
+            ).__finalize__(self, method="round")
+        else:
+            return self.copy(deep=False)
+[/SEARCH]
+[REPLACE]
+        from pandas.core.reshape.concat import concat
+
+        def _dict_round(df: DataFrame, decimals):
+            for col, vals in df.items():
+                try:
+                    yield _series_round(vals, decimals[col])
+                except KeyError:
+                    yield vals
+
+        def _series_round(ser: Series, decimals: int) -> Series:
+            if is_integer_dtype(ser.dtype) or is_float_dtype(ser.dtype):
+                return ser.round(decimals)
+            return ser
+
+        nv.validate_round(args, kwargs)
+
+        if isinstance(decimals, (dict, Series)):
+            if isinstance(decimals, Series) and not decimals.index.is_unique:
+                raise ValueError("Index of decimals must be unique")
+            if is_dict_like(decimals) and not all(
+                is_integer(value) for _, value in decimals.items()
+            ):
+                raise TypeError("Values in decimals must be integers")
+            new_cols = list(_dict_round(self, decimals))
+            if len(new_cols) > 0:
+                return self._constructor(
+                    concat(new_cols, axis=1), index=self.index, columns=self.columns
+                ).__finalize__(self, method="round")
+            else:
+                return self.copy(deep=False)
+        elif is_integer(decimals):
+            result = self._mgr.round(decimals)
+            return self._constructor(result).__finalize__(self, method="round")
+        else:
+            raise TypeError("decimals must be an integer, a dict-like or a Series")
+[/REPLACE]

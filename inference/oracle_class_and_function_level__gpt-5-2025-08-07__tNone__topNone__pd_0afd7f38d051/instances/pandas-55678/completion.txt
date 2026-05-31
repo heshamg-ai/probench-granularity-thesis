@@ -1,0 +1,95 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+                if needs_i8_conversion(lbv.dtype):
+                    lbv = lbv.view("i8")
+                if needs_i8_conversion(rbv.dtype):
+                    rbv = rbv.view("i8")
+[/SEARCH]
+[REPLACE]
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # Perform dtype-preserving conversions before materializing to object ndarray.
+                if isinstance(lbv, ArrowExtensionArray):
+                    lbv = lbv._maybe_convert_datelike_array()
+                if isinstance(rbv, ArrowExtensionArray):
+                    rbv = rbv._maybe_convert_datelike_array()
+
+                # Convert datetimelike and timedelta EAs/ndarrays to i8 view to avoid object dtype.
+                if hasattr(lbv, "dtype") and needs_i8_conversion(lbv.dtype):
+                    try:
+                        lbv = lbv.view("i8")
+                    except Exception:
+                        lbv = np.asarray(lbv)
+                        if needs_i8_conversion(lbv.dtype):
+                            lbv = lbv.view("i8")
+                else:
+                    if isinstance(lbv, BaseMaskedArray):
+                        lbv = lbv._data
+                    elif isinstance(lbv, ExtensionArray):
+                        lbv = lbv.to_numpy()
+                    else:
+                        lbv = np.asarray(lbv)
+
+                if hasattr(rbv, "dtype") and needs_i8_conversion(rbv.dtype):
+                    try:
+                        rbv = rbv.view("i8")
+                    except Exception:
+                        rbv = np.asarray(rbv)
+                        if needs_i8_conversion(rbv.dtype):
+                            rbv = rbv.view("i8")
+                else:
+                    if isinstance(rbv, BaseMaskedArray):
+                        rbv = rbv._data
+                    elif isinstance(rbv, ExtensionArray):
+                        rbv = rbv.to_numpy()
+                    else:
+                        rbv = np.asarray(rbv)
+[/REPLACE]
+
+pandas/core/reshape/merge.py
+[SEARCH]
+                mapped = [
+                    _factorize_keys(
+                        left_by_values[n],
+                        right_by_values[n],
+                        sort=False,
+                        how="left",
+                    )
+                    for n in range(len(left_by_values))
+                ]
+                arrs = [np.concatenate(m[:2]) for m in mapped]
+                shape = tuple(m[2] for m in mapped)
+                group_index = get_group_index(
+                    arrs, shape=shape, sort=False, xnull=False
+                )
+                left_len = len(left_by_values[0])
+                lbv = group_index[:left_len]
+                rbv = group_index[left_len:]
+[/SEARCH]
+[REPLACE]
+                mapped = [
+                    _factorize_keys(
+                        left_by_values[n],
+                        right_by_values[n],
+                        sort=False,
+                        how="left",
+                    )
+                    for n in range(len(left_by_values))
+                ]
+                shape = tuple(m[2] for m in mapped)
+                lbv = get_group_index(
+                    [m[0] for m in mapped], shape=shape, sort=False, xnull=False
+                )
+                rbv = get_group_index(
+                    [m[1] for m in mapped], shape=shape, sort=False, xnull=False
+                )
+[/REPLACE]

@@ -1,0 +1,21 @@
+pandas/core/generic.py
+[SEARCH]
+        cond = -cond if inplace else cond
+        cond = cond.reindex(self._info_axis, axis=self._info_axis_number, copy=False)
+[/SEARCH]
+[REPLACE]
+        # GH#XXXXX Optimize ExtensionArray-backed DataFrame.where by converting
+        # to numpy bool array to avoid slow elementwise EA operations.
+        # We check if cond is a DataFrame with bool dtypes backed by ExtensionArrays.
+        if (
+            isinstance(cond, ABCDataFrame)
+            and cond.dtypes.map(is_extension_array_dtype).any()
+        ):
+            # Check all dtypes are bool to preserve semantics
+            if all(is_bool_dtype(dt) for dt in cond.dtypes):
+                # Convert to numpy bool dtype to avoid slow ExtensionArray ops
+                cond = cond.astype(bool)
+
+        cond = -cond if inplace else cond
+        cond = cond.reindex(self._info_axis, axis=self._info_axis_number, copy=False)
+[/REPLACE]

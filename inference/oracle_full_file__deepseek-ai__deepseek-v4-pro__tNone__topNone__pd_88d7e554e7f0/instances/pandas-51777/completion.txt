@@ -1,0 +1,160 @@
+pandas/core/series.py
+[SEARCH]
+    def combine_first(self, other) -> Series:
+        """
+        Update null elements with value in the same location in 'other'.
+
+        Combine two Series objects by filling null values in one Series with
+        non-null values from the other Series. Result index will be the union
+        of the two indexes.
+
+        Parameters
+        ----------
+        other : Series
+            The value(s) to be used for filling null values.
+
+        Returns
+        -------
+        Series
+            The result of combining the provided Series with the other object.
+
+        See Also
+        --------
+        Series.combine : Perform element-wise operation on two Series
+            using a given function.
+
+        Examples
+        --------
+        >>> s1 = pd.Series([1, np.nan])
+        >>> s2 = pd.Series([3, 4, 5])
+        >>> s1.combine_first(s2)
+        0    1.0
+        1    4.0
+        2    5.0
+        dtype: float64
+
+        Null values still persist if the location of that null value
+        does not exist in `other`
+
+        >>> s1 = pd.Series({'falcon': np.nan, 'eagle': 160.0})
+        >>> s2 = pd.Series({'eagle': 200.0, 'duck': 30.0})
+        >>> s1.combine_first(s2)
+        duck       30.0
+        eagle     160.0
+        falcon      NaN
+        dtype: float64
+        """
+        new_index = self.index.union(other.index)
+        this = self.reindex(new_index, copy=False)
+        other = other.reindex(new_index, copy=False)
+        if this.dtype.kind == "M" and other.dtype.kind != "M":
+            other = to_datetime(other)
+
+        return this.where(notna(this), other)
+[/SEARCH]
+[REPLACE]
+    def combine_first(self, other) -> Series:
+        """
+        Update null elements with value in the same location in 'other'.
+
+        Combine two Series objects by filling null values in one Series with
+        non-null values from the other Series. Result index will be the union
+        of the two indexes.
+
+        Parameters
+        ----------
+        other : Series
+            The value(s) to be used for filling null values.
+
+        Returns
+        -------
+        Series
+            The result of combining the provided Series with the other object.
+
+        See Also
+        --------
+        Series.combine : Perform element-wise operation on two Series
+            using a given function.
+
+        Examples
+        --------
+        >>> s1 = pd.Series([1, np.nan])
+        >>> s2 = pd.Series([3, 4, 5])
+        >>> s1.combine_first(s2)
+        0    1.0
+        1    4.0
+        2    5.0
+        dtype: float64
+
+        Null values still persist if the location of that null value
+        does not exist in `other`
+
+        >>> s1 = pd.Series({'falcon': np.nan, 'eagle': 160.0})
+        >>> s2 = pd.Series({'eagle': 200.0, 'duck': 30.0})
+        >>> s1.combine_first(s2)
+        duck       30.0
+        eagle     160.0
+        falcon      NaN
+        dtype: float64
+        """
+        if len(self) == 0:
+            result = other.copy()
+            result.name = self.name or other.name
+            return result
+        if len(other) == 0:
+            result = self.copy()
+            return result
+
+        if self.index.equals(other.index):
+            if self.dtype.kind == "M" and other.dtype.kind != "M":
+                other = to_datetime(other)
+            return self.where(notna(self), other)
+
+        # Identify indices only in self and already in both for the common
+        # index part.
+        idx_self_only = self.index.difference(other.index)
+        idx_common = self.index.intersection(other.index)
+        idx_other_only = other.index.difference(self.index)
+
+        if len(idx_other_only) == 0:
+            # Quick path: other is a subset of self
+            other_on_self = other.reindex(self.index, copy=False)
+            if self.dtype.kind == "M" and other_on_self.dtype.kind != "M":
+                other_on_self = to_datetime(other_on_self)
+            return self.where(notna(self), other_on_self)
+
+        if len(idx_self_only) == 0 and len(idx_common) == 0:
+            # Self is empty vs other (already handled above) or has no
+            # overlap. Just return other with self filling NaNs on
+            # overlapping indices (none here).
+            result = other.copy()
+            result.name = self.name or other.name
+            return result
+
+        # Build result by concatenating three parts:
+        # 1) data from self where only self has the index
+        # 2) combined data where both have the index
+        # 3) data from other where only other has the index
+        to_concat = []
+        if len(idx_self_only) > 0:
+            to_concat.append(self.loc[idx_self_only])
+        if len(idx_common) > 0:
+            self_common = self.loc[idx_common]
+            other_common = other.loc[idx_common]
+            if self_common.dtype.kind == "M" and other_common.dtype.kind != "M":
+                other_common = to_datetime(other_common)
+            combined = self_common.where(notna(self_common), other_common)
+            to_concat.append(combined)
+        if len(idx_other_only) > 0:
+            to_concat.append(other.loc[idx_other_only])
+
+        if len(to_concat) == 1:
+            result = to_concat[0]
+        else:
+            from pandas.core.reshape.concat import concat
+            result = concat(to_concat)
+
+        if result.name is None:
+            result.name = self.name or other.name
+        return result
+[/REPLACE]

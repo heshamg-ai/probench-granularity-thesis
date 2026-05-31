@@ -1,0 +1,25 @@
+pandas/core/base.py
+[SEARCH]
+            )
+
+        if na_value is not lib.no_default:
+[/SEARCH]
+[REPLACE]
+            )
+
+        # Fastpath for converting to NumPy floating dtype with na_value=np.nan
+        # Create a single copy with the target dtype and set NaNs via the mask.
+        if na_value is np.nan and dtype is not None:
+            try:
+                _target_dtype = np.dtype(dtype)
+            except Exception:
+                _target_dtype = None
+            if _target_dtype is not None and _target_dtype.kind == "f":
+                mask = np.asanyarray(self.isna())
+                result = np.array(self._values, dtype=_target_dtype, copy=True)
+                if mask.any():
+                    result[mask] = np.nan
+                return result
+
+        if na_value is not lib.no_default:
+[/REPLACE]

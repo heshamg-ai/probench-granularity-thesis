@@ -1,0 +1,27 @@
+pandas/core/common.py
+[SEARCH]
+            key_array = np.asarray(key)
+
+            if not lib.is_bool_array(key_array):
+                na_msg = "Cannot mask with non-boolean array containing NA / NaN values"
+                if lib.is_bool_array(key_array, skipna=True):
+                    # Don't raise on e.g. ["A", "B", np.nan], see
+                    #  test_loc_getitem_list_of_labels_categoricalindex_with_na
+                    raise ValueError(na_msg)
+                return False
+            return True
+[/SEARCH]
+[REPLACE]
+            # Avoid unnecessary np.asarray when already an ndarray
+            key_array = key if isinstance(key, np.ndarray) else np.asarray(key)
+
+            if lib.is_bool_array(key_array):
+                return True
+
+            na_msg = "Cannot mask with non-boolean array containing NA / NaN values"
+            if lib.is_bool_array(key_array, skipna=True):
+                # Don't raise on e.g. ["A", "B", np.nan], see
+                #  test_loc_getitem_list_of_labels_categoricalindex_with_na
+                raise ValueError(na_msg)
+            return False
+[/REPLACE]

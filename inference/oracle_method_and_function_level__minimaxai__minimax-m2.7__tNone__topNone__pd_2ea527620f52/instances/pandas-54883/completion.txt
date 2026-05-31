@@ -1,0 +1,31 @@
+
+
+pandas/core/sorting.py
+[SEARCH]
+    elif isinstance(target, ABCMultiIndex):
+        codes = [lev.codes for lev in target._get_codes_for_sorting()]
+        indexer = lexsort_indexer(
+            codes, orders=ascending, na_position=na_position, codes_given=True
+        )
+[/SEARCH]
+[REPLACE]
+    elif isinstance(target, ABCMultiIndex):
+        # Check if MultiIndex is already sorted before expensive lexsort
+        if level is None and not sort_remaining:
+            # Check monotonicity matching the requested sort order
+            if isinstance(ascending, list):
+                all_ascending = all(ascending)
+                any_descending = any(not a for a in ascending)
+            else:
+                all_ascending = ascending
+                any_descending = not ascending
+
+            if all_ascending and target.is_monotonic_increasing:
+                return None
+            if any_descending and target.is_monotonic_decreasing:
+                return None
+        codes = [lev.codes for lev in target._get_codes_for_sorting()]
+        indexer = lexsort_indexer(
+            codes, orders=ascending, na_position=na_position, codes_given=True
+        )
+[/REPLACE]

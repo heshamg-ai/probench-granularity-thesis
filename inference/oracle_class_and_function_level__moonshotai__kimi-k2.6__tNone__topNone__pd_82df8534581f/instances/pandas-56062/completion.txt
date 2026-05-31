@@ -1,0 +1,97 @@
+ pandas/core/indexing.py
+[SEARCH]
+        # we may want to abstract fast access to multiindex into
+        # its own indexier object, see
+        # https://github.com/pydata/pandas/pull/7363#issuecomment-47965328
+
+        if (
+            len(key) > 0
+            and isinstance(ax, MultiIndex)
+            and not any(isinstance(k, slice) for k in key)
+        ):
+            try:
+                return ax._get_partial_string_timestamp_match_index(key)
+            except TypeError:
+                # key does not look like a timestamp
+                pass
+            except InvalidIndexError:
+                # .loc with empty slice fails here
+                pass
+            with suppress(IndexingError):
+                # suppress "Too many indexers"
+                return ax.get_loc(key)
+            except InvalidIndexError:
+                # GH#14858
+                return ax.get_loc(KeyError)
+[/SEARCH]
+[REPLACE]
+        # we may want to abstract fast access to multiindex into
+        # its own indexier object, see
+        # https://github.com/pydata/pandas/pull/7363#issuecomment-47965328
+
+        if (
+            len(key) > 0
+            and isinstance(ax, MultiIndex)
+            and not any(isinstance(k, slice) for k in key)
+        ):
+            try:
+                return ax._get_partial_string_timestamp_match_index(key)
+            except TypeError:
+                # key does not look like a timestamp
+                pass
+            except InvalidIndexError:
+                # .loc with empty slice fails here
+                pass
+            try:
+                return ax.get_loc(key)
+            except (TypeError, KeyError, InvalidIndexError):
+                # TypeError: key is not hashable
+                # KeyError: key not found
+                # InvalidIndexError: e.g. .loc with empty slice
+                pass
+[/REPLACE]
+
+pandas/core/indexing.py
+[SEARCH]
+        if (
+            len(key) > 0
+            and isinstance(ax, MultiIndex)
+            and not any(isinstance(k, slice) for k in key)
+        ):
+            try:
+                return ax._get_partial_string_timestamp_match_index(key)
+            except TypeError:
+                # key does not look like a timestamp
+                pass
+            except InvalidIndexError:
+                # .loc with empty slice fails here
+                pass
+            with suppress(IndexingError):
+                # suppress "Too many indexers"
+                return ax.get_loc(key)
+            except InvalidIndexError:
+                # GH#14858
+                return ax.get_loc(KeyError)
+[/SEARCH]
+[REPLACE]
+        if (
+            len(key) > 0
+            and isinstance(ax, MultiIndex)
+            and not any(isinstance(k, slice) for k in key)
+        ):
+            try:
+                return ax._get_partial_string_timestamp_match_index(key)
+            except TypeError:
+                # key does not look like a timestamp
+                pass
+            except InvalidIndexError:
+                # .loc with empty slice fails here
+                pass
+            try:
+                return ax.get_loc(key)
+            except (TypeError, KeyError, InvalidIndexError):
+                # TypeError: key is not hashable
+                # KeyError: key not found
+                # InvalidIndexError: e.g. .loc with empty slice
+                pass
+[/REPLACE]

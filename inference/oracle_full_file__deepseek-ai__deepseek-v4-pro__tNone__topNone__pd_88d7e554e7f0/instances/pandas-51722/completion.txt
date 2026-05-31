@@ -1,0 +1,155 @@
+pandas/core/groupby/groupby.py
+[SEARCH]
+        func = partial(
+            libgroupby.group_quantile, labels=ids, qs=qs, interpolation=interpolation
+        )
+
+        # Put '-1' (NaN) labels as the last group so it does not interfere
+        # with the calculations. Note: length check avoids failure on empty
+        # labels. In that case, the value doesn't matter
+        na_label_for_sorting = ids.max() + 1 if len(ids) > 0 else 0
+        labels_for_lexsort = np.where(ids == -1, na_label_for_sorting, ids)
+
+        def blk_func(values: ArrayLike) -> ArrayLike:
+            orig_vals = values
+            if isinstance(values, BaseMaskedArray):
+                mask = values._mask
+                result_mask = np.zeros((ngroups, nqs), dtype=np.bool_)
+            else:
+                mask = isna(values)
+                result_mask = None
+
+            is_datetimelike = needs_i8_conversion(values.dtype)
+
+            vals, inference = pre_processor(values)
+
+            ncols = 1
+            if vals.ndim == 2:
+                ncols = vals.shape[0]
+                shaped_labels = np.broadcast_to(
+                    labels_for_lexsort, (ncols, len(labels_for_lexsort))
+                )
+            else:
+                shaped_labels = labels_for_lexsort
+
+            out = np.empty((ncols, ngroups, nqs), dtype=np.float64)
+
+            # Get an index of values sorted by values and then labels
+            order = (vals, shaped_labels)
+            sort_arr = np.lexsort(order).astype(np.intp, copy=False)
+
+            if is_datetimelike:
+                # This casting needs to happen after the lexsort in order
+                #  to ensure that NaTs are placed at the end and not the front
+                vals = vals.view("i8").astype(np.float64)
+
+            if vals.ndim == 1:
+                # Ea is always 1d
+                func(
+                    out[0],
+                    values=vals,
+                    mask=mask,
+                    sort_indexer=sort_arr,
+                    result_mask=result_mask,
+                )
+            else:
+                for i in range(ncols):
+                    func(out[i], values=vals[i], mask=mask[i], sort_indexer=sort_arr[i])
+
+            if vals.ndim == 1:
+                out = out.ravel("K")
+                if result_mask is not None:
+                    result_mask = result_mask.ravel("K")
+            else:
+                out = out.reshape(ncols, ngroups * nqs)
+            return post_processor(out, inference, result_mask, orig_vals)
+
+        data = self._get_data_to_aggregate(numeric_only=numeric_only, name="quantile")
+        res_mgr = data.grouped_reduce(blk_func)
+[/SEARCH]
+[REPLACE]
+        # Avoid constructing lexsort for each column by pre-sorting once.
+        # Put '-1' (NaN) labels as the last group so it does not interfere
+        # with the calculations. Note: length check avoids failure on empty
+        # labels. In that case, the value doesn't matter
+        na_label_for_sorting = ids.max() + 1 if len(ids) > 0 else 0
+        labels_for_lexsort = np.where(ids == -1, na_label_for_sorting, ids)
+
+        # Pre-allocate reusable output buffer for the common 1d case
+        _out_buf = np.empty((ngroups, nqs), dtype=np.float64)
+        _group_quantile = libgroupby.group_quantile
+
+        def blk_func(values: ArrayLike) -> ArrayLike:
+            orig_vals = values
+            if isinstance(values, BaseMaskedArray):
+                mask = values._mask
+            else:
+                mask = isna(values)
+
+            is_datetimelike = needs_i8_conversion(values.dtype)
+
+            vals, inference = pre_processor(values)
+
+            if vals.ndim == 1:
+                # Fast path: single dimension (SeriesGroupBy, or 1D EAs)
+                result_mask = (
+                    np.zeros((ngroups, nqs), dtype=np.bool_)
+                    if isinstance(orig_vals, BaseMaskedArray)
+                    else None
+                )
+
+                order = (vals, labels_for_lexsort)
+                sort_arr = np.lexsort(order).astype(np.intp, copy=False)
+
+                if is_datetimelike:
+                    vals = vals.view("i8").astype(np.float64)
+
+                out = _out_buf
+                _group_quantile(
+                    out,
+                    values=vals,
+                    mask=mask,
+                    sort_indexer=sort_arr,
+                    result_mask=result_mask,
+                    qs=qs,
+                    interpolation=interpolation,
+                    labels=ids,
+                )
+                out = out.ravel("K")
+                if result_mask is not None:
+                    result_mask = result_mask.ravel("K")
+            else:
+                # 2D case: iterate over columns, use shared labels
+                ncols = vals.shape[0]
+                out = np.empty((ncols, ngroups, nqs), dtype=np.float64)
+                result_mask = None
+
+                # Broadcast labels_for_lexsort for lexsort once
+                shaped_labels = np.broadcast_to(
+                    labels_for_lexsort, (ncols, len(labels_for_lexsort))
+                )
+
+                order = (vals, shaped_labels)
+                # lexsort operates on the last axis; sort each column
+                sort_arr = np.lexsort(order).astype(np.intp, copy=False)
+
+                if is_datetimelike:
+                    vals = vals.view("i8").astype(np.float64)
+
+                for i in range(ncols):
+                    _group_quantile(
+                        out[i],
+                        values=vals[i],
+                        mask=mask[i],
+                        sort_indexer=sort_arr[i],
+                        result_mask=None,
+                        qs=qs,
+                        interpolation=interpolation,
+                        labels=ids,
+                    )
+                out = out.reshape(ncols, ngroups * nqs)
+            return post_processor(out, inference, result_mask, orig_vals)
+
+        data = self._get_data_to_aggregate(numeric_only=numeric_only, name="quantile")
+        res_mgr = data.grouped_reduce(blk_func)
+[/REPLACE]

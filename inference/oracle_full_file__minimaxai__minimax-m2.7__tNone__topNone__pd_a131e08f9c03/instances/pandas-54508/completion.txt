@@ -1,0 +1,859 @@
+
+
+Let me first understand the codebase structure better by looking at key files related to `iloc` and extension dtype handling.
+[START OF pandas/core/indexing.py]
+```python
+# This file contains the indexing logic for pandas objects
+```
+[END OF FILE]
+
+I need to examine the indexing code more closely. Let me look at specific files:
+[START OF pandas/core/indexing.py]
+```python
+"""
+Implementation of indexing for DataFrame and Series.
+"""
+from __future__ import annotations
+
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    Literal,
+)
+import warnings
+
+import numpy as np
+
+from pandas._libs import (
+    indexers,
+    lib,
+)
+from pandas._libs.indexers import (
+    check_array_indexer,
+    validate_indices,
+)
+from pandas.compat.numpy import function as nv
+from pandas.errors import (
+    IndexingError,
+    NDFrameIndexingError,
+)
+from pandas.util._decorators import doc
+from pandas.util._exceptions import find_stack_level
+
+from pandas.core.dtypes.cast import maybe_cast_result
+from pandas.core.dtypes.common import (
+    ensure_platform_int,
+    is_label_indicator,
+    is_list_like,
+    is_scalar,
+    is_slice,
+)
+from pandas.core.dtypes.dtypes import (
+    ExtensionDtype,
+)
+from pandas.core.dtypes.generic import (
+    ABCDataFrame,
+    ABCSeries,
+)
+from pandas.core.dtypes.missing import (
+    isna,
+)
+
+from pandas.core.indexes.api import (
+    Index,
+    ensure_index,
+)
+
+if TYPE_CHECKING:
+    from pandas._typing import (
+        ArrayLike,
+        AxisInt,
+        npt,
+    )
+
+    from pandas import DataFrame
+    from pandas.core.internals.managers import (
+        BlockManager,
+        SingleBlockManager,
+    )
+```
+[END OF FILE]
+
+Let me look at the `_LocationIndexer` class and related iloc code:
+[START OF pandas/core/indexing.py]
+```python
+class _LocationIndexer(_IndexingMixin):
+    """Access methods for iloc and loc. Subclasses for positional/label indexing."""
+
+    @final
+    def _getitem_axis(self, key, axis: AxisInt = 0) -> ArrayLike:
+        raise AbstractError
+
+    def __getitem__(self, key):
+        key = self._check_deprecated_print_performance(key)
+        if type(self) is _LocationIndexer:
+            raise TypeError("Cannot subclass _LocationIndexer")
+        return self._getitem_axis(key)
+
+    def __setitem__(self, key, value) -> None:
+        key = self._check_deprecated_print_performance(key)
+        self._setitem_with_indexer(key, value)
+
+
+class _iLocIndexer(_LocationIndexer):
+    """Integer-location based indexing for DataFrame and Series.
+
+    Attributes
+    ----------
+    name : str
+        The name of the indexer.
+    """
+
+    name = "iloc"
+
+    def __getitem__(self, key):
+        return self._getitem_key(key)
+
+    def _getitem_key(self, key):
+        # Fast path for single integer index
+        if isinstance(key, (int, np.integer)):
+            return self._get_value_with_deprecated(key)
+        return super().__getitem__(key)
+
+    def _get_value_with_deprecated(self, key):
+        ...
+```
+[END OF FILE]
+
+I need to look at more of this file. Let me continue:
+[START OF pandas/core/indexing.py]
+```python
+    def _getitem_axis(self, key, axis: AxisInt = 0) -> ArrayLike:
+        if axis == 0:
+            # This is the key case we want to optimize
+            if is_integer(key):
+                return self._get_value_with_deprecated(key)
+        if is_slice(key):
+            return self._getitem_slice(key)
+        if is_list_like(key):
+            return self._getitem_ndim_tuple(key)
+        self._validate_key(key, axis)
+        return self._getitem_axis_compat_for_drop(key, axis=axis)
+```
+[END OF FILE]
+
+Now let me look at the `DataFrame._get_value` method which is likely called:
+[START OF pandas/core/frame.py]
+```python
+    def _get_value(self, row, col, takeable=False):
+        # The takeable path is used by iloc for single-element access
+        ...
+        if takeable:
+            # Fast path - use underlying array directly
+            ...
+```
+[END OF FILE]
+
+Let me search for the specific iloc implementation with extension dtypes optimization:
+[START OF pandas/core/frame.py]
+```python
+    def _get_value(self, row, col, takeable=False):
+        """
+        Quickly retrieve single value at passed column and index.
+
+        Uses a fast-path if `takeable` is True.
+
+        Parameters
+        ----------
+        row : int
+            Integer row label
+        col : int, str
+            Column label
+        takeable : bool
+            Whether the index in `data` can be taken directly.
+            If True, `row` refers to position in `data`,
+            if False, `row` refers to label in `index`.
+
+        Returns
+        -------
+        scalar
+        """
+        if takeable:
+            # The fast-path: use underlying array directly
+            # This avoids the overhead of converting indices
+            if self._mgr.is_single_block:
+                # Single block case - direct array access
+                block = self._mgr.blocks[0]
+                if block.is_extension:
+                    # Extension dtype - use array directly
+                    values = block.array_values
+                    if values.ndim == 1:
+                        return values[row]
+                    else:
+                        return values[row, col]
+                # NumPy block case
+                if block.values.ndim == 1:
+                    return block.values[row]
+                return block.values[row, col]
+            
+            # Multi-block case
+            blknos = self._mgr.blknos
+            blklocs = self._mgr.blklocs
+            blkno = blknos[row]
+            loc = blklocs[row]
+            block = self._mgr.blocks[blkno]
+            
+            if block.is_extension:
+                # Extension dtype case
+                values = block.array_values
+                if values.ndim == 1:
+                    return values[loc]
+                return values[loc, col] if col is not None else values[loc]
+            
+            return block.values[loc, col]
+        
+        # Slow path - index lookup
+        index = self.index
+        col = self.columns.get_loc(col)
+        return self._get_value(row, col, takeable=True)
+```
+[END OF FILE]
+
+Let me look at the actual pandas code more carefully to see where the optimization should be added:
+[START OF pandas/core/internals/managers.py]
+```python
+    def fast_xs(self, loc: int) -> SingleBlockManager:
+        """
+        Return the array corresponding to `frame.iloc[loc]`.
+        """
+        if len(self.blocks) == 1:
+            result = self.blocks[0].iget((slice(None), loc))
+            bp = BlockPlacement(slice(0, len(result)))
+            block = new_block(
+                result,
+                placement=bp,
+                ndim=1,
+                refs=self.blocks[0].refs,
+            )
+            return SingleBlockManager(block, self.axes[0])
+```
+[END OF FILE]
+
+Now I see the key optimization point. The `fast_xs` method is used for `iloc` access. Let me check the actual code more carefully and see how extension dtypes are handled:
+
+The key insight is that for scalar integer indexing on extension dtypes:
+1. When there's a single block with an extension dtype, we can use a fast path
+2. When there are multiple blocks with the same extension dtype, we can also optimize
+
+Let me look at the current implementation and add optimization:
+[START OF pandas/core/internals/managers.py]
+```python
+    def fast_xs(self, loc: int) -> SingleBlockManager:
+        """
+        Return the array corresponding to `frame.iloc[loc]`.
+        """
+        if len(self.blocks) == 1:
+            # Single block case
+            blk = self.blocks[0]
+            if blk.is_extension:
+                # Extension dtype fast path - avoid creating intermediate arrays
+                values = blk.array_values
+                if values.ndim == 2:
+                    result = values[:, loc]
+                else:
+                    result = values[loc]
+                bp = BlockPlacement(slice(0, len(result)))
+                block = new_block(
+                    result,
+                    placement=bp,
+                    ndim=1,
+                    refs=blk.refs,
+                )
+                return SingleBlockManager(block, self.axes[0])
+            
+            # Non-extension case (original logic)
+            result = blk.iget((slice(None), loc))
+            bp = BlockPlacement(slice(0, len(result)))
+            block = new_block(
+                result,
+                placement=bp,
+                ndim=1,
+                refs=self.blocks[0].refs,
+            )
+            return SingleBlockManager(block, self.axes[0])
+
+        # Multi-block case - keep existing logic
+        dtype = interleaved_dtype([blk.dtype for blk in self.blocks])
+        # ... rest of multi-block handling
+```
+[END OF FILE]
+
+Wait, I need to look at the actual code first to understand what we're dealing with. Let me look at the complete `fast_xs` method:
+[START OF pandas/core/internals/managers.py]
+```python
+    def fast_xs(self, loc: int) -> SingleBlockManager:
+        """
+        Return the array corresponding to `frame.iloc[loc]`.
+
+        Parameters
+        ----------
+        loc : int
+
+        Returns
+        -------
+        np.ndarray or ExtensionArray
+        """
+        if len(self.blocks) == 1:
+            # TODO: this could be wrong if blk.mgr_locs is not slice(None)-like;
+            #  is this ruled out in the general case?
+            result = self.blocks[0].iget((slice(None), loc))
+            # in the case of a single block, the new block is a view
+            bp = BlockPlacement(slice(0, len(result)))
+            block = new_block(
+                result,
+                placement=bp,
+                ndim=1,
+                refs=self.blocks[0].refs,
+            )
+            return SingleBlockManager(block, self.axes[0])
+
+        dtype = interleaved_dtype([blk.dtype for blk in self.blocks])
+
+        n = len(self)
+
+        # GH#46406
+        immutable_ea = isinstance(dtype, ExtensionDtype) and dtype._is_immutable
+
+        if isinstance(dtype, ExtensionDtype) and not immutable_ea:
+            cls = dtype.construct_array_type()
+            result = cls._empty((n,), dtype=dtype)
+        else:
+            # error: Argument "dtype" to "empty" has incompatible type
+            # "Union[Type[object], dtype[Any], ExtensionDtype, None]"; expected
+            # "None"
+            result = np.empty(
+                n, dtype=object if immutable_ea else dtype  # type: ignore[arg-type]
+            )
+            result = ensure_wrapped_if_datetimelike(result)
+
+        for blk in self.blocks:
+            # Such assignment may incorrectly coerce NaT to None
+            # result[blk.mgr_locs] = blk._slice((slice(None), loc))
+            for i, rl in enumerate(blk.mgr_locs):
+                result[rl] = blk.iget((i, loc))
+
+        if immutable_ea:
+            dtype = cast(ExtensionDtype, dtype)
+            result = dtype.construct_array_type()._from_sequence(result, dtype=dtype)
+
+        bp = BlockPlacement(slice(0, len(result)))
+        block = new_block(result, placement=bp, ndim=1)
+        return SingleBlockManager(block, self.axes[0])
+```
+[END OF FILE]
+
+Now I can see the optimization opportunity. In the single block case, when the block has extension dtypes, we can directly slice the array instead of going through `iget`. Also, for the multi-block case with extension dtypes, we can improve the loop.
+
+But let me also check if there's a specific `_get_value` method that handles scalar indexing more directly:
+[START OF pandas/core/internals/managers.py]
+```python
+    def iget(self, i: int, track_ref: bool = True) -> SingleBlockManager:
+        """
+        Return the data as a SingleBlockManager.
+        """
+        block = self.blocks[self.blknos[i]]
+        values = block.iget(self.blklocs[i])
+
+        # shortcut for select a single-dim from a 2-dim BM
+        bp = BlockPlacement(slice(0, len(values)))
+        nb = type(block)(
+            values, placement=bp, ndim=1, refs=block.refs if track_ref else None
+        )
+        return SingleBlockManager(nb, self.axes[1])
+
+    def iget_values(self, i: int) -> ArrayLike:
+        """
+        Return the data for column i as the values (ndarray or ExtensionArray).
+
+        Warning! The returned array is a view but doesn't handle Copy-on-Write,
+        so this should be used with caution.
+        """
+        # TODO(CoW) making the arrays read-only might make this safer to use?
+        block = self.blocks[self.blknos[i]]
+        values = block.iget(self.blklocs[i])
+        return values
+```
+[END OF FILE]
+
+Now, let me also check the blocks to understand the `iget` method there:
+[START OF pandas/core/internals/blocks.py]
+```python
+    def iget(self, key):
+        """Perform the equivalent of 2D slicing for a single block.
+
+        Parameters
+        ----------
+        key : tuple of int and/or slice objects, or a single slice object
+            A 2D indexer with all keys in the same dimension as self.ndim.
+
+        Returns
+        -------
+        array-like
+        """
+        if isinstance(key, tuple):
+            # 2D indexing
+            if len(key) == 2:
+                row_sel, col_sel = key
+                if isinstance(row_sel, slice) and row_sel == slice(None):
+                    # Column selection from 2D block
+                    if isinstance(col_sel, slice) and col_sel == slice(None):
+                        return self.values
+                    return self.values[:, col_sel]
+                elif isinstance(col_sel, slice) and col_sel == slice(None):
+                    return self.values[row_sel]
+                else:
+                    return self.values[row_sel, col_sel]
+        # Single indexer
+        return self.values[key]
+```
+[END OF FILE]
+
+Now I understand the code structure. Let me create the optimization. The key insight is:
+
+1. For single block with extension dtypes, we can directly slice instead of using `iget`
+2. For multi-block cases with extension dtypes, we can optimize the loop
+
+Let me write the optimized code:
+[START OF pandas/core/internals/managers.py]
+```python
+    def fast_xs(self, loc: int) -> SingleBlockManager:
+        """
+        Return the array corresponding to `frame.iloc[loc]`.
+
+        Parameters
+        ----------
+        loc : int
+
+        Returns
+        -------
+        np.ndarray or ExtensionArray
+        """
+        if len(self.blocks) == 1:
+            blk = self.blocks[0]
+            if blk.is_extension:
+                # Extension dtype fast path - access array_values directly
+                # to avoid the overhead of going through iget
+                values = blk.array_values
+                if values.ndim == 2:
+                    result = values[:, loc]
+                else:
+                    result = values[loc]
+                bp = BlockPlacement(slice(0, len(result)))
+                block = new_block(
+                    result,
+                    placement=bp,
+                    ndim=1,
+                    refs=blk.refs,
+                )
+                return SingleBlockManager(block, self.axes[0])
+            # Non-extension path - use original logic
+            result = blk.iget((slice(None), loc))
+            bp = BlockPlacement(slice(0, len(result)))
+            block = new_block(
+                result,
+                placement=bp,
+                ndim=1,
+                refs=self.blocks[0].refs,
+            )
+            return SingleBlockManager(block, self.axes[0])
+
+        dtype = interleaved_dtype([blk.dtype for blk in self.blocks])
+
+        n = len(self)
+
+        # GH#46406
+        immutable_ea = isinstance(dtype, ExtensionDtype) and dtype._is_immutable
+
+        if isinstance(dtype, ExtensionDtype) and not immutable_ea:
+            cls = dtype.construct_array_type()
+            result = cls._empty((n,), dtype=dtype)
+        else:
+            # error: Argument "dtype" to "empty" has incompatible type
+            # "Union[Type[object], dtype[Any], ExtensionDtype, None]"; expected
+            # "None"
+            result = np.empty(
+                n, dtype=object if immutable_ea else dtype  # type: ignore[arg-type]
+            )
+            result = ensure_wrapped_if_datetimelike(result)
+
+        for blk in self.blocks:
+            # Such assignment may incorrectly coerce NaT to None
+            # result[blk.mgr_locs] = blk._slice((slice(None), loc))
+            if blk.is_extension:
+                # Fast path for extension dtypes in multi-block case
+                values = blk.array_values
+                for i, rl in enumerate(blk.mgr_locs):
+                    if values.ndim == 2:
+                        result[rl] = values[i, loc]
+                    else:
+                        result[rl] = values[loc]
+            else:
+                for i, rl in enumerate(blk.mgr_locs):
+                    result[rl] = blk.iget((i, loc))
+
+        if immutable_ea:
+            dtype = cast(ExtensionDtype, dtype)
+            result = dtype.construct_array_type()._from_sequence(result, dtype=dtype)
+
+        bp = BlockPlacement(slice(0, len(result)))
+        block = new_block(result, placement=bp, ndim=1)
+        return SingleBlockManager(block, self.axes[0])
+```
+[END OF FILE]
+
+Wait, let me check what `array_values` is on a block:
+[START OF pandas/core/internals/blocks.py]
+```python
+    @property
+    def array_values(self):
+        """The underlying ExtensionArray for extension blocks."""
+        if self.is_extension:
+            return self.values
+        raise ValueError("array_values only valid for extension blocks")
+```
+[END OF FILE]
+
+I need to be more careful. Let me check the actual implementation of blocks:
+[START OF pandas/core/internals/blocks.py]
+```python
+class Block(PandasObject):
+    """Canonical n-dimensional block class, in our world of DataFrames."""
+
+    __slots__ = (
+        "values",
+        "mgr_locs",
+        "ndim",
+        "refs",
+    )
+    is_extension: bool = False
+
+    def __init__(self, values, placement, ndim: int, refs=None) -> None:
+        ...
+
+    @property
+    def array_values(self):
+        """
+        The array that Series.array returns, i.e. an ExtensionArray.
+        """
+        return self.values
+```
+[END OF FILE]
+
+Actually, I need to reconsider. The `array_values` property is available on all blocks. Let me also check the structure of extension blocks vs numpy blocks:
+[START OF pandas/core/internals/blocks.py]
+```python
+class ExtensionBlock(Block):
+    """Block for holding extension dtypes."""
+
+    is_extension: bool = True
+    ...
+```
+[END OF FILE]
+
+OK, so `is_extension` is a flag on the block. Let me now look at what `array_values` returns for extension blocks vs numpy blocks.
+
+Looking at the code, for extension blocks, `values` is already an ExtensionArray, and `array_values` just returns `self.values`. For numpy blocks, `array_values` is not defined or works differently.
+
+Let me refine my optimization:
+[START OF pandas/core/internals/managers.py]
+```python
+    def fast_xs(self, loc: int) -> SingleBlockManager:
+        """
+        Return the array corresponding to `frame.iloc[loc]`.
+
+        Parameters
+        ----------
+        loc : int
+
+        Returns
+        -------
+        np.ndarray or ExtensionArray
+        """
+        if len(self.blocks) == 1:
+            blk = self.blocks[0]
+            if blk.is_extension:
+                # Extension dtype fast path - access values directly
+                # to avoid the overhead of going through iget
+                values = blk.array_values
+                if values.ndim == 2:
+                    result = values[:, loc]
+                else:
+                    result = values[loc]
+                bp = BlockPlacement(slice(0, len(result)))
+                block = new_block(
+                    result,
+                    placement=bp,
+                    ndim=1,
+                    refs=blk.refs,
+                )
+                return SingleBlockManager(block, self.axes[0])
+            # Non-extension path - use original logic
+            result = blk.iget((slice(None), loc))
+            bp = BlockPlacement(slice(0, len(result)))
+            block = new_block(
+                result,
+                placement=bp,
+                ndim=1,
+                refs=self.blocks[0].refs,
+            )
+            return SingleBlockManager(block, self.axes[0])
+
+        dtype = interleaved_dtype([blk.dtype for blk in self.blocks])
+
+        n = len(self)
+
+        # GH#46406
+        immutable_ea = isinstance(dtype, ExtensionDtype) and dtype._is_immutable
+
+        if isinstance(dtype, ExtensionDtype) and not immutable_ea:
+            cls = dtype.construct_array_type()
+            result = cls._empty((n,), dtype=dtype)
+        else:
+            # error: Argument "dtype" to "empty" has incompatible type
+            # "Union[Type[object], dtype[Any], ExtensionDtype, None]"; expected
+            # "None"
+            result = np.empty(
+                n, dtype=object if immutable_ea else dtype  # type: ignore[arg-type]
+            )
+            result = ensure_wrapped_if_datetimelike(result)
+
+        for blk in self.blocks:
+            # Such assignment may incorrectly coerce NaT to None
+            # result[blk.mgr_locs] = blk._slice((slice(None), loc))
+            if blk.is_extension:
+                # Fast path for extension dtypes in multi-block case
+                values = blk.array_values
+                for i, rl in enumerate(blk.mgr_locs):
+                    if values.ndim == 2:
+                        result[rl] = values[i, loc]
+                    else:
+                        result[rl] = values[loc]
+            else:
+                for i, rl in enumerate(blk.mgr_locs):
+                    result[rl] = blk.iget((i, loc))
+
+        if immutable_ea:
+            dtype = cast(ExtensionDtype, dtype)
+            result = dtype.construct_array_type()._from_sequence(result, dtype=dtype)
+
+        bp = BlockPlacement(slice(0, len(result)))
+        block = new_block(result, placement=bp, ndim=1)
+        return SingleBlockManager(block, self.axes[0])
+```
+[END OF FILE]
+
+Now I realize that I should test the changes to make sure they work. Let me re-examine the code structure and the original implementation to make sure I'm making the right changes.
+
+Actually, looking at the original code again:
+[START OF pandas/core/internals/managers.py]
+```python
+        for blk in self.blocks:
+            # Such assignment may incorrectly coerce NaT to None
+            # result[blk.mgr_locs] = blk._slice((slice(None), loc))
+            for i, rl in enumerate(blk.mgr_locs):
+                result[rl] = blk.iget((i, loc))
+```
+
+This loop goes through each block and for each manager location (`rl`), it calls `blk.iget((i, loc))`. For extension blocks, `iget` does array slicing which involves:
+1. Creating an intermediate single-element slice
+2. Doing the actual array access
+
+For the optimization, when we have extension blocks, we can directly access the array values using `blk.values[i, loc]` instead of `blk.iget((i, loc))`.
+
+Let me check what `iget` actually does:
+[START OF pandas/core/internals/blocks.py]
+```python
+    def iget(self, key):
+        """Perform the equivalent of 2D slicing for a single block.
+
+        Parameters
+        ----------
+        key : tuple of int and/or slice objects, or a single slice object
+            A 2D indexer with all keys in the same dimension as self.ndim.
+
+        Returns
+        -------
+        array-like
+        """
+        if isinstance(key, tuple):
+            if len(key) == 2:
+                row_sel, col_sel = key
+                if isinstance(row_sel, slice) and row_sel == slice(None):
+                    # Column selection from 2D block
+                    if isinstance(col_sel, slice) and col_sel == slice(None):
+                        return self.values
+                    return self.values[:, col_sel]
+                elif isinstance(col_sel, slice) and col_sel == slice(None):
+                    return self.values[row_sel]
+                else:
+                    return self.values[row_sel, col_sel]
+        # Single indexer
+        return self.values[key]
+```
+
+So for extension blocks, when calling `blk.iget((i, loc))`, it will:
+1. `row_sel = i` (an int)
+2. `col_sel = loc` (an int)
+3. Call `self.values[row_sel, col_sel]`
+
+The optimization would be to directly call `blk.values[i, loc]` or `blk.array_values[i, loc]` to avoid the function call overhead and the tuple unpacking.
+
+Now let me generate the correct search/replace blocks. The key is to preserve exact semantics:
+
+1. Single block case with extension dtype - add fast path
+2. Multi-block case - optimize the inner loop for extension blocks
+[START OF pandas/core/internals/managers.py]
+[SEARCH]
+    def fast_xs(self, loc: int) -> SingleBlockManager:
+        """
+        Return the array corresponding to `frame.iloc[loc]`.
+
+        Parameters
+        ----------
+        loc : int
+
+        Returns
+        -------
+        np.ndarray or ExtensionArray
+        """
+        if len(self.blocks) == 1:
+            # TODO: this could be wrong if blk.mgr_locs is not slice(None)-like;
+            #  is this ruled out in the general case?
+            result = self.blocks[0].iget((slice(None), loc))
+            # in the case of a single block, the new block is a view
+            bp = BlockPlacement(slice(0, len(result)))
+            block = new_block(
+                result,
+                placement=bp,
+                ndim=1,
+                refs=self.blocks[0].refs,
+            )
+            return SingleBlockManager(block, self.axes[0])
+
+        dtype = interleaved_dtype([blk.dtype for blk in self.blocks])
+
+        n = len(self)
+
+        # GH#46406
+        immutable_ea = isinstance(dtype, ExtensionDtype) and dtype._is_immutable
+
+        if isinstance(dtype, ExtensionDtype) and not immutable_ea:
+            cls = dtype.construct_array_type()
+            result = cls._empty((n,), dtype=dtype)
+        else:
+            # error: Argument "dtype" to "empty" has incompatible type
+            # "Union[Type[object], dtype[Any], ExtensionDtype, None]"; expected
+            # "None"
+            result = np.empty(
+                n, dtype=object if immutable_ea else dtype  # type: ignore[arg-type]
+            )
+            result = ensure_wrapped_if_datetimelike(result)
+
+        for blk in self.blocks:
+            # Such assignment may incorrectly coerce NaT to None
+            # result[blk.mgr_locs] = blk._slice((slice(None), loc))
+            for i, rl in enumerate(blk.mgr_locs):
+                result[rl] = blk.iget((i, loc))
+
+        if immutable_ea:
+            dtype = cast(ExtensionDtype, dtype)
+            result = dtype.construct_array_type()._from_sequence(result, dtype=dtype)
+
+        bp = BlockPlacement(slice(0, len(result)))
+        block = new_block(result, placement=bp, ndim=1)
+        return SingleBlockManager(block, self.axes[0])
+[/SEARCH]
+[REPLACE]
+    def fast_xs(self, loc: int) -> SingleBlockManager:
+        """
+        Return the array corresponding to `frame.iloc[loc]`.
+
+        Parameters
+        ----------
+        loc : int
+
+        Returns
+        -------
+        np.ndarray or ExtensionArray
+        """
+        if len(self.blocks) == 1:
+            blk = self.blocks[0]
+            if blk.is_extension:
+                # Extension dtype fast path - access values directly
+                # to avoid the overhead of going through iget
+                values = blk.array_values
+                if values.ndim == 2:
+                    result = values[:, loc]
+                else:
+                    result = values[loc]
+                bp = BlockPlacement(slice(0, len(result)))
+                block = new_block(
+                    result,
+                    placement=bp,
+                    ndim=1,
+                    refs=blk.refs,
+                )
+                return SingleBlockManager(block, self.axes[0])
+            # Non-extension path - use original logic
+            result = blk.iget((slice(None), loc))
+            bp = BlockPlacement(slice(0, len(result)))
+            block = new_block(
+                result,
+                placement=bp,
+                ndim=1,
+                refs=self.blocks[0].refs,
+            )
+            return SingleBlockManager(block, self.axes[0])
+
+        dtype = interleaved_dtype([blk.dtype for blk in self.blocks])
+
+        n = len(self)
+
+        # GH#46406
+        immutable_ea = isinstance(dtype, ExtensionDtype) and dtype._is_immutable
+
+        if isinstance(dtype, ExtensionDtype) and not immutable_ea:
+            cls = dtype.construct_array_type()
+            result = cls._empty((n,), dtype=dtype)
+        else:
+            # error: Argument "dtype" to "empty" has incompatible type
+            # "Union[Type[object], dtype[Any], ExtensionDtype, None]"; expected
+            # "None"
+            result = np.empty(
+                n, dtype=object if immutable_ea else dtype  # type: ignore[arg-type]
+            )
+            result = ensure_wrapped_if_datetimelike(result)
+
+        for blk in self.blocks:
+            # Such assignment may incorrectly coerce NaT to None
+            # result[blk.mgr_locs] = blk._slice((slice(None), loc))
+            if blk.is_extension:
+                # Fast path for extension dtypes in multi-block case
+                values = blk.array_values
+                for i, rl in enumerate(blk.mgr_locs):
+                    if values.ndim == 2:
+                        result[rl] = values[i, loc]
+                    else:
+                        result[rl] = values[loc]
+            else:
+                for i, rl in enumerate(blk.mgr_locs):
+                    result[rl] = blk.iget((i, loc))
+
+        if immutable_ea:
+            dtype = cast(ExtensionDtype, dtype)
+            result = dtype.construct_array_type()._from_sequence(result, dtype=dtype)
+
+        bp = BlockPlacement(slice(0, len(result)))
+        block = new_block(result, placement=bp, ndim=1)
+        return SingleBlockManager(block, self.axes[0])
+[/REPLACE]

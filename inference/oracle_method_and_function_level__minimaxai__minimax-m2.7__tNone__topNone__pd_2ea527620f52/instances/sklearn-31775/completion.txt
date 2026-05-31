@@ -1,0 +1,43 @@
+
+
+sklearn/utils/stats.py
+[SEARCH]
+    # For each feature with index j, find sample index i of the scalar value
+    # `adjusted_percentile_rank[j]` in 1D array `weight_cdf[j]`, such that:
+    # weight_cdf[j, i-1] < adjusted_percentile_rank[j] <= weight_cdf[j, i].
+    percentile_indices = xp.stack(
+        [
+            xp.searchsorted(
+                weight_cdf[feature_idx, ...], adjusted_percentile_rank[feature_idx]
+            )
+            for feature_idx in range(weight_cdf.shape[0])
+        ],
+    )
+    # In rare cases, `percentile_indices` equals to `sorted_idx.shape[0]`
+    max_idx = sorted_idx.shape[0] - 1
+    percentile_indices = xp.clip(percentile_indices, 0, max_idx)
+
+    col_indices = xp.arange(array.shape[1], device=device)
+    percentile_in_sorted = sorted_idx[percentile_indices, col_indices]
+
+    result = array[percentile_in_sorted, col_indices]
+
+    return result[0] if n_dim == 1 else result
+[/SEARCH]
+[REPLACE]
+    # Find the sample index i for each feature where the cumulative weight first
+    # meets or exceeds the adjusted percentile rank. Vectorized to avoid Python loop.
+    max_idx = sorted_idx.shape[0] - 1
+    percentile_indices = xp.searchsorted(
+        weight_cdf, adjusted_percentile_rank[:, None], side="left"
+    )
+    percentile_indices = xp.clip(percentile_indices, 0, max_idx)
+
+    # Extract percentile values using advanced indexing
+    col_indices = xp.arange(array.shape[1], device=device)
+    percentile_in_sorted = sorted_idx[percentile_indices, col_indices]
+
+    result = array[percentile_in_sorted, col_indices]
+
+    return result[0] if n_dim == 1 else result
+[/REPLACE]

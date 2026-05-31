@@ -1,0 +1,46 @@
+
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        result_data = []
+        for lst in split.to_pylist():
+            if lst is None:
+                result_data.append([False] * len(uniques_sorted))
+            else:
+                res = pc.is_in(uniques_sorted, pa.array(set(lst)))
+                result_data.append(res.to_pylist())
+        result = type(self)(pa.array(result_data))
+        return result, uniques_sorted.to_pylist()
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        n_uniques = len(uniques_sorted)
+
+        if n_uniques == 0:
+            return type(self)(pa.array([], type=pa.bool_())), []
+
+        chunks = []
+        for unique_val in uniques_sorted:
+            is_member = pc.is_in(split, pa.array([unique_val]))
+            chunks.append(is_member)
+
+        all_member = pa.chunked_array(chunks).combine_chunks()
+        result_data = all_member.to_pylist()
+
+        n_rows = len(split)
+        for i in range(n_rows):
+            row = result_data[i * n_uniques:(i + 1) * n_uniques]
+            for j in range(n_uniques):
+                if row[j] is None:
+                    result_data[i * n_uniques + j] = False
+
+        result = type(self)(pa.array(result_data, type=pa.bool_()))
+        return result, uniques_sorted.to_pylist()
+[/REPLACE]

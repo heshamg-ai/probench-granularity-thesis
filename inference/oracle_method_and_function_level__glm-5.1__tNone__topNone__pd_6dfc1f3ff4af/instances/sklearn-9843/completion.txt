@@ -1,0 +1,52 @@
+sklearn/metrics/_classification.py
+[SEARCH]
+    n_labels = labels.size
+    label_to_ind = {y: x for x, y in enumerate(labels)}
+    # convert yt, yp into index
+    y_pred = np.array([label_to_ind.get(x, n_labels + 1) for x in y_pred])
+    y_true = np.array([label_to_ind.get(x, n_labels + 1) for x in y_true])
+[/SEARCH]
+[REPLACE]
+    n_labels = labels.size
+    label_to_ind = {y: x for x, y in enumerate(labels)}
+    # convert yt, yp into index
+    if np.issubdtype(labels.dtype, np.integer):
+        y_pred = _map_int_labels(y_pred, label_to_ind, n_labels)
+        y_true = _map_int_labels(y_true, label_to_ind, n_labels)
+    else:
+        y_pred = np.array([label_to_ind.get(x, n_labels + 1) for x in y_pred])
+        y_true = np.array([label_to_ind.get(x, n_labels + 1) for x in y_true])
+[/REPLACE]
+
+sklearn/metrics/_classification.py
+[SEARCH]
+@_deprecate_positional_args
+def confusion_matrix(y_true, y_pred, *, labels=None, sample_weight=None,
+                     normalize=None):
+[/SEARCH]
+[REPLACE]
+def _map_int_labels(y, label_to_ind, n_labels):
+    """Optimized label mapping for integer arrays using vectorized numpy ops."""
+    y = np.asarray(y)
+    y_min = y.min()
+    y_max = y.max()
+    # size of lookup table is bounded by the range of the data
+    range_size = int(y_max) - int(y_min) + 1
+    if range_size <= 2 * y.size:
+        lut = np.full(range_size, n_labels + 1, dtype=np.intp)
+        for label, idx in label_to_ind.items():
+            if y_min <= label <= y_max:
+                lut[label - y_min] = idx
+        y_out = lut[y - y_min]
+    else:
+        y_out = np.empty(y.shape, dtype=np.intp)
+        y_out[:] = n_labels + 1
+        for label, idx in label_to_ind.items():
+            y_out[y == label] = idx
+    return y_out
+
+
+@_deprecate_positional_args
+def confusion_matrix(y_true, y_pred, *, labels=None, sample_weight=None,
+                     normalize=None):
+[/REPLACE]

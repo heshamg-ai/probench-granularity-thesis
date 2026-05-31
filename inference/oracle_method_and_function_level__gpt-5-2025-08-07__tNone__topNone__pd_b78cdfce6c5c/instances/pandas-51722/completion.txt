@@ -1,0 +1,89 @@
+pandas/core/groupby/groupby.py
+[SEARCH]
+            if isinstance(values, BaseMaskedArray):
+                mask = values._mask
+                result_mask = np.zeros((ngroups, nqs), dtype=np.bool_)
+            else:
+                mask = isna(values)
+                result_mask = None
+[/SEARCH]
+[REPLACE]
+            if isinstance(values, BaseMaskedArray):
+                mask = values._mask
+                result_mask = np.zeros((ngroups, nqs), dtype=np.bool_)
+            else:
+                # Fast-path for dtypes that cannot hold NaN values
+                if is_float_dtype(values.dtype) or needs_i8_conversion(values.dtype):
+                    mask = isna(values)
+                else:
+                    mask = np.zeros_like(values, dtype=np.bool_)
+                result_mask = None
+[/REPLACE]
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+            out = np.empty((ncols, ngroups, nqs), dtype=np.float64)
+
+            # Get an index of values sorted by values and then labels
+            order = (vals, shaped_labels)
+            sort_arr = np.lexsort(order).astype(np.intp, copy=False)
+
+            if is_datetimelike:
+                # This casting needs to happen after the lexsort in order
+                #  to ensure that NaTs are placed at the end and not the front
+                vals = vals.view("i8").astype(np.float64)
+
+            if vals.ndim == 1:
+                # Ea is always 1d
+                func(
+                    out[0],
+                    values=vals,
+                    mask=mask,
+                    sort_indexer=sort_arr,
+                    result_mask=result_mask,
+                )
+            else:
+                for i in range(ncols):
+                    func(out[i], values=vals[i], mask=mask[i], sort_indexer=sort_arr[i])
+
+            if vals.ndim == 1:
+                out = out.ravel("K")
+                if result_mask is not None:
+                    result_mask = result_mask.ravel("K")
+            else:
+                out = out.reshape(ncols, ngroups * nqs)
+            return post_processor(out, inference, result_mask, orig_vals)
+[/SEARCH]
+[REPLACE]
+            if vals.ndim == 1:
+                out = np.empty((ngroups, nqs), dtype=np.float64)
+            else:
+                out = np.empty((ncols, ngroups, nqs), dtype=np.float64)
+
+            # Get an index of values sorted by values and then labels
+            order = (vals, shaped_labels)
+            sort_arr = np.lexsort(order)
+
+            if is_datetimelike:
+                # This casting needs to happen after the lexsort in order
+                #  to ensure that NaTs are placed at the end and not the front
+                vals = vals.view("i8").astype(np.float64)
+
+            if vals.ndim == 1:
+                # Ea is always 1d
+                func(
+                    out,
+                    values=vals,
+                    mask=mask,
+                    sort_indexer=sort_arr,
+                    result_mask=result_mask,
+                )
+                out = out.ravel("K")
+                if result_mask is not None:
+                    result_mask = result_mask.ravel("K")
+            else:
+                for i in range(ncols):
+                    func(out[i], values=vals[i], mask=mask[i], sort_indexer=sort_arr[i])
+                out = out.reshape(ncols, ngroups * nqs)
+            return post_processor(out, inference, result_mask, orig_vals)
+[/REPLACE]

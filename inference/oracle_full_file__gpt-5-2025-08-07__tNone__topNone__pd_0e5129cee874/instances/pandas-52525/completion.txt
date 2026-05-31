@@ -1,0 +1,40 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        elif self._hasna:
+            data = self.copy()
+            data[self.isna()] = na_value
+            return np.asarray(data._pa_array, dtype=dtype)
+[/SEARCH]
+[REPLACE]
+        elif self._hasna:
+            # Fast path for float dtype with na_value as NaN using pyarrow casting
+            if (
+                dtype is not None
+                and np.issubdtype(np.dtype(dtype), np.floating)
+                and isna(na_value)
+            ):
+                pa_type = self._pa_array.type
+                # Restrict to numeric/boolean/decimal to preserve semantics
+                if (
+                    pa.types.is_integer(pa_type)
+                    or pa.types.is_floating(pa_type)
+                    or pa.types.is_boolean(pa_type)
+                    or pa.types.is_decimal(pa_type)
+                ):
+                    try:
+                        pa_float_type = pa.from_numpy_dtype(np.dtype(dtype))
+                    except pa.ArrowNotImplementedError:
+                        pass
+                    else:
+                        arr = self._pa_array
+                        if arr.type != pa_float_type:
+                            arr = arr.cast(pa_float_type)
+                        # Convert to numpy; floating nulls become NaN
+                        result = arr.to_numpy()
+                        if np.dtype(result.dtype) != np.dtype(dtype):
+                            result = result.astype(dtype, copy=False)
+                        return result
+            data = self.copy()
+            data[self.isna()] = na_value
+            return np.asarray(data._pa_array, dtype=dtype)
+[/REPLACE]

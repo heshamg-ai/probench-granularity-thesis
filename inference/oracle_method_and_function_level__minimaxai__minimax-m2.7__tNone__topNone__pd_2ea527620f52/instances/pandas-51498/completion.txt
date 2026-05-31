@@ -1,0 +1,26 @@
+
+
+Looking at the code, I can see that for integer columns, calling `.round()` is wasteful because rounding an integer to any number of non-negative decimal places returns the same integer. The current code goes through the overhead of calling `Series.round()` which involves type checking and dispatching.
+
+Let me optimize by checking for integer dtype early and returning unchanged.
+
+pandas/core/frame.py
+[SEARCH]
+        def _series_round(ser: Series, decimals: int) -> Series:
+            if is_integer_dtype(ser.dtype) or is_float_dtype(ser.dtype):
+                return ser.round(decimals)
+            return ser
+[/SEARCH]
+[REPLACE]
+        def _series_round(ser: Series, decimals: int) -> Series:
+            if is_integer_dtype(ser.dtype):
+                # Integers are already at precision <= decimals for any decimals >= 0
+                # Skip the overhead of Series.round()
+                if decimals >= 0:
+                    return ser
+                # For negative decimals, use Series.round() (e.g., round 123 to -1 -> 120)
+                return ser.round(decimals)
+            elif is_float_dtype(ser.dtype):
+                return ser.round(decimals)
+            return ser
+[/REPLACE]

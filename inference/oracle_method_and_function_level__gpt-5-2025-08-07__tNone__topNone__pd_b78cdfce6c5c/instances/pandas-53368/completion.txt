@@ -1,0 +1,20 @@
+pandas/core/indexes/base.py
+[SEARCH]
+            and not (
+                isinstance(self._values, ArrowExtensionArray)
+                and is_numeric_dtype(self.dtype)
+                # Exclude decimal
+                and self.dtype.kind != "O"
+            )
+[/SEARCH]
+[REPLACE]
+            and not (
+                isinstance(self._values, ArrowExtensionArray)
+                and (
+                    is_numeric_dtype(self.dtype)
+                    or self.dtype.kind in ("m", "M")
+                )
+                # Exclude decimal
+                and self.dtype.kind != "O"
+            )
+[/REPLACE]

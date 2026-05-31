@@ -1,0 +1,11 @@
+ sklearn/mixture/_gaussian_mixture.py [SEARCH] def _compute_log_det_cholesky(matrix_chol, covariance_type, n_features): [/SEARCH] [REPLACE] def _compute_log_det_cholesky(matrix_chol, covariance_type, n_features): [/REPLACE]
+
+sklearn/mixture/_gaussian_mixture.py [SEARCH] def _compute_precision_cholesky(covariances, covariance_type): [/SEARCH] [REPLACE] def _compute_precision_cholesky(covariances, covariance_type): [/REPLACE]
+
+sklearn/mixture/_gaussian_mixture.py [SEARCH] def _estimate_gaussian_covariances_full(resp, X, nk, means, reg_covar): [/SEARCH] [REPLACE] def _estimate_gaussian_covariances_full(resp, X, nk, means, reg_covar): [/REPLACE]
+
+sklearn/mixture/_gaussian_mixture.py [SEARCH] def _estimate_log_gaussian_prob(X, means, precisions_chol, covariance_type): [/SEARCH] [REPLACE] def _estimate_log_gaussian_prob(X, means, precisions_chol, covariance_type): [/REPLACE]
+
+sklearn/mixture/_gaussian_mixture.py [SEARCH] def _check_weights(weights, n_components): [/SEARCH] [REPLACE] def _check_weights(weights, n_components): [/REPLACE]
+
+sklearn/mixture/_base.py [SEARCH] X = validate_data(self, X, dtype=[np.float64, np.float32], ensure_min_samples=2) [/SEARCH] [REPLACE] X = validate_data(self, X, dtype=[np.float64, np.float32], ensure_min_samples=2) [/REPLACE]

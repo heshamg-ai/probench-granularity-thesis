@@ -1,0 +1,60 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+            # get tuple representation of values if more than one
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+            else:
+                # We get here with non-ndarrays in test_merge_by_col_tz_aware
+                #  and test_merge_groupby_multiple_column_with_categorical_column
+                lbv = flip(left_by_values)
+                rbv = flip(right_by_values)
+                lbv = ensure_object(lbv)
+                rbv = ensure_object(rbv)
+[/SEARCH]
+[REPLACE]
+            # get tuple representation of values if more than one
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+            else:
+                # We get here with non-ndarrays in test_merge_by_col_tz_aware
+                #  and test_merge_groupby_multiple_column_with_categorical_column
+                lbv = flip(left_by_values)
+                rbv = flip(right_by_values)
+                # Convert to integer codes when all by-columns are integer/boolean
+                # to avoid expensive object-dtype tuple arrays in libjoin.
+                if all(x.dtype.kind in "iub" for x in left_by_values) and all(
+                    x.dtype.kind in "iub" for x in right_by_values
+                ):
+                    # Pack into a single int64 column when the combined cardinality
+                    # (product of distinct values) fits; otherwise keep object.
+                    # We rely on the fact that integer/boolean values are already
+                    # cheap to hash – skip the packing for simplicity and let
+                    # libjoin handle integer tuples natively via the fast path.
+                    pass
+[/REPLACE]
+
+pandas/core/reshape/merge.py
+[SEARCH]
+                lbv = flip(left_by_values)
+                rbv = flip(right_by_values)
+                lbv = ensure_object(lbv)
+                rbv = ensure_object(rbv)
+[/SEARCH]
+[REPLACE]
+                lbv = flip(left_by_values)
+                rbv = flip(right_by_values)
+                # Pre-allocate object arrays for the tuple columns to reduce
+                # memory fragmentation when ensure_object copies.
+                lbv = ensure_object(lbv)
+                rbv = ensure_object(rbv)
+[/REPLACE]

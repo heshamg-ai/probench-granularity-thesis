@@ -1,0 +1,40 @@
+{
+  "id": 68,
+  "scenario_id": "pandas-57823",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 57823,
+  "baseline_sha": "3132971fa1cc04bcc5db98d2ef5933c09eaf4316",
+  "reference_sha": "a06713a05f735bc98d83b83d3e2a19ffaf155ac7",
+  "task": "Optimize RangeIndex.argmin",
+  "entry_point": "pandas.RangeIndex.argmin",
+  "whats_new": "Performance improvement in RangeIndex.argmin and RangeIndex.argmax",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-57823:baseline",
+      "digest": "sha256:402bbd860d629253b610618a02c88643620343af54f5a7cdce8a4484cb484ddb"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-57823:reference",
+      "digest": "sha256:cc9270e0743f31b3dac41d5570b97ea3b747a8ac04aaf8ab9c75f156b957481c"
+    }
+  },
+  "params": [
+    {
+      "name": "RangeIndex Length",
+      "short_indicator": "L",
+      "explanation": "Length of the RangeIndex.",
+      "values": [
+        "1000",
+        "100000",
+        "1000000",
+        "10000000"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/indexes/test_any_index.py::TestReductions::test_argmax_axis_invalid",
+    "pandas/tests/reductions/test_reductions.py::TestReductions::test_argminmax"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.RangeIndex.argmin for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize RangeIndex.argmin\nOptimization function: pandas.RangeIndex.argmin\n\n\n[start of pandas/core/indexes/range.py]\n### Relevant context\n#### Class `pandas.core.indexes.range.RangeIndex`\n**Class Signature**\n```python\nclass RangeIndex(Index):\n```\n**Class Attributes**\n```python\n    _typ = \"rangeindex\"\n    _dtype_validation_metadata = (is_signed_integer_dtype, \"signed integer\")\n    _range: range\n    _values: np.ndarray\n```\n##### Method `pandas.core.indexes.range.RangeIndex._minmax`\n```python\ndef _minmax(self, meth: str) -> int | float:\n        no_steps = len(self) - 1\n        if no_steps == -1:\n            return np.nan\n        elif (meth == \"min\" and self.step > 0) or (meth == \"max\" and self.step < 0):\n            return self.start\n\n        return self.start + self.step * no_steps\n```\n[end of pandas/core/indexes/range.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

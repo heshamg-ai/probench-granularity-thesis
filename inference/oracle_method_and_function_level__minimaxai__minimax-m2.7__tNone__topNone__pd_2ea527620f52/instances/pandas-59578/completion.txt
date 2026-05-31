@@ -1,0 +1,68 @@
+
+
+Looking at the `_set_names` method, I can identify several optimization opportunities:
+
+1. When `level` is None, a generator is unnecessarily created from `range(self.nlevels)` - we can use it directly
+2. When `level` is a single integer, we can avoid creating a generator entirely
+3. For other level sequences, we can convert to a list to avoid recreating generators
+4. When `validate=False`, we still eagerly call `list(names)` which is unnecessary overhead
+
+Let me search for the relevant code and create optimized replacements.
+
+pandas/core/indexes/multi.py
+[SEARCH]
+        if level is None:
+            level = range(self.nlevels)
+        else:
+            level = (self._get_level_number(lev) for lev in level)
+
+        # set the name
+        for lev, name in zip(level, names):
+            if name is not None:
+                # GH 20527
+                # All items in 'names' need to be hashable:
+                if not is_hashable(name):
+                    raise TypeError(
+                        f"{type(self).__name__}.name must be a hashable type"
+                    )
+            self._names[lev] = name
+
+        # If .levels has been accessed, the names in our cache will be stale.
+        self._reset_cache()
+[/SEARCH]
+[REPLACE]
+        if level is None:
+            level = range(self.nlevels)
+            # set the name
+            for lev, name in zip(level, names):
+                if name is not None:
+                    # GH 20527
+                    # All items in 'names' need to be hashable:
+                    if not is_hashable(name):
+                        raise TypeError(
+                            f"{type(self).__name__}.name must be a hashable type"
+                        )
+                self._names[lev] = name
+        elif isinstance(level, int):
+            # Fast path for single level (avoid generator creation)
+            name = names[0]
+            if name is not None:
+                if not is_hashable(name):
+                    raise TypeError(
+                        f"{type(self).__name__}.name must be a hashable type"
+                    )
+            self._names[level] = name
+        else:
+            # Convert to list to avoid repeated generator creation
+            level = [self._get_level_number(lev) for lev in level]
+            for lev, name in zip(level, names):
+                if name is not None:
+                    if not is_hashable(name):
+                        raise TypeError(
+                            f"{type(self).__name__}.name must be a hashable type"
+                        )
+                self._names[lev] = name
+
+        # If .levels has been accessed, the names in our cache will be stale.
+        self._reset_cache()
+[/REPLACE]

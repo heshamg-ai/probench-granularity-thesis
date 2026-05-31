@@ -1,0 +1,20 @@
+pandas/core/arrays/numeric.py
+[SEARCH]
+    if mask is None:
+        if values.dtype.kind in "iu":
+            # fastpath
+            mask = np.zeros(len(values), dtype=np.bool_)
+        else:
+            mask = libmissing.is_numeric_na(values)
+[/SEARCH]
+[REPLACE]
+    if mask is None:
+        if values.dtype.kind in "iu":
+            # fastpath
+            mask = np.zeros(len(values), dtype=np.bool_)
+        elif values.dtype.kind == "f":
+            # fastpath for floating dtype
+            mask = np.isnan(values)
+        else:
+            mask = libmissing.is_numeric_na(values)
+[/REPLACE]

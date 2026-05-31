@@ -1,0 +1,87 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def _intersection(self, other: Index, sort: bool = False):
+[/SEARCH]
+[REPLACE]
+    def _intersection(self, other: Index, sort: bool = False):
+
+    def join(self, other, *, how="left", level=None, return_indexers=False,
+             sort=False):
+        other = ibase.ensure_index(other)
+        sort = sort or how == "outer"
+
+        if isinstance(other, RangeIndex):
+            if how not in ("left", "right", "inner", "outer"):
+                raise ValueError(
+                    f"do not recognize join method {how}"
+                )
+            if level is not None:
+                return super().join(
+                    other,
+                    how=how,
+                    level=level,
+                    return_indexers=return_indexers,
+                    sort=sort,
+                )
+
+            return_indexers_inner = True
+
+            if self._range == other._range:
+                join_index = other if how == "right" else self
+                lidx = None
+                ridx = None
+            elif how == "left":
+                join_index = self
+                lidx = None
+                ridx = self._get_indexer_for(other)
+            elif how == "right":
+                join_index = other
+                ridx = None
+                lidx = other._get_indexer_for(self)
+            elif how == "inner":
+                join_index = self._intersection(other)
+                if join_index is self:
+                    lidx = None
+                else:
+                    lidx = self._get_indexer_for(join_index)
+                if join_index is other:
+                    ridx = None
+                else:
+                    ridx = other._get_indexer_for(join_index)
+            else:  # how == "outer"
+                join_index = self.union(other, sort=sort)
+                if join_index is self:
+                    lidx = None
+                else:
+                    lidx = self._get_indexer_for(join_index)
+                if join_index is other:
+                    ridx = None
+                else:
+                    ridx = other._get_indexer_for(join_index)
+
+            if how == "right":
+                names = other.names
+            else:
+                names = self.names
+            if join_index.names != names:
+                join_index = join_index.set_names(names)
+
+            if not return_indexers:
+                return join_index
+
+            if lidx is not None:
+                lidx = ensure_platform_int(lidx)
+            if ridx is not None:
+                ridx = ensure_platform_int(ridx)
+            return join_index, lidx, ridx
+
+        return super().join(
+            other,
+            how=how,
+            level=level,
+            return_indexers=return_indexers,
+            sort=sort,
+        )
+
+    def _intersection(self, other: Index, sort: bool = False):
+[/REPLACE]

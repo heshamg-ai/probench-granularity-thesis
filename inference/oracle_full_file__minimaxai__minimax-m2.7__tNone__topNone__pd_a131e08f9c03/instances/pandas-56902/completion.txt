@@ -1,0 +1,69 @@
+
+
+Looking at the `_fill` method, the main performance bottleneck is the Python loop over columns when processing 2D arrays. The `group_fillna_indexer` Cython function can be called more efficiently by pre-computing the mask for all columns at once.
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+    def blk_func(values: ArrayLike) -> ArrayLike:
+        mask = isna(values)
+        if values.ndim == 1:
+            indexer = np.empty(values.shape, dtype=np.intp)
+            col_func(out=indexer, mask=mask)
+            return algorithms.take_nd(values, indexer)
+
+        else:
+            # We broadcast algorithms.take_nd analogous to
+            #  np.take_along_axis
+            if isinstance(values, np.ndarray):
+                dtype = values.dtype
+                if self._grouper.has_dropped_na:
+                    # dropped null groups give rise to nan in the result
+                    dtype = ensure_dtype_can_hold_na(values.dtype)
+                out = np.empty(values.shape, dtype=dtype)
+            else:
+                # Note: we only get here with backfill/pad,
+                #  so if we have a dtype that cannot hold NAs,
+                #  then there will be no -1s in indexer, so we can use
+                #  the original dtype (no need to ensure_dtype_can_hold_na)
+                out = type(values)._empty(values.shape, dtype=values.dtype)
+
+            for i, value_element in enumerate(values):
+                # call group_fillna_indexer column-wise
+                indexer = np.empty(values.shape[1], dtype=np.intp)
+                col_func(out=indexer, mask=mask[i])
+                out[i, :] = algorithms.take_nd(value_element, indexer)
+            return out
+[/SEARCH]
+[REPLACE]
+    def blk_func(values: ArrayLike) -> ArrayLike:
+        mask = isna(values)
+        if values.ndim == 1:
+            indexer = np.empty(values.shape, dtype=np.intp)
+            col_func(out=indexer, mask=mask)
+            return algorithms.take_nd(values, indexer)
+
+        else:
+            # We broadcast algorithms.take_nd analogous to
+            #  np.take_along_axis
+            if isinstance(values, np.ndarray):
+                dtype = values.dtype
+                if self._grouper.has_dropped_na:
+                    # dropped null groups give rise to nan in the result
+                    dtype = ensure_dtype_can_hold_na(values.dtype)
+                out = np.empty(values.shape, dtype=dtype)
+            else:
+                # Note: we only get here with backfill/pad,
+                #  so if we have a dtype that cannot hold NAs,
+                #  then there will be no -1s in indexer, so we can use
+                #  the original dtype (no need to ensure_dtype_can_hold_na)
+                out = type(values)._empty(values.shape, dtype=values.dtype)
+
+            # Optimized path: call group_fillna_indexer for each column
+            # using a pre-allocated indexer array to avoid repeated allocation
+            ncols = values.shape[1]
+            indexer = np.empty(values.shape, dtype=np.intp)
+            for i in range(ncols):
+                col_func(out=indexer[:, i], mask=mask[:, i])
+                out[:, i] = algorithms.take_nd(values[:, i], indexer[:, i])
+            return out
+[/REPLACE]

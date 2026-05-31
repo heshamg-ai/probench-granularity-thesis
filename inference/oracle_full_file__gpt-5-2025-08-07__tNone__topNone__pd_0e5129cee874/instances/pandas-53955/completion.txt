@@ -1,0 +1,123 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+    def _wrap_difference_result(self, other, result: MultiIndex) -> MultiIndex:
+        _, result_names = self._convert_can_do_setop(other)
+
+        if len(result) == 0:
+            return result.remove_unused_levels().set_names(result_names)
+        else:
+            return result.set_names(result_names)
+[/SEARCH]
+[REPLACE]
+    def _wrap_difference_result(self, other, result: MultiIndex) -> MultiIndex:
+        _, result_names = self._convert_can_do_setop(other)
+
+        if len(result) == 0:
+            return result.remove_unused_levels().set_names(result_names)
+        else:
+            return result.set_names(result_names)
+
+    def _intersection(self, other, sort) -> MultiIndex:
+        other, _ = self._convert_can_do_setop(other)
+        if not isinstance(other, MultiIndex):
+            return super()._intersection(other, sort)
+
+        if len(self) == 0 or len(other) == 0:
+            res = self[:0]
+            return self._wrap_intersection_result(other, res)
+
+        nlevels = self.nlevels
+
+        # Build unioned levels and recode both sides to the union
+        union_levels = []
+        self_re = []
+        other_re = []
+        for i in range(nlevels):
+            ulev = self.levels[i].union(other.levels[i], sort=False)
+            union_levels.append(ulev)
+            sc = recode_for_categories(self.codes[i], self.levels[i], ulev, copy=False)
+            oc = recode_for_categories(other.codes[i], other.levels[i], ulev, copy=False)
+            self_re.append(ensure_int64(sc))
+            other_re.append(ensure_int64(oc))
+
+        # Decide if we can safely use uint64 for key encoding, else fall back to Python ints
+        prod = 1
+        overflow64 = False
+        try:
+            for i in range(nlevels):
+                base = len(union_levels[i]) + 1
+                prod = prod * base
+                if prod > np.iinfo(np.uint64).max:
+                    overflow64 = True
+                    break
+        except Exception:
+            overflow64 = True
+
+        def compute_keys(codes_list, use_object: bool):
+            n = len(codes_list[0])
+            if not use_object:
+                keys = np.zeros(n, dtype=np.uint64)
+                stride = np.uint64(1)
+                for i in range(nlevels - 1, -1, -1):
+                    base = np.uint64(len(union_levels[i]) + 1)
+                    vals = codes_list[i].astype(np.int64, copy=False) + 1
+                    keys += vals.astype(np.uint64, copy=False) * stride
+                    stride *= base
+                return keys
+            else:
+                # Python-int based encoding to avoid overflow
+                strides = [1] * nlevels
+                for i in range(nlevels - 2, -1, -1):
+                    strides[i] = strides[i + 1] * (len(union_levels[i + 1]) + 1)
+                arrs = [codes_list[i].astype(np.int64, copy=False) for i in range(nlevels)]
+                out = [None] * n
+                for row in range(n):
+                    v = 0
+                    for i in range(nlevels):
+                        v += (int(arrs[i][row]) + 1) * strides[i]
+                    out[row] = v
+                return np.array(out, dtype=object)
+
+        if overflow64:
+            keys_self = compute_keys(self_re, use_object=True)
+            keys_other = compute_keys(other_re, use_object=True)
+            other_set = set(keys_other.tolist())
+            memb = np.fromiter((k in other_set for k in keys_self), dtype=np.bool_, count=len(keys_self))
+        else:
+            keys_self = compute_keys(self_re, use_object=False)
+            keys_other = compute_keys(other_re, use_object=False)
+            memb = np.isin(keys_self, keys_other, assume_unique=False)
+
+        # Ensure uniqueness (set semantics) while preserving self-order
+        dup_mask = duplicated(keys_self, keep="first")
+        take_mask = memb & ~dup_mask
+
+        if not take_mask.any():
+            res = self[:0]
+            return self._wrap_intersection_result(other, res)
+
+        indexer = np.nonzero(take_mask)[0]
+
+        new_codes = [codes.take(indexer) for codes in self_re]
+        res = MultiIndex(
+            levels=union_levels,
+            codes=new_codes,
+            names=self.names,
+            verify_integrity=False,
+        ).remove_unused_levels()
+
+        if sort is not False:
+            try:
+                res = res.sort_values()
+            except TypeError:
+                if sort is True:
+                    raise
+                warnings.warn(
+                    "The values in the array are unorderable. "
+                    "Pass `sort=False` to suppress this warning.",
+                    RuntimeWarning,
+                    stacklevel=find_stack_level(),
+                )
+
+        return self._wrap_intersection_result(other, res)
+[/REPLACE]

@@ -1,0 +1,18 @@
+xarray/core/alignment.py
+[SEARCH]
+        """
+        has_unindexed_dims = any(dim in self.unindexed_dim_sizes for dim in dims)
+        return not (indexes_all_equal(cmp_indexes)) or has_unindexed_dims
+[/SEARCH]
+[REPLACE]
+        """
+        # Fast path: if all indexes are equal, avoid reindexing unless there are
+        # conflicting sizes along unindexed dimensions.
+        if indexes_all_equal(cmp_indexes):
+            for dim in dims:
+                sizes = self.unindexed_dim_sizes.get(dim)
+                if sizes and len(sizes) > 1:
+                    return True
+            return False
+        return True
+[/REPLACE]

@@ -1,0 +1,19 @@
+pandas/core/frame.py
+[SEARCH]
+        elif is_integer(decimals):
+            # Dispatch to Series.round
+            new_cols = [_series_round(v, decimals) for _, v in self.items()]
+[/SEARCH]
+[REPLACE]
+        elif is_integer(decimals):
+            # Fastpath: blockwise rounding for numpy float dtypes when no extension dtypes present
+            if not any(is_extension_array_dtype(dt) for dt in self.dtypes):
+                def _round_block(arr):
+                    if isinstance(arr, np.ndarray) and getattr(arr.dtype, "kind", None) == "f":
+                        return np.round(arr, decimals=decimals)
+                    return arr
+                new_mgr = self._mgr.apply(_round_block)
+                return self._constructor(new_mgr).__finalize__(self, method="round")
+            # Fallback to per-column rounding (handles extension dtypes)
+            new_cols = [_series_round(v, decimals) for _, v in self.items()]
+[/REPLACE]

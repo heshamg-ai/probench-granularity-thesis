@@ -1,0 +1,25 @@
+
+
+Looking at the code, I can see a potential optimization in the `construct` method. The `isel` call at the end of the method performs slicing to apply the stride. When there are no indexes on the Dataset, this `isel` operation is unnecessary overhead since:
+
+1. For `stride=1`, `slice(None, None, 1)` is a no-op
+2. For stride > 1 with no indexes, the stride has already been applied during DataArrayRolling.construct
+
+Let me provide the optimization:
+
+xarray/core/rolling.py
+[SEARCH]
+        attrs = self.obj.attrs if keep_attrs else {}
+
+        return Dataset(dataset, coords=self.obj.coords, attrs=attrs).isel(
+            {d: slice(None, None, s) for d, s in zip(self.dim, strides)}
+        )
+[/SEARCH]
+[REPLACE]
+        attrs = self.obj.attrs if keep_attrs else {}
+
+        result = Dataset(dataset, coords=self.obj.coords, attrs=attrs)
+        if self.obj.xindexes:
+            return result.isel({d: slice(None, None, s) for d, s in zip(self.dim, strides)})
+        return result
+[/REPLACE]

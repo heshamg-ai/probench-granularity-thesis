@@ -1,0 +1,44 @@
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+    def _check_convergence(
+        self, X, batch_cost, new_dict, old_dict, n_samples, step, n_steps
+    ):
+[/SEARCH]
+[REPLACE]
+    def _check_convergence(
+        self, X, batch_cost, new_dict, old_dict, n_samples, step, n_steps, diff_buffer=None
+    ):
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+        dict_diff = linalg.norm(new_dict - old_dict) / self._n_components
+[/SEARCH]
+[REPLACE]
+        if diff_buffer is not None:
+            np.subtract(new_dict, old_dict, out=diff_buffer)
+            dict_diff = linalg.norm(diff_buffer) / self._n_components
+        else:
+            dict_diff = linalg.norm(new_dict - old_dict) / self._n_components
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+        old_dict = dictionary.copy()
+[/SEARCH]
+[REPLACE]
+        old_dict = dictionary.copy()
+        diff_buffer = np.empty_like(dictionary)
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+                if self._check_convergence(
+                    X_batch, batch_cost, dictionary, old_dict, n_samples, i, n_steps
+                ):
+[/SEARCH]
+[REPLACE]
+                if self._check_convergence(
+                    X_batch, batch_cost, dictionary, old_dict, n_samples, i, n_steps, diff_buffer
+                ):
+[/REPLACE]

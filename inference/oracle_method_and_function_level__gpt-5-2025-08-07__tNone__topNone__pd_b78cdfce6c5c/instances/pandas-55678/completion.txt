@@ -1,0 +1,36 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+                if needs_i8_conversion(lbv.dtype):
+                    lbv = lbv.view("i8")
+                if needs_i8_conversion(rbv.dtype):
+                    rbv = rbv.view("i8")
+[/SEARCH]
+[REPLACE]
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # If dtypes differ, factorize to aligned integer codes to avoid
+                # costly object comparisons and dtype casting.
+                ldt = getattr(lbv, "dtype", None)
+                rdt = getattr(rbv, "dtype", None)
+                if ldt is not None and rdt is not None and ldt != rdt:
+                    lcodes, rcodes, _ = _factorize_keys(lbv, rbv, sort=False, how="left")
+                    lbv = lcodes
+                    rbv = rcodes
+                else:
+                    # TODO: conversions for EAs that can be no-copy.
+                    lbv = np.asarray(lbv)
+                    rbv = np.asarray(rbv)
+                    if needs_i8_conversion(lbv.dtype):
+                        lbv = lbv.view("i8")
+                    if needs_i8_conversion(rbv.dtype):
+                        rbv = rbv.view("i8")
+[/REPLACE]

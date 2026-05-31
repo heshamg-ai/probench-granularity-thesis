@@ -1,0 +1,98 @@
+
+
+Looking at the code, I need to optimize `RangeIndex.value_counts`. Since a `RangeIndex` contains unique consecutive integers (each value appears exactly once), we can create a much faster implementation that avoids the general value counting algorithm.
+
+Let me implement the optimization:
+[SEARCH]
+    # --------------------------------------------------------------------
+    # Reductions
+
+    def all(self, *args, **kwargs) -> bool:
+        return 0 not in self._range
+[/SEARCH]
+[REPLACE]
+    # --------------------------------------------------------------------
+    # Reductions
+
+    def all(self, *args, **kwargs) -> bool:
+        return 0 not in self._range
+
+    def value_counts(
+        self,
+        normalize: bool = False,
+        sort: bool = True,
+        ascending: bool = False,
+        bins=None,
+        dropna: bool = True,
+    ) -> Series:
+        """
+        Return a Series containing counts of unique values.
+
+        The resulting object will be in descending order so that the
+        first element is the most frequently-occurring element.
+        Excludes NA values by default.
+
+        Parameters
+        ----------
+        normalize : bool, default False
+            If True then the object returned will contain the relative
+            frequencies of the unique values.
+        sort : bool, default True
+            Sort by frequencies when True. Preserve the order of the data when False.
+        ascending : bool, default False
+            Sort in ascending order.
+        bins : int, optional
+            Rather than count values, group them into half-open bins,
+            a convenience for ``pd.cut``, only works with numeric data.
+        dropna : bool, default True
+            Don't include counts of NaN.
+
+        Returns
+        -------
+        Series
+            Series containing counts of unique values.
+
+        See Also
+        --------
+        Series.count: Number of non-NA elements in a Series.
+        DataFrame.count: Number of non-NA elements in a DataFrame.
+        DataFrame.value_counts: Equivalent method on DataFrames.
+        """
+        # RangeIndex always has unique values (each element appears exactly once),
+        # so we can optimize by avoiding the general value counting algorithm.
+        if bins is None:
+            from pandas import Series
+
+            # Each value in RangeIndex appears exactly once
+            values = Series(
+                np.ones(len(self), dtype=np.int64),
+                index=self._values if isinstance(self._values, np.ndarray) else np.arange(self.start, self.stop, self.step),
+                copy=False,
+            )
+            # Explicitly use self._range to get the index values
+            index_values = np.array(list(self._range), dtype=np.int64)
+            values = Series(
+                np.ones(len(self), dtype=np.int64),
+                index=index_values,
+            )
+
+            if normalize:
+                values = values / len(self)
+
+            if sort:
+                values = values.sort_values(ascending=ascending)
+            elif not ascending:
+                values = values.sort_index(ascending=False)
+
+            values.name = "count"
+            return values
+        else:
+            # Fall back to general algorithm for binning
+            return super().value_counts(
+                normalize=normalize,
+                sort=sort,
+                ascending=ascending,
+                bins=bins,
+                dropna=dropna,
+            )
+[/REPLACE]

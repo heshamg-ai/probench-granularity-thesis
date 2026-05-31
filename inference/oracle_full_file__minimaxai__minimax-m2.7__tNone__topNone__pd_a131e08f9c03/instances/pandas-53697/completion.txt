@@ -1,0 +1,136 @@
+
+
+pandas/core/indexes/multi.py
+[SEARCH]
+    def append(self, other):
+        """
+        Append a collection of Index options together.
+
+        Parameters
+        ----------
+        other : Index or list/tuple of indices
+
+        Returns
+        -------
+        Index
+            The combined index.
+
+        Examples
+        --------
+        >>> mi = pd.MultiIndex.from_arrays([['a'], ['b']])
+        >>> mi
+        MultiIndex([('a', 'b')],
+                   )
+        >>> mi.append(mi)
+        MultiIndex([('a', 'b'), ('a', 'b')],
+                   )
+        """
+        if not isinstance(other, (list, tuple)):
+            other = [other]
+
+        if all(
+            (isinstance(o, MultiIndex) and o.nlevels >= self.nlevels) for o in other
+        ):
+            arrays, names = [], []
+            for i in range(self.nlevels):
+                label = self._get_level_values(i)
+                appended = [o._get_level_values(i) for o in other]
+                arrays.append(label.append(appended))
+                single_label_name = all(label.name == x.name for x in appended)
+                names.append(label.name if single_label_name else None)
+            return MultiIndex.from_arrays(arrays, names=names)
+
+        to_concat = (self._values,) + tuple(k._values for k in other)
+        new_tuples = np.concatenate(to_concat)
+
+        # if all(isinstance(x, MultiIndex) for x in other):
+        try:
+            # We only get here if other contains at least one index with tuples,
+            # setting names to None automatically
+            return MultiIndex.from_tuples(new_tuples)
+        except (TypeError, IndexError):
+            return Index(new_tuples)
+[/SEARCH]
+[REPLACE]
+    def append(self, other):
+        """
+        Append a collection of Index options together.
+
+        Parameters
+        ----------
+        other : Index or list/tuple of indices
+
+        Returns
+        -------
+        Index
+            The combined index.
+
+        Examples
+        --------
+        >>> mi = pd.MultiIndex.from_arrays([['a'], ['b']])
+        >>> mi
+        MultiIndex([('a', 'b')],
+                   )
+        >>> mi.append(mi)
+        MultiIndex([('a', 'b'), ('a', 'b')],
+                   )
+        """
+        if not isinstance(other, (list, tuple)):
+            other = [other]
+
+        if all(
+            (isinstance(o, MultiIndex) and o.nlevels >= self.nlevels) for o in other
+        ):
+            # Fast path: concatenate MultiIndex objects directly using codes/levels
+            # instead of creating intermediate Index objects via _get_level_values
+            
+            # Determine which levels to use (same as self.nlevels)
+            # other MultiIndex may have more levels but we use self.nlevels
+            nlevels = self.nlevels
+            
+            # Collect all levels and codes
+            all_codes = []
+            all_names = [self.names]
+            
+            # Start with self's codes
+            for level_idx in range(nlevels):
+                all_codes.append([self.codes[level_idx].copy()])
+            
+            # Append other MultiIndex codes
+            for o in other:
+                for level_idx in range(nlevels):
+                    all_codes[level_idx].append(o.codes[level_idx])
+            
+            # Concatenate codes directly
+            new_codes = [
+                np.concatenate(level_codes) 
+                for level_codes in all_codes
+            ]
+            
+            # Handle names - check if all MultiIndex have the same name for each level
+            names = []
+            for level_idx in range(nlevels):
+                self_name = self.names[level_idx]
+                same_name = all(
+                    o.names[level_idx] == self_name for o in other
+                )
+                names.append(self_name if same_name else None)
+            
+            return MultiIndex(
+                levels=self._levels,
+                codes=new_codes,
+                names=names,
+                verify_integrity=False,
+            )
+
+        to_concat = (self._values,) + tuple(k._values for k in other)
+        new_tuples = np.concatenate(to_concat)
+
+        # if all(isinstance(x, MultiIndex) for x in other):
+        try:
+            # We only get here if other contains at least one index with tuples,
+            # setting names to None automatically
+            return MultiIndex.from_tuples(new_tuples)
+        except (TypeError, IndexError):
+            return Index(new_tuples)
+[/REPLACE]

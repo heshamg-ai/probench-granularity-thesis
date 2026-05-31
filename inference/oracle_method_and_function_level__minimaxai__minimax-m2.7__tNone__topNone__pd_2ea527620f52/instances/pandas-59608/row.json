@@ -1,0 +1,75 @@
+{
+  "id": 75,
+  "scenario_id": "pandas-59608",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 59608,
+  "baseline_sha": "360597c349f4309364af0d5ac3bab158fd83d9fa",
+  "reference_sha": "c17022034c585b34cbdc2993302ccd65b39053d5",
+  "task": "Optimize DataFrame.to_csv performance when exporting MultiIndex DataFrames with index=False",
+  "entry_point": "pandas.DataFrame.to_csv",
+  "whats_new": "Performance improvement in DataFrame.to_csv when ``index=False``",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-59608:baseline",
+      "digest": "sha256:da6e49319f81209d9ac9e4e027ce0d73afd26dad10e53def264546a91a001b74"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-59608:reference",
+      "digest": "sha256:dd5531c8df04410db7ab6dde0849a234095984b9e29100f696e6bb3a48f7b653"
+    }
+  },
+  "params": [
+    {
+      "name": "Num Rows",
+      "short_indicator": "R",
+      "explanation": "Number of rows in the DataFrame.",
+      "values": [
+        "10000",
+        "100000"
+      ]
+    },
+    {
+      "name": "Num Cols",
+      "short_indicator": "C",
+      "explanation": "Column counts",
+      "values": [
+        "10",
+        "100"
+      ]
+    },
+    {
+      "name": "Num Levels",
+      "short_indicator": "L",
+      "explanation": "Number of levels in the MultiIndex.",
+      "values": [
+        "2",
+        "3"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/frame/methods/test_to_csv.py::TestDataFrameToCSV::test_to_csv_no_index",
+    "pandas/tests/frame/methods/test_to_csv.py::TestDataFrameToCSV::test_to_csv_multiindex",
+    "pandas/tests/frame/methods/test_to_csv.py::TestDataFrameToCSV::test_to_csv_single_level_multi_index",
+    "pandas/tests/frame/methods/test_to_csv.py::TestDataFrameToCSV::test_multi_index_header",
+    "pandas/tests/frame/methods/test_to_csv.py::TestDataFrameToCSV::test_to_csv_chunking",
+    "pandas/tests/frame/methods/test_to_csv.py::TestDataFrameToCSV::test_to_csv_chunksize",
+    "pandas/tests/frame/methods/test_to_csv.py::TestDataFrameToCSV::test_to_csv_from_csv1",
+    "pandas/tests/frame/methods/test_to_csv.py::TestDataFrameToCSV::test_to_csv_from_csv2",
+    "pandas/tests/frame/methods/test_to_csv.py::TestDataFrameToCSV::test_to_csv_params",
+    "pandas/tests/frame/methods/test_to_csv.py::TestDataFrameToCSV::test_to_csv_quoting",
+    "pandas/tests/io/formats/test_to_csv.py::TestToCSV::test_to_csv_multi_index",
+    "pandas/tests/io/formats/test_to_csv.py::TestToCSV::test_to_csv_single_level_multi_index",
+    "pandas/tests/io/formats/test_to_csv.py::TestToCSV::test_to_csv_na_rep",
+    "pandas/tests/io/formats/test_to_csv.py::TestToCSV::test_to_csv_na_rep_long_string",
+    "pandas/tests/io/formats/test_to_csv.py::TestToCSV::test_to_csv_float_format",
+    "pandas/tests/io/formats/test_to_csv.py::TestToCSV::test_to_csv_float_ea_float_format",
+    "pandas/tests/io/formats/test_to_csv.py::TestToCSV::test_to_csv_float_ea_no_float_format",
+    "pandas/tests/io/formats/test_to_csv.py::TestToCSV::test_to_csv_decimal",
+    "pandas/tests/io/formats/test_to_csv.py::TestToCSV::test_to_csv_date_format",
+    "pandas/tests/io/formats/test_to_csv.py::TestToCSV::test_to_csv_date_format_in_categorical",
+    "pandas/tests/io/formats/test_to_csv.py::TestToCSV::test_to_csv_different_datetime_formats"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.DataFrame.to_csv for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize DataFrame.to_csv performance when exporting MultiIndex DataFrames with index=False\nOptimization function: pandas.DataFrame.to_csv\n\n\n[start of pandas/io/formats/csvs.py]\n### Relevant context\n#### Class `pandas.io.formats.csvs.CSVFormatter`\n**Class Signature**\n```python\nclass CSVFormatter:\n```\n**Class Attributes**\n```python\n    cols: npt.NDArray[np.object_]\n```\n**Class __init__ method**\n```python\n    def __init__(\n        self,\n        formatter: DataFrameFormatter,\n        path_or_buf: FilePath | WriteBuffer[str] | WriteBuffer[bytes] = \"\",\n        sep: str = \",\",\n        cols: Sequence[Hashable] | None = None,\n        index_label: IndexLabel | None = None,\n        mode: str = \"w\",\n        encoding: str | None = None,\n        errors: str = \"strict\",\n        compression: CompressionOptions = \"infer\",\n        quoting: int | None = None,\n        lineterminator: str | None = \"\\n\",\n        chunksize: int | None = None,\n        quotechar: str | None = '\"',\n        date_format: str | None = None,\n        doublequote: bool = True,\n        escapechar: str | None = None,\n        storage_options: StorageOptions | None = None,\n    ) -> None:\n        self.fmt = formatter\n\n        self.obj = self.fmt.frame\n\n        self.filepath_or_buffer = path_or_buf\n        self.encoding = encoding\n        self.compression: CompressionOptions = compression\n        self.mode = mode\n        self.storage_options = storage_options\n\n        self.sep = sep\n        self.index_label = self._initialize_index_label(index_label)\n        self.errors = errors\n        self.quoting = quoting or csvlib.QUOTE_MINIMAL\n        self.quotechar = self._initialize_quotechar(quotechar)\n        self.doublequote = doublequote\n        self.escapechar = escapechar\n        self.lineterminator = lineterminator or os.linesep\n        self.date_format = date_format\n        self.cols = self._initialize_columns(cols)\n        self.chunksize = self._initialize_chunksize(chunksize)\n```\n##### Method `pandas.io.formats.csvs.CSVFormatter._save_chunk`\n```python\ndef _save_chunk(self, start_i: int, end_i: int) -> None:\n        # create the data for a chunk\n        slicer = slice(start_i, end_i)\n        df = self.obj.iloc[slicer]\n\n        res = df._get_values_for_csv(**self._number_format)\n        data = list(res._iter_column_arrays())\n\n        ix = self.data_index[slicer]._get_values_for_csv(**self._number_format)\n        libwriters.write_csv_rows(\n            data,\n            ix,\n            self.nlevels,\n            self.cols,\n            self.writer,\n        )\n```\n[end of pandas/io/formats/csvs.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

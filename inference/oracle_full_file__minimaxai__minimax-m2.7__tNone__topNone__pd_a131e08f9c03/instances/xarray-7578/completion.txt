@@ -1,0 +1,93 @@
+
+
+Looking at the code, I can see that `DatasetRolling.construct` has an inefficiency: it applies `.isel()` with stride to the entire Dataset at the end, which:
+1. Unnecessarily slices non-rolling variables
+2. Performs redundant slicing for rolling variables (since `DataArrayRolling.construct` already applies stride slicing)
+
+Let me optimize this by applying stride slicing at the per-variable level and removing the redundant `.isel()` at the end.
+
+xarray/core/rolling.py
+[SEARCH]
+    def _construct(
+        self,
+        obj: DataArray,
+        window_dim: Hashable | Mapping[Any, Hashable] | None = None,
+        stride: int | Mapping[Any, int] = 1,
+        fill_value: Any = dtypes.NA,
+        keep_attrs: bool | None = None,
+        **window_dim_kwargs: Hashable,
+    ) -> DataArray:
+        from xarray.core.dataarray import DataArray
+
+        keep_attrs = self._get_keep_attrs(keep_attrs)
+
+        if window_dim is None:
+            if len(window_dim_kwargs) == 0:
+                raise ValueError(
+                    "Either window_dim or window_dim_kwargs need to be specified."
+                )
+            window_dim = {d: window_dim_kwargs[str(d)] for d in self.dim}
+
+        window_dims = self._mapping_to_list(
+            window_dim, allow_default=False, allow_allsame=False
+        )
+        strides = self._mapping_to_list(stride, default=1)
+
+        window = obj.variable.rolling_window(
+            self.dim, self.window, window_dims, self.center, fill_value=fill_value
+        )
+
+        attrs = obj.attrs if keep_attrs else {}
+
+        result = DataArray(
+            window,
+            dims=obj.dims + tuple(window_dims),
+            coords=obj.coords,
+            attrs=attrs,
+            name=obj.name,
+        )
+        return result.isel({d: slice(None, None, s) for d, s in zip(self.dim, strides)})
+[/SEARCH]
+[REPLACE]
+    def _construct(
+        self,
+        obj: DataArray,
+        window_dim: Hashable | Mapping[Any, Hashable] | None = None,
+        stride: int | Mapping[Any, int] = 1,
+        fill_value: Any = dtypes.NA,
+        keep_attrs: bool | None = None,
+        **window_dim_kwargs: Hashable,
+    ) -> DataArray:
+        from xarray.core.dataarray import DataArray
+
+        keep_attrs = self._get_keep_attrs(keep_attrs)
+
+        if window_dim is None:
+            if len(window_dim_kwargs) == 0:
+                raise ValueError(
+                    "Either window_dim or window_dim_kwargs need to be specified."
+                )
+            window_dim = {d: window_dim_kwargs[str(d)] for d in self.dim}
+
+        window_dims = self._mapping_to_list(
+            window_dim, allow_default=False, allow_allsame=False
+        )
+        strides = self._mapping_to_list(stride, default=1)
+
+        window = obj.variable.rolling_window(
+            self.dim, self.window, window_dims, self.center, fill_value=fill_value
+        )
+
+        attrs = obj.attrs if keep_attrs else {}
+
+        # Apply stride slicing directly to the Variable for efficiency
+        # (avoids creating intermediate DataArray)
+        stride_slices = {d: slice(None, None, s) for d, s in zip(self.dim, strides)}
+        return DataArray(
+            window.isel(stride_slices),
+            dims=obj.dims + tuple(window_dims),
+            coords=obj.coords,
+            attrs=attrs,
+            name=obj.name,
+        )
+[/REPLACE]

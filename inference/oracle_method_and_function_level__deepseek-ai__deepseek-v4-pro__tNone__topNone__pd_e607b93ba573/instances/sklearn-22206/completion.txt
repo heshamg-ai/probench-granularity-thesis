@@ -1,0 +1,83 @@
+sklearn/linear_model/_quantile.py
+[SEARCH]
+        c = np.concatenate(
+            [
+                np.full(2 * n_params, fill_value=alpha),
+                sample_weight * self.quantile,
+                sample_weight * (1 - self.quantile),
+            ]
+        )
+        if self.fit_intercept:
+            # do not penalize the intercept
+            c[0] = 0
+            c[n_params] = 0
+
+        if sparse.issparse(X):
+            if self.solver not in ["highs-ds", "highs-ipm", "highs"]:
+                raise ValueError(
+                    f"Solver {self.solver} does not support sparse X. "
+                    "Use solver 'highs' for example."
+                )
+            # Note that highs methods do convert to csc.
+            # Therefore, we work with csc matrices as much as possible.
+            eye = sparse.eye(n_indices, dtype=X.dtype, format="csc")
+            if self.fit_intercept:
+                ones = sparse.csc_matrix(np.ones(shape=(n_indices, 1), dtype=X.dtype))
+                A_eq = sparse.hstack([ones, X, -ones, -X, eye, -eye], format="csc")
+            else:
+                A_eq = sparse.hstack([X, -X, eye, -eye], format="csc")
+        else:
+            eye = np.eye(n_indices)
+            if self.fit_intercept:
+                ones = np.ones((n_indices, 1))
+                A_eq = np.concatenate([ones, X, -ones, -X, eye, -eye], axis=1)
+            else:
+                A_eq = np.concatenate([X, -X, eye, -eye], axis=1)
+
+        b_eq = y
+[/SEARCH]
+[REPLACE]
+        # Precompute common terms and use in-place operations where possible
+        sample_weight_quantile = sample_weight * self.quantile
+        sample_weight_complement = sample_weight * (1 - self.quantile)
+
+        if self.fit_intercept:
+            c = np.empty(2 * n_params + 2 * n_indices)
+            c[:n_params] = alpha
+            c[n_params:2 * n_params] = alpha
+            c[0] = 0
+            c[n_params] = 0
+            c[2 * n_params:2 * n_params + n_indices] = sample_weight_quantile
+            c[2 * n_params + n_indices:] = sample_weight_complement
+        else:
+            c = np.empty(2 * n_params + 2 * n_indices)
+            c[:n_params] = alpha
+            c[n_params:2 * n_params] = alpha
+            c[2 * n_params:2 * n_params + n_indices] = sample_weight_quantile
+            c[2 * n_params + n_indices:] = sample_weight_complement
+
+        if sparse.issparse(X):
+            if self.solver not in ["highs-ds", "highs-ipm", "highs"]:
+                raise ValueError(
+                    f"Solver {self.solver} does not support sparse X. "
+                    "Use solver 'highs' for example."
+                )
+            # Note that highs methods do convert to csc.
+            # Therefore, we work with csc matrices as much as possible.
+            eye = sparse.eye(n_indices, dtype=X.dtype, format="csc")
+            if self.fit_intercept:
+                ones = sparse.csc_matrix((n_indices, 1), dtype=X.dtype)
+                ones.data = np.ones(n_indices, dtype=X.dtype)
+                A_eq = sparse.hstack([ones, X, -ones, -X, eye, -eye], format="csc")
+            else:
+                A_eq = sparse.hstack([X, -X, eye, -eye], format="csc")
+        else:
+            eye = np.eye(n_indices)
+            if self.fit_intercept:
+                ones = np.ones((n_indices, 1))
+                A_eq = np.hstack([ones, X, -ones, -X, eye, -eye])
+            else:
+                A_eq = np.hstack([X, -X, eye, -eye])
+
+        b_eq = y
+[/REPLACE]

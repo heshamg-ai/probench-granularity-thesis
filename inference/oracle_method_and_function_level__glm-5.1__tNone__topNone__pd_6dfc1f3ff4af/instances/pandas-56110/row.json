@@ -1,0 +1,52 @@
+{
+  "id": 49,
+  "scenario_id": "pandas-56110",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 56110,
+  "baseline_sha": "34f39a9b053703e39f58ad1d1edc559c2465cf78",
+  "reference_sha": "7e264323e3dbe729e90b324ae25356d46e6e5a5f",
+  "task": "Optimize Series.str.get_dummies when dtype is string[pyarrow_numpy] or string[pyarrow]",
+  "entry_point": "pandas.Series.str.get_dummies",
+  "whats_new": "Performance improvement in Series.str.get_dummies when dtype is ``\"string[pyarrow]\"`` or ``\"string[pyarrow_numpy]\"``",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-56110:baseline",
+      "digest": "sha256:754b728816b5b58bfed1a57bef746981a5c63cd074ef521b76915f2a28a090e9"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-56110:reference",
+      "digest": "sha256:a7995eac79a76189036f8c72efb9131f101fb96db0edaff60881add4e39027b9"
+    }
+  },
+  "params": [
+    {
+      "name": "Series Length",
+      "short_indicator": "N",
+      "explanation": "Size of the Series",
+      "values": [
+        "10000",
+        "100000",
+        "1000000"
+      ]
+    },
+    {
+      "name": "Dtype",
+      "short_indicator": "DT",
+      "explanation": "String dtype",
+      "values": [
+        "string_pyarrow_numpy",
+        "string_pyarrow"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/strings/test_get_dummies.py::test_get_dummies",
+    "pandas/tests/strings/test_get_dummies.py::test_get_dummies_index",
+    "pandas/tests/strings/test_get_dummies.py::test_get_dummies_with_name_dummy",
+    "pandas/tests/strings/test_get_dummies.py::test_get_dummies_with_name_dummy_index",
+    "pandas/tests/strings/test_strings.py::test_empty_str_methods",
+    "pandas/tests/extension/test_arrow.py::test_get_dummies"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.Series.str.get_dummies for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n- Only change what directly improves the optimization target.\n\nOPTIMIZATION REQUEST:\nOptimize Series.str.get_dummies when dtype is string[pyarrow_numpy] or string[pyarrow]\nOptimization function: pandas.Series.str.get_dummies\n\n\n[start of pandas/core/arrays/string_arrow.py]\n### Relevant context\n#### Class `pandas.core.arrays.string_arrow.ArrowStringArray`\n**Class Signature**\n```python\nclass ArrowStringArray(ObjectStringArrayMixin, ArrowExtensionArray, BaseStringArray):\n```\n**Class Attributes**\n```python\n    _dtype: StringDtype  # type: ignore[assignment]\n    _storage = \"pyarrow\"\n    _str_na_value = libmissing.NA  # type: ignore[assignment]\n```\n**Class __init__ method**\n```python\n    def __init__(self, values) -> None:\n        super().__init__(values)\n        self._dtype = StringDtype(storage=self._storage)\n\n        if not pa.types.is_string(self._pa_array.type) and not (\n            pa.types.is_dictionary(self._pa_array.type)\n            and pa.types.is_string(self._pa_array.type.value_type)\n        ):\n            raise ValueError(\n                \"ArrowStringArray requires a PyArrow (chunked) array of string type\"\n            )\n```\n**Added methods (baseline missing):**\n- `pandas.core.arrays.string_arrow.ArrowStringArray._str_get_dummies`\n[end of pandas/core/arrays/string_arrow.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

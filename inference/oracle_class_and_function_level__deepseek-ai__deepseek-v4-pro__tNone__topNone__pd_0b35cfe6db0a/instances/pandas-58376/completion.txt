@@ -1,0 +1,78 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def factorize(
+        self,
+        sort: bool = False,
+        use_na_sentinel: bool = True,
+    ) -> tuple[npt.NDArray[np.intp], RangeIndex]:
+        if sort and self.step < 0:
+            codes = np.arange(len(self) - 1, -1, -1, dtype=np.intp)
+            uniques = self[::-1]
+        else:
+            codes = np.arange(len(self), dtype=np.intp)
+            uniques = self
+        return codes, uniques
+[/SEARCH]
+[REPLACE]
+    def factorize(
+        self,
+        sort: bool = False,
+        use_na_sentinel: bool = True,
+    ) -> tuple[npt.NDArray[np.intp], RangeIndex]:
+        if sort and self.step < 0:
+            codes = np.arange(len(self) - 1, -1, -1, dtype=np.intp)
+            uniques = self[::-1]
+        else:
+            codes = np.arange(len(self), dtype=np.intp)
+            uniques = self
+        return codes, uniques
+
+    def value_counts(
+        self,
+        normalize: bool = False,
+        sort: bool = True,
+        ascending: bool = False,
+        bins=None,
+        dropna: bool = True,
+    ) -> Series:
+        from pandas import Series
+
+        if bins is not None:
+            return super().value_counts(
+                normalize=normalize,
+                sort=sort,
+                ascending=ascending,
+                bins=bins,
+                dropna=dropna,
+            )
+
+        if not len(self):
+            return Series([], dtype=_dtype_int64)
+
+        n = len(self)
+        result = np.full(n, 1, dtype=_dtype_int64)
+        index = self
+        name = self.name
+
+        if dropna:
+            # RangeIndex has no NAs, nothing to drop
+            pass
+
+        if normalize:
+            result = result.astype(np.float64)
+            result /= n
+
+        # Build a Series directly with known index and values
+        res = Series(result, index=index, name=name, copy=False)
+
+        if sort:
+            if ascending:
+                # Already in ascending order (1, 1, 1, ...)
+                # Nothing to sort, values are all equal
+                return res
+            else:
+                # Descending order: values are all equal, no reordering needed
+                # Still use sort_index to match the expected order when ascending=False
+                return res.sort_index(ascending=False)
+        return res
+[/REPLACE]

@@ -1,0 +1,33 @@
+sklearn/utils/stats.py
+[SEARCH]
+    percentile_indices = xp.stack(
+        [
+            xp.searchsorted(
+                weight_cdf[feature_idx, ...], adjusted_percentile_rank[feature_idx]
+            )
+            for feature_idx in range(weight_cdf.shape[0])
+        ],
+    )
+    # In rare cases, `percentile_indices` equals to `sorted_idx.shape[0]`
+    max_idx = sorted_idx.shape[0] - 1
+    percentile_indices = xp.clip(percentile_indices, 0, max_idx)
+[/SEARCH]
+[REPLACE]
+    # Vectorized binary search along axis=1 to avoid per-feature Python loop
+    n_features, n_samples = weight_cdf.shape
+    idx_dtype = sorted_idx.dtype
+    low = xp.zeros(n_features, dtype=idx_dtype, device=device)
+    high = xp.full(n_features, n_samples, dtype=idx_dtype, device=device)
+    # Number of iterations to converge for binary search
+    iters = (n_samples - 1).bit_length()
+    for _ in range(iters):
+        mid = (low + high) // 2
+        mid_vals = xp.take_along_axis(weight_cdf, mid[:, None], axis=1)[:, 0]
+        cond = mid_vals < adjusted_percentile_rank
+        low = xp.where(cond, mid + 1, low)
+        high = xp.where(cond, high, mid)
+    percentile_indices = low
+    # In rare cases, `percentile_indices` equals to `sorted_idx.shape[0]`
+    max_idx = sorted_idx.shape[0] - 1
+    percentile_indices = xp.clip(percentile_indices, 0, max_idx)
+[/REPLACE]

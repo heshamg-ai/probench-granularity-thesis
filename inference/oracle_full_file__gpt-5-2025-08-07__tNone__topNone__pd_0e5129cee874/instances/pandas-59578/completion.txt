@@ -1,0 +1,55 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+        if level is None:
+            level = range(self.nlevels)
+        else:
+            level = (self._get_level_number(lev) for lev in level)
+
+        # set the name
+        for lev, name in zip(level, names):
+            if name is not None:
+                # GH 20527
+                # All items in 'names' need to be hashable:
+                if not is_hashable(name):
+                    raise TypeError(
+                        f"{type(self).__name__}.name must be a hashable type"
+                    )
+            self._names[lev] = name
+
+        # If .levels has been accessed, the names in our cache will be stale.
+        self._reset_cache()
+[/SEARCH]
+[REPLACE]
+        if level is None:
+            level = range(self.nlevels)
+        else:
+            level = [self._get_level_number(lev) for lev in level]
+
+        # fastpath: if no actual change in target slots, do nothing
+        def _name_equal(a, b) -> bool:
+            if a is b:
+                return True
+            if isna(a) and isna(b):
+                return True
+            try:
+                return a == b
+            except Exception:
+                return False
+
+        if all(_name_equal(self._names[lev], nm) for lev, nm in zip(level, names)):
+            return
+
+        # set the name
+        for lev, name in zip(level, names):
+            if name is not None:
+                # GH 20527
+                # All items in 'names' need to be hashable:
+                if not is_hashable(name):
+                    raise TypeError(
+                        f"{type(self).__name__}.name must be a hashable type"
+                    )
+            self._names[lev] = name
+
+        # If .levels has been accessed, the names in our cache will be stale.
+        self._reset_cache()
+[/REPLACE]

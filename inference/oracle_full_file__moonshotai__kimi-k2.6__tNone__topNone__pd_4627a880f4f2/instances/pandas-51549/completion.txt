@@ -1,0 +1,237 @@
+ pandas/core/missing.py
+[SEARCH]
+def find_valid_index(
+    values, *, how: str, is_valid: npt.NDArray[np.bool_]
+) -> int | None:
+    """
+    Retrieves the index of the first valid value.
+
+    Parameters
+    ----------
+    values : ndarray or ExtensionArray
+    how : {'first', 'last'}
+        Use this parameter to change between the first or last valid index.
+    is_valid: np.ndarray
+        Mask to find na_values.
+
+    Returns
+    -------
+    int or None
+    """
+    assert how in ["first", "last"]
+
+    if len(values) == 0:
+        # early stop
+        return None
+
+    if values.ndim == 2:
+        is_valid = is_valid.any(axis=1)  # reduce axis 1
+
+    if how == "first":
+        idxpos = is_valid[::].argmax()
+    elif how == "last":
+        idxpos = len(values) - 1 - is_valid[::-1].argmax()
+
+    chk_notna = is_valid[idxpos]
+
+    if not chk_notna:
+        return None
+
+    # Incompatible return value type (got "signedinteger[Any]",
+    # expected "Optional[int]")
+    return idxpos  # type: ignore[return-value]
+[/SEARCH]
+[REPLACE]
+def find_valid_index(
+    values, *, how: str, is_valid: npt.NDArray[np.bool_]
+) -> int | None:
+    """
+    Retrieves the index of the first valid value.
+
+    Parameters
+    ----------
+    values : ndarray or ExtensionArray
+    how : {'first', 'last'}
+        Use this parameter to change between the first or last valid index.
+    is_valid: np.ndarray
+        Mask to find na_values.
+
+    Returns
+    -------
+    int or None
+    """
+    assert how in ["first", "last"]
+
+    if len(values) == 0:
+        # early stop
+        return None
+
+    if values.ndim == 2:
+        is_valid = is_valid.any(axis=1)  # reduce axis 1
+
+    if how == "first":
+        idxpos = is_valid.argmax()
+    elif how == "last":
+        idxpos = len(values) - 1 - is_valid[::-1].argmax()
+
+    chk_notna = is_valid[idxpos]
+
+    if not chk_notna:
+        return None
+
+    # Incompatible return value type (got "signedinteger[Any]",
+    # expected "Optional[int]")
+    return idxpos  # type: ignore[return-value]
+[/REPLACE]
+
+pandas/core/missing.py
+[SEARCH]
+def find_valid_index(
+    values, *, how: str, is_valid: npt.NDArray[np.bool_]
+) -> int | None:
+    """
+    Retrieves the index of the first valid value.
+
+    Parameters
+    ----------
+    values : ndarray or ExtensionArray
+    how : {'first', 'last'}
+        Use this parameter to change between the first or last valid index.
+    is_valid: np.ndarray
+        Mask to find na_values.
+
+    Returns
+    -------
+    int or None
+    """
+    assert how in ["first", "last"]
+
+    if len(values) == 0:
+        # early stop
+        return None
+
+    if values.ndim == 2:
+        is_valid = is_valid.any(axis=1)  # reduce axis 1
+
+    if how == "first":
+        idxpos = is_valid[::].argmax()
+    elif how == "last":
+        idxpos = len(values) - 1 - is_valid[::-1].argmax()
+
+    chk_notna = is_valid[idxpos]
+
+    if not chk_notna:
+        return None
+
+    # Incompatible return value type (got "signedinteger[Any]",
+    # expected "Optional[int]")
+    return idxpos  # type: ignore[return-value]
+[/SEARCH]
+[REPLACE]
+def find_valid_index(
+    values, *, how: str, is_valid: npt.NDArray[np.bool_]
+) -> int | None:
+    """
+    Retrieves the index of the first valid value.
+
+    Parameters
+    ----------
+    values : ndarray or ExtensionArray
+    how : {'first', 'last'}
+        Use this parameter to change between the first or last valid index.
+    is_valid: np.ndarray
+        Mask to find na_values.
+
+    Returns
+    -------
+    int or None
+    """
+    assert how in ["first", "last"]
+
+    if len(values) == 0:
+        # early stop
+        return None
+
+    if values.ndim == 2:
+        is_valid = is_valid.any(axis=1)  # reduce axis 1
+
+    if how == "first":
+        idxpos = is_valid.argmax()
+    elif how == "last":
+        idxpos = len(values) - 1 - is_valid[::-1].argmax()
+
+    chk_notna = is_valid[idxpos]
+
+    if not chk_notna:
+        return None
+
+    # Incompatible return value type (got "signedinteger[Any]",
+    # expected "Optional[int]")
+    return idxpos  # type: ignore[return-value]
+[/REPLACE]
+
+pandas/core/generic.py
+[SEARCH]
+    @final
+    def _find_valid_index(self, *, how: str) -> Hashable | None:
+        """
+        Retrieves the index of the first valid value.
+
+        Parameters
+        ----------
+        how : {'first', 'last'}
+            Use this parameter to change between the first or last valid index.
+
+        Returns
+        -------
+        idx_first_valid : type of index
+        """
+        idxpos = find_valid_index(self._values, how=how, is_valid=~isna(self._values))
+        if idxpos is None:
+            return None
+        return self.index[idxpos]
+[/SEARCH]
+[REPLACE]
+    @final
+    def _find_valid_index(self, *, how: str) -> Hashable | None:
+        """
+        Retrieves the index of the first valid value.
+
+        Parameters
+        ----------
+        how : {'first', 'last'}
+            Use this parameter to change between the first or last valid index.
+
+        Returns
+        -------
+        idx_first_valid : type of index
+        """
+        if self.ndim == 2 and self._mgr.any_extension_types:
+            # Fastpath for extension array-backed DataFrames:
+            # compute is_valid per column as a 2D mask, then reduce.
+            # This avoids casting the entire EA block to object dtype.
+            is_valid = np.ones(self.shape, dtype=bool)
+            for blk in self._mgr.blocks:
+                if blk.ndim == 2:
+                    # block values shape is (n_cols, n_rows)
+                    blk_isna = isna(blk.values)
+                    if blk_isna.ndim == 2:
+                        is_valid[blk.mgr_locs.indexer, :] = ~blk_isna
+                    else:
+                        # should not happen for 2D block manager
+                        is_valid[blk.mgr_locs.indexer, :] = ~blk_isna.reshape(
+                            blk.shape
+                        )
+                else:
+                    # 1D block (e.g. SingleBlockManager/Series path)
+                    is_valid[blk.mgr_locs.indexer, :] = ~isna(blk.values).reshape(
+                        1, -1
+                    )
+            is_valid = is_valid.T  # shape (n_rows, n_cols)
+            idxpos = find_valid_index(None, how=how, is_valid=is_valid)
+        else:
+            idxpos = find_valid_index(self._values, how=how, is_valid=~isna(self._values))
+        if idxpos is None:
+            return None
+        return self.index[idxpos]
+[/REPLACE]

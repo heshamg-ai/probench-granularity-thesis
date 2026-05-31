@@ -1,0 +1,59 @@
+
+
+Looking at the code, I can see several optimization opportunities:
+
+1. Add a fast path for numpy arrays that are already the correct dtype when copy=False
+2. Add a fast path for float arrays using np.isnan instead of libmissing.is_numeric_na
+3. Move the mask ndim check inside the mask existence check
+
+Let me prepare the optimization blocks:
+
+pandas/core/arrays/numeric.py
+[SEARCH]
+    if mask is None:
+        if values.dtype.kind in "iu":
+            # fastpath
+            mask = np.zeros(len(values), dtype=np.bool_)
+        else:
+            mask = libmissing.is_numeric_na(values)
+    else:
+        assert len(mask) == len(values)
+
+    if mask.ndim != 1:
+        raise TypeError("mask must be a 1D list-like")
+[/SEARCH]
+[REPLACE]
+    if mask is None:
+        if values.dtype.kind in "iu":
+            # fastpath
+            mask = np.zeros(len(values), dtype=np.bool_)
+        elif values.dtype.kind == "f":
+            # fastpath: use np.isnan directly for float arrays
+            mask = np.isnan(values)
+        else:
+            mask = libmissing.is_numeric_na(values)
+    else:
+        assert len(mask) == len(values)
+        if mask.ndim != 1:
+            raise TypeError("mask must be a 1D list-like")
+[/REPLACE]
+
+pandas/core/arrays/numeric.py
+[SEARCH]
+    original = values
+    if not copy:
+        values = np.asarray(values)
+    else:
+        values = np.array(values, copy=copy)
+[/SEARCH]
+[REPLACE]
+    original = values
+    # Fast path: if values is already the correct dtype and copy=False
+    if not copy and isinstance(values, np.ndarray) and dtype is not None and values.dtype == dtype.numpy_dtype:
+        return values, mask, dtype, inferred_type
+
+    if not copy:
+        values = np.asarray(values)
+    else:
+        values = np.array(values, copy=copy)
+[/REPLACE]

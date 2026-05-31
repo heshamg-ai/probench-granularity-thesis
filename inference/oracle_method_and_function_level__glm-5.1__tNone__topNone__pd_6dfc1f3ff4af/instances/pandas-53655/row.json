@@ -1,0 +1,40 @@
+{
+  "id": 32,
+  "scenario_id": "pandas-53655",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 53655,
+  "baseline_sha": "abcd440e11d061171b0a4eeb058748629a288568",
+  "reference_sha": "b3cb1aee228f7e88307416c4a13c4ca9332419b7",
+  "task": "Optimize Series.str.get_dummies for pyarrow-backed strings",
+  "entry_point": "pandas.Series.str.get_dummies",
+  "whats_new": "Performance improvement in Series.str.get_dummies for pyarrow-backed strings",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-53655:baseline",
+      "digest": "sha256:f96e5ff156b8ec56c618f4e07619b774a00095fcad0fe0b2aa62ae98e2dc0cd0"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-53655:reference",
+      "digest": "sha256:5c58c7e7d6c92aa4752e0a56890a88acdd3520dc2b7cf94e545377263d02c08e"
+    }
+  },
+  "params": [
+    {
+      "name": "Pattern repeats",
+      "short_indicator": "K",
+      "explanation": "Number of times to repeat the base pattern.",
+      "values": [
+        "10000",
+        "100000",
+        "1000000"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/extension/test_arrow.py::test_get_dummies",
+    "pandas/tests/strings/test_get_dummies.py::test_get_dummies",
+    "pandas/tests/strings/test_get_dummies.py::test_get_dummies_with_name_dummy"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.Series.str.get_dummies for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n- Only change what directly improves the optimization target.\n\nOPTIMIZATION REQUEST:\nOptimize Series.str.get_dummies for pyarrow-backed strings\nOptimization function: pandas.Series.str.get_dummies\n\n\n[start of pandas/core/arrays/arrow/array.py]\n### Relevant context\n#### Class `pandas.core.arrays.arrow.array.ArrowExtensionArray`\n**Class Signature**\n```python\nclass ArrowExtensionArray(OpsMixin, ExtensionArraySupportsAnyAll, BaseStringArrayMethods):\n```\n**Class Attributes**\n```python\n    _pa_array: pa.ChunkedArray\n    _dtype: ArrowDtype\n    _dt_dayofweek = _dt_day_of_week\n    _dt_weekday = _dt_day_of_week\n    _dt_dayofyear = _dt_day_of_year\n    _dt_daysinmonth = _dt_days_in_month\n```\n**Class __init__ method**\n```python\n    def __init__(self, values: pa.Array | pa.ChunkedArray) -> None:\n        if pa_version_under7p0:\n            msg = \"pyarrow>=7.0.0 is required for PyArrow backed ArrowExtensionArray.\"\n            raise ImportError(msg)\n        if isinstance(values, pa.Array):\n            self._pa_array = pa.chunked_array([values])\n        elif isinstance(values, pa.ChunkedArray):\n            self._pa_array = values\n        else:\n            raise ValueError(\n                f\"Unsupported type '{type(values)}' for ArrowExtensionArray\"\n            )\n        self._dtype = ArrowDtype(self._pa_array.type)\n```\n##### Method `pandas.core.arrays.arrow.array.ArrowExtensionArray._str_get_dummies`\n```python\ndef _str_get_dummies(self, sep: str = \"|\"):\n        split = pc.split_pattern(self._pa_array, sep).combine_chunks()\n        uniques = split.flatten().unique()\n        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))\n        result_data = []\n        for lst in split.to_pylist():\n            if lst is None:\n                result_data.append([False] * len(uniques_sorted))\n            else:\n                res = pc.is_in(uniques_sorted, pa.array(set(lst)))\n                result_data.append(res.to_pylist())\n        result = type(self)(pa.array(result_data))\n        return result, uniques_sorted.to_pylist()\n```\n[end of pandas/core/arrays/arrow/array.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

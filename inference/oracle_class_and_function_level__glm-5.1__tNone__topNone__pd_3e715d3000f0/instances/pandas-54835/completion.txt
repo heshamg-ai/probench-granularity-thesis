@@ -1,0 +1,169 @@
+pandas/core/sorting.py
+[SEARCH]
+    target = ensure_key_mapped(target, key, levels=level)  # type:ignore[assignment]
+    target = target._sort_levels_monotonic()
+
+    if level is not None:
+        _, indexer = target.sortlevel(
+            level,
+            ascending=ascending,
+            sort_remaining=sort_remaining,
+            na_position=na_position,
+        )
+    elif isinstance(target, ABCMultiIndex):
+        indexer = lexsort_indexer(
+            target.codes, orders=ascending, na_position=na_position, codes_given=True
+        )
+    else:
+        # Check monotonic-ness before sort an index (GH 11080)
+        if (ascending and target.is_monotonic_increasing) or (
+            not ascending and target.is_monotonic_decreasing
+        ):
+            return None
+[/SEARCH]
+[REPLACE]
+    target = ensure_key_mapped(target, key, levels=level)  # type:ignore[assignment]
+    target = target._sort_levels_monotonic()
+
+    if level is not None:
+        _, indexer = target.sortlevel(
+            level,
+            ascending=ascending,
+            sort_remaining=sort_remaining,
+            na_position=na_position,
+        )
+    elif isinstance(target, ABCMultiIndex):
+        # Check monotonic-ness before sort an index (GH 11080)
+        if (ascending is True and target.is_monotonic_increasing) or (
+            ascending is False and target.is_monotonic_decreasing
+        ):
+            return None
+        elif isinstance(ascending, list) and len(ascending) == 1:
+            if (ascending[0] and target.is_monotonic_increasing) or (
+                not ascending[0] and target.is_monotonic_decreasing
+            ):
+                return None
+        indexer = lexsort_indexer(
+            target.codes, orders=ascending, na_position=na_position, codes_given=True
+        )
+    else:
+        # Check monotonic-ness before sort an index (GH 11080)
+        if (ascending and target.is_monotonic_increasing) or (
+            not ascending and target.is_monotonic_decreasing
+        ):
+            return None
+[/REPLACE]
+
+pandas/core/indexes/multi.py
+[SEARCH]
+    @cache_readonly
+    def is_monotonic_increasing(self) -> bool:
+        """
+        Return a boolean if the values are equal or increasing.
+        """
+        if any(-1 in code for code in self.codes):
+            return False
+
+        if all(level.is_monotonic_increasing for level in self.levels):
+            # If each level is sorted, we can operate on the codes directly. GH27495
+            return libalgos.is_lexsorted(
+                [x.astype("int64", copy=False) for x in self.codes]
+            )
+
+        # reversed() because lexsort() wants the most significant key last.
+        values = [
+            self._get_level_values(i)._values for i in reversed(range(len(self.levels)))
+        ]
+        try:
+            # error: Argument 1 to "lexsort" has incompatible type
+            # "List[Union[ExtensionArray, ndarray[Any, Any]]]";
+            # expected "Union[_SupportsArray[dtype[Any]],
+            # _NestedSequence[_SupportsArray[dtype[Any]]], bool,
+            # int, float, complex, str, bytes, _NestedSequence[Union
+            # [bool, int, float, complex, str, bytes]]]"
+            sort_order = np.lexsort(values)  # type: ignore[arg-type]
+            return Index(sort_order).is_monotonic_increasing
+        except TypeError:
+            # we have mixed types and np.lexsort is not happy
+            return Index(self._values).is_monotonic_increasing
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def is_monotonic_increasing(self) -> bool:
+        """
+        Return a boolean if the values are equal or increasing.
+        """
+        if any(-1 in code for code in self.codes):
+            return False
+
+        if self.sortorder is not None:
+            return True
+
+        if all(level.is_monotonic_increasing for level in self.levels):
+            # If each level is sorted, we can operate on the codes directly. GH27495
+            return libalgos.is_lexsorted(
+                [x.astype("int64", copy=False) for x in self.codes]
+            )
+
+        # reversed() because lexsort() wants the most significant key last.
+        values = [
+            self._get_level_values(i)._values for i in reversed(range(len(self.levels)))
+        ]
+        try:
+            # error: Argument 1 to "lexsort" has incompatible type
+            # "List[Union[ExtensionArray, ndarray[Any, Any]]]";
+            # expected "Union[_SupportsArray[dtype[Any]],
+            # _NestedSequence[_SupportsArray[dtype[Any]]], bool,
+            # int, float, complex, str, bytes, _NestedSequence[Union
+            # [bool, int, float, complex, str, bytes]]]"
+            sort_order = np.lexsort(values)  # type: ignore[arg-type]
+            return Index(sort_order).is_monotonic_increasing
+        except TypeError:
+            # we have mixed types and np.lexsort is not happy
+            return Index(self._values).is_monotonic_increasing
+[/REPLACE]
+
+pandas/core/indexes/multi.py
+[SEARCH]
+    @cache_readonly
+    def is_monotonic_decreasing(self) -> bool:
+        """
+        Return a boolean if the values are equal or decreasing.
+        """
+        # monotonic decreasing if and only if reverse is monotonic increasing
+        return self[::-1].is_monotonic_increasing
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def is_monotonic_decreasing(self) -> bool:
+        """
+        Return a boolean if the values are equal or decreasing.
+        """
+        if len(self) == 0:
+            return True
+
+        # Check if all first-level codes are equal
+        first_code = self.codes[0][0]
+        if not (self.codes[0] == first_code).all():
+            return self[::-1].is_monotonic_increasing
+
+        # All first-level codes are equal, so the effective length for
+        # the reverse check is determined by the first level's run
+        if first_code == -1:
+            return self[::-1].is_monotonic_increasing
+        first_level = self.levels[0]
+        first_value = first_code
+        start_idx = first_level.get_loc(first_value)
+        if isinstance(start_idx, int):
+            end_idx = start_idx + 1
+        elif isinstance(start_idx, slice):
+            end_idx = start_idx.stop
+        else:
+            return self[::-1].is_monotonic_increasing
+
+        effective_len = len(self) - (len(first_level) - end_idx)
+        if effective_len <= 0:
+            return True
+
+        return self[:effective_len][::-1].is_monotonic_increasing
+[/REPLACE]

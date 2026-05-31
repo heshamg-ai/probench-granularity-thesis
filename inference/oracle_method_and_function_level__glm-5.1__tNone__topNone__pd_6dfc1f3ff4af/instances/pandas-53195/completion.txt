@@ -1,0 +1,109 @@
+pandas/core/groupby/groupby.py
+[SEARCH]
+        if isinstance(obj, Series):
+            obj = obj.reindex(ax, axis=self.axis)
+        elif isinstance(obj, DataFrame):
+            other_ax = ax if self.axis == 0 else ax.item()
+            obj = obj.reindex(columns=other_ax)
+
+        if not isinstance(obj, ABCDataFrame) and not isinstance(obj, ABCSeries):
+            if obj is not None and not isinstance(obj, ABCIndex):
+                msg = (
+                    f"Must return a DataFrame, Series, Index, or None, not "
+                    f"{type(obj).__name__}"
+                )
+                raise TypeError(msg)
+            elif obj is None and self.keys is None:
+                # Approximate future behavior, returning an all-NA frame/series
+                #   instead of dropping
+                if isinstance(ax, MultiIndex):
+                    obj = self.obj[:0]
+                else:
+                    obj = self.obj[:0].reindex(ax, axis=self.axis)
+        elif (
+            self.keys is not None
+            and not self.as_index
+            and isinstance(obj, ABCSeries)
+            and obj.ndim == 1
+        ):
+            # GH#41987 - When using keys and as_index=False, the result should
+            # be a DataFrame, not a Series, so convert here
+            obj = obj.to_frame()
+[/SEARCH]
+[REPLACE]
+        if isinstance(obj, Series):
+            obj = obj.reindex(ax, axis=self.axis)
+        elif isinstance(obj, DataFrame):
+            other_ax = ax if self.axis == 0 else ax.item()
+            obj = obj.reindex(columns=other_ax)
+
+        if not isinstance(obj, ABCDataFrame) and not isinstance(obj, ABCSeries):
+            if obj is not None and not isinstance(obj, ABCIndex):
+                msg = (
+                    f"Must return a DataFrame, Series, Index, or None, not "
+                    f"{type(obj).__name__}"
+                )
+                raise TypeError(msg)
+            elif obj is None and self.keys is None:
+                # Approximate future behavior, returning an all-NA frame/series
+                #   instead of dropping
+                if isinstance(ax, MultiIndex):
+                    obj = self.obj[:0]
+                else:
+                    obj = self.obj[:0].reindex(ax, axis=self.axis)
+
+        if (
+            self.keys is not None
+            and not self.as_index
+            and isinstance(obj, ABCSeries)
+            and obj.ndim == 1
+        ):
+            # GH#41987 - When using keys and as_index=False, the result should
+            # be a DataFrame, not a Series, so convert here
+            obj = obj.to_frame()
+[/REPLACE]
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+        # if we have group_keys, make sure to include the group in the
+        # result
+        if (
+            not mutate
+            and self._group_keys
+            and not self.as_index
+            and isinstance(obj, ABCSeries)
+            and obj.ndim == 1
+        ):
+            # GH#41987 - When using group_keys and as_index=False, the result
+            # should be a DataFrame, not a Series, so convert here
+            obj = obj.to_frame()
+
+        return obj
+[/SEARCH]
+[REPLACE]
+        # if we have group_keys, make sure to include the group in the
+        # result
+        if (
+            not mutate
+            and self._group_keys
+            and not self.as_index
+            and isinstance(obj, ABCSeries)
+            and obj.ndim == 1
+        ):
+            # GH#41987 - When using group_keys and as_index=False, the result
+            # should be a DataFrame, not a Series, so convert here
+            obj = obj.to_frame()
+
+        if (
+            not mutate
+            and self._group_keys
+            and self.as_index
+            and isinstance(obj, ABCSeries)
+            and obj.ndim == 1
+        ):
+            # When using group_keys and as_index=True, convert to DataFrame
+            # so concat can efficiently build MultiIndex via fast path.
+            obj = obj.to_frame()
+
+        return obj
+[/REPLACE]

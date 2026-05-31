@@ -1,0 +1,49 @@
+sklearn/linear_model/_logistic.py
+[SEARCH]
+            if solver == "lbfgs":
+
+                def func(x, *args):
+                    return _multinomial_loss_grad(x, *args)[0:2]
+[/SEARCH]
+[REPLACE]
+            if solver == "lbfgs":
+                # Preallocate working arrays to reduce per-iteration allocations in L-BFGS
+                n_classes_local = target.shape[1]
+                n_features_local = X.shape[1]
+                fit_intercept_local = (w0.size == n_classes_local * (n_features_local + 1))
+                sample_weight_2d = sample_weight[:, np.newaxis]
+                # Working buffers reused across calls
+                grad_work = np.empty((n_classes_local, n_features_local + int(fit_intercept_local)), dtype=X.dtype)
+                p_work = np.empty((X.shape[0], n_classes_local), dtype=X.dtype)
+
+                def func(x, *args):
+                    # args = (X, Y, alpha, sample_weight) per optimize.minimize contract
+                    X_arg, Y_arg, alpha_arg, _ = args
+                    # reshape parameters
+                    W = x.reshape(n_classes_local, -1)
+                    if fit_intercept_local:
+                        intercept = W[:, -1]
+                        W_no_intercept = W[:, :-1]
+                    else:
+                        intercept = 0
+                        W_no_intercept = W
+                    # scores into p_work
+                    p_work[:] = safe_sparse_dot(X_arg, W_no_intercept.T)
+                    p_work += intercept
+                    # log softmax
+                    p_work -= logsumexp(p_work, axis=1)[:, np.newaxis]
+                    # loss
+                    loss = -(sample_weight_2d * Y_arg * p_work).sum()
+                    loss += 0.5 * alpha_arg * squared_norm(W_no_intercept)
+                    # softmax probabilities in-place in p_work
+                    np.exp(p_work, out=p_work)
+                    # diff = sample_weight * (p - Y); reuse p_work buffer
+                    p_work -= Y_arg
+                    p_work *= sample_weight_2d
+                    # gradient wrt weights
+                    grad_work[:, :n_features_local] = safe_sparse_dot(p_work.T, X_arg)
+                    grad_work[:, :n_features_local] += alpha_arg * W_no_intercept
+                    if fit_intercept_local:
+                        grad_work[:, -1] = p_work.sum(axis=0)
+                    return loss, grad_work.ravel()
+[/REPLACE]

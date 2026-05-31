@@ -1,0 +1,69 @@
+
+
+Let me first find and analyze the `hash_array` function to understand the current implementation.
+
+pandas/core/util/hashing.py
+[SEARCH]
+def hash_array(
+    val: ArrayLike,
+    encoding: str = "utf8",
+    hash_key: str = "0123456789012345678901234567890123456789abcdef",
+    categorize: bool = True,
+) -> npt.NDArray[np.uint64]:
+    """
+    Given a 1-D array, return an array of the hashing values.
+
+    If the values are Categorical, the categories plus the encoding
+    are used to determine the hashing values.
+
+    Parameters
+    ----------
+    val : array-like
+        The array to hash.
+    encoding : str
+        Encoding used when hashing strings.
+    hash_key : str
+        Hash key for string key to encode.
+    categorize : bool
+        If True, the result is encoded by categories, which means
+        if the array contains duplicates the hashing will be done
+        in a performance efficient manner. If False, the hashing
+        is performed on all values.
+
+    Returns
+    -------
+    np.ndarray[uint64]
+    """
+[/SEARCH]
+[REPLACE]
+def hash_array(
+    val: ArrayLike,
+    encoding: str = "utf8",
+    hash_key: str = "0123456789012345678901234567890123456789abcdef",
+    categorize: bool = True,
+) -> npt.NDArray[np.uint64]:
+    """
+    Given a 1-D array, return an array of the hashing values.
+
+    If the values are Categorical, the categories plus the encoding
+    are used to determine the hashing values.
+
+    Parameters
+    ----------
+    val : array-like
+        The array to hash.
+    encoding : str
+        Encoding used when hashing strings.
+    hash_key : str
+        Hash key for string key to encode.
+    categorize : bool
+        If True, the result is encoded by categories, which means
+        if the array contains duplicates the hashing will be done
+        in a performance efficient manner. If False, the hashing
+        is performed on all values.
+
+    Returns
+    -------
+    np.ndarray[uint64]
+    """
+[/REPLACE]

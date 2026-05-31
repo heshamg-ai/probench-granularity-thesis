@@ -1,0 +1,726 @@
+ pandas/core/reshape/merge.py
+[SEARCH]
+def get_join_indexers(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    sort: bool = False,
+    how: JoinHow = "inner",
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+    """
+    Parameters
+    ----------
+    left_keys : list[ndarray, ExtensionArray, Index, Series]
+    right_keys : list[ndarray, ExtensionArray, Index, Series]
+    sort : bool, default False
+    how : {'inner', 'outer', 'left', 'right'}, default 'inner'
+
+    Returns
+    -------
+    np.ndarray[np.intp]
+        Indexer into the left_keys.
+    np.ndarray[np.intp]
+        Indexer into the right_keys.
+    """
+    assert len(left_keys) == len(
+        right_keys
+    ), "left_keys and right_keys must be the same length"
+
+    # fast-path for empty left/right
+    left_n = len(left_keys[0])
+    right_n = len(right_keys[0])
+    if left_n == 0:
+        if how in ["left", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["right", "outer"]:
+            return _get_no_sort_one_missing_indexer(right_n, True)
+
+    elif right_n == 0:
+        if how in ["right", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["left", "outer"]:
+            return _get_no_sort_one_missing_indexer(left_n, False)
+
+    # get left & right join labels and num. of levels at each location
+    mapped = (
+        _factorize_keys(left_keys[n], right_keys[n], sort=sort)
+        for n in range(len(left_keys))
+    )
+    zipped = zip(*mapped)
+    llab, rlab, shape = (list(x) for x in zipped)
+
+    # get flat i8 keys from label lists
+    lkey, rkey = _get_join_keys(llab, rlab, tuple(shape), sort)
+
+    # factorize keys to a dense i8 space
+    # `count` is the num. of unique keys
+    # set(lkey) | set(rkey) == range(count)
+    lkey, rkey, count = _factorize_keys(lkey, rkey, sort=sort)
+
+    # preserve left frame order if how == 'left' and sort == False
+    kwargs = {}
+    if how in ("inner", "left", "right"):
+        kwargs["sort"] = sort
+
+    join_func = {
+        "inner": libjoin.inner_join,
+        "left": libjoin.left_outer_join,
+        "right": lambda x, y, count, **kwargs: libjoin.left_outer_join(
+            y, x, count, **kwargs
+        )[::-1],
+        "outer": libjoin.full_outer_join,
+    }[how]
+
+    # error: Cannot call function of unknown type
+    return join_func(lkey, rkey, count, **kwargs)  # type: ignore[operator]
+[/SEARCH]
+[REPLACE]
+def _is_monotonic(arr: ArrayLike) -> bool:
+    """
+    Check if an array is monotonic (non-decreasing).
+    """
+    if len(arr) <= 1:
+        return True
+    
+    if hasattr(arr, 'is_monotonic_increasing'):
+        return bool(arr.is_monotonic_increasing)
+    
+    arr = np.asarray(arr)
+    if arr.dtype.kind in 'iuf':
+        return bool(libalgos.is_monotonic(arr, timelike=False)[0])
+    return False
+
+
+def _try_get_sorted_indices(arr: ArrayLike) -> npt.NDArray[np.intp] | None:
+    """
+    Try to get sorted indices for an array if it's not already sorted.
+    Returns None if we can't efficiently sort.
+    """
+    if hasattr(arr, 'argsort'):
+        return arr.argsort()
+    try:
+        return np.argsort(arr)
+    except TypeError:
+        return None
+
+
+def get_join_indexers(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    sort: bool = False,
+    how: JoinHow = "inner",
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+    """
+    Parameters
+    ----------
+    left_keys : list[ndarray, ExtensionArray, Index, Series]
+    right_keys : list[ndarray, ExtensionArray, Index, Series]
+    sort : bool, default False
+    how : {'inner', 'outer', 'left', 'right'}, default 'inner'
+
+    Returns
+    -------
+    np.ndarray[np.intp]
+        Indexer into the left_keys.
+    np.ndarray[np.intp]
+        Indexer into the right_keys.
+    """
+    assert len(left_keys) == len(
+        right_keys
+    ), "left_keys and right_keys must be the same length"
+
+    # fast-path for empty left/right
+    left_n = len(left_keys[0])
+    right_n = len(right_keys[0])
+    if left_n == 0:
+        if how in ["left", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["right", "outer"]:
+            return _get_no_sort_one_missing_indexer(right_n, True)
+
+    elif right_n == 0:
+        if how in ["right", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["left", "outer"]:
+            return _get_no_sort_one_missing_indexer(left_n, False)
+
+    # Optimization: check if all keys are monotonic and we have a single key
+    # In this case, we can use a linear merge algorithm instead of factorize + join
+    if (len(left_keys) == 1 and len(right_keys) == 1 and 
+        not sort and how in ("inner", "left", "right", "outer")):
+        left_arr = left_keys[0]
+        right_arr = right_keys[0]
+        
+        left_is_mono = _is_monotonic(left_arr)
+        right_is_mono = _is_monotonic(right_arr)
+        
+        if left_is_mono and right_is_mono:
+            return _get_monotonic_join_indexers(left_arr, right_arr, how=how)
+
+    # get left & right join labels and num. of levels at each location
+    mapped = (
+        _factorize_keys(left_keys[n], right_keys[n], sort=sort)
+        for n in range(len(left_keys))
+    )
+    zipped = zip(*mapped)
+    llab, rlab, shape = (list(x) for x in zipped)
+
+    # get flat i8 keys from label lists
+    lkey, rkey = _get_join_keys(llab, rlab, tuple(shape), sort)
+
+    # factorize keys to a dense i8 space
+    # `count` is the num. of unique keys
+    # set(lkey) | set(rkey) == range(count)
+    lkey, rkey, count = _factorize_keys(lkey, rkey, sort=sort)
+
+    # preserve left frame order if how == 'left' and sort == False
+    kwargs = {}
+    if how in ("inner", "left", "right"):
+        kwargs["sort"] = sort
+
+    join_func = {
+        "inner": libjoin.inner_join,
+        "left": libjoin.left_outer_join,
+        "right": lambda x, y, count, **kwargs: libjoin.left_outer_join(
+            y, x, count, **kwargs
+        )[::-1],
+        "outer": libjoin.full_outer_join,
+    }[how]
+
+    # error: Cannot call function of unknown type
+    return join_func(lkey, rkey, count, **kwargs)  # type: ignore[operator]
+
+
+def _get_monotonic_join_indexers(
+    left: ArrayLike,
+    right: ArrayLike,
+    how: JoinHow = "inner",
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+    """
+    Optimized join indexers for monotonic (sorted) arrays.
+    Uses a linear merge algorithm similar to merge sort.
+    
+    Parameters
+    ----------
+    left : ArrayLike
+        Monotonically non-decreasing array.
+    right : ArrayLike
+        Monotonically non-decreasing array.
+    how : {'inner', 'left', 'right', 'outer'}
+        Type of join.
+    
+    Returns
+    -------
+    np.ndarray[np.intp]
+        Indexer into left.
+    np.ndarray[np.intp]
+        Indexer into right.
+    """
+    left = np.asarray(left)
+    right = np.asarray(right)
+    
+    li = ri = 0
+    ln = len(left)
+    rn = len(right)
+    
+    left_idxer: list[int] = []
+    right_idxer: list[int] = []
+    
+    if how == "inner":
+        while li < ln and ri < rn:
+            lv = left[li]
+            rv = right[ri]
+            if lv == rv:
+                # Found match, collect all equal elements
+                lv_start = li
+                rv_start = ri
+                while li < ln and left[li] == lv:
+                    li += 1
+                while ri < rn and right[ri] == rv:
+                    ri += 1
+                # Cartesian product of matches
+                for i in range(lv_start, li):
+                    for j in range(rv_start, ri):
+                        left_idxer.append(i)
+                        right_idxer.append(j)
+            elif lv < rv:
+                li += 1
+            else:
+                ri += 1
+                
+    elif how == "left":
+        while li < ln and ri < rn:
+            lv = left[li]
+            rv = right[ri]
+            if lv == rv:
+                lv_start = li
+                rv_start = ri
+                while li < ln and left[li] == lv:
+                    li += 1
+                while ri < rn and right[ri] == rv:
+                    ri += 1
+                for i in range(lv_start, li):
+                    for j in range(rv_start, ri):
+                        left_idxer.append(i)
+                        right_idxer.append(j)
+            elif lv < rv:
+                left_idxer.append(li)
+                right_idxer.append(-1)
+                li += 1
+            else:
+                ri += 1
+        # Remaining left elements have no match
+        while li < ln:
+            left_idxer.append(li)
+            right_idxer.append(-1)
+            li += 1
+            
+    elif how == "right":
+        while li < ln and ri < rn:
+            lv = left[li]
+            rv = right[ri]
+            if lv == rv:
+                lv_start = li
+                rv_start = ri
+                while li < ln and left[li] == lv:
+                    li += 1
+                while ri < rn and right[ri] == rv:
+                    ri += 1
+                for i in range(lv_start, li):
+                    for j in range(rv_start, ri):
+                        left_idxer.append(i)
+                        right_idxer.append(j)
+            elif lv < rv:
+                li += 1
+            else:
+                left_idxer.append(-1)
+                right_idxer.append(ri)
+                ri += 1
+        # Remaining right elements have no match
+        while ri < rn:
+            left_idxer.append(-1)
+            right_idxer.append(ri)
+            ri += 1
+            
+    elif how == "outer":
+        while li < ln and ri < rn:
+            lv = left[li]
+            rv = right[ri]
+            if lv == rv:
+                lv_start = li
+                rv_start = ri
+                while li < ln and left[li] == lv:
+                    li += 1
+                while ri < rn and right[ri] == rv:
+                    ri += 1
+                for i in range(lv_start, li):
+                    for j in range(rv_start, ri):
+                        left_idxer.append(i)
+                        right_idxer.append(j)
+            elif lv < rv:
+                left_idxer.append(li)
+                right_idxer.append(-1)
+                li += 1
+            else:
+                left_idxer.append(-1)
+                right_idxer.append(ri)
+                ri += 1
+        # Remaining elements from either side
+        while li < ln:
+            left_idxer.append(li)
+            right_idxer.append(-1)
+            li += 1
+        while ri < rn:
+            left_idxer.append(-1)
+            right_idxer.append(ri)
+            ri += 1
+    
+    return (
+        np.array(left_idxer, dtype=np.intp),
+        np.array(right_idxer, dtype=np.intp),
+    )
+[/REPLACE]
+
+pandas/core/reshape/merge.py
+[SEARCH]
+from pandas.core.sorting import is_int64_overflow_possible
+[/SEARCH]
+[REPLACE]
+from pandas.core.sorting import is_int64_overflow_possible
+import pandas._libs.algos as libalgos
+[/REPLACE]
+
+pandas/core/reshape/merge.py
+[SEARCH]
+def _factorize_keys(
+    lk: ArrayLike,
+    rk: ArrayLike,
+    sort: bool = True,
+    how: JoinHow | Literal["asof", "cross"] = "inner",
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp], int]:
+    # Some pre-processing for non-ndarray lk / rk
+    if is_categorical_dtype(lk.dtype) and is_categorical_dtype(rk.dtype):
+        assert is_categorical_dtype(rk.dtype)
+        assert is_categorical_dtype(lk.dtype)
+        # Cast rk to encoding so we can compare codes with lk
+
+        rk = cast("Categorical", rk)
+        lk = cast("Categorical", lk)
+
+        # Untyped since we do an if in the else to select what type we will
+        # actually use. Similar below.
+        lk = extract_array(lk, extract_numpy=True)  # type: ignore[assignment]
+        rk = extract_array(rk, extract_numpy=True)  # type: ignore[assignment]
+
+    elif (
+        is_extension_array_dtype(lk.dtype)
+        and is_extension_array_dtype(rk.dtype)
+        and is_dtype_equal(lk.dtype, rk.dtype)
+    ):
+        kl = extract_array(lk, extract_numpy=True)
+        kr = extract_array(rk, extract_numpy=True)
+        # if we are joining on datetime64tz, we need to drop the tz info
+        # until we fix the join on datetime64tz (see #18850, #19038, #15894)
+        kl = _maybeable_to_native(kl)
+        kr = _maybeable_to_native(kr)
+        lk = kl
+        rk = kr
+
+    elif (
+        needs_i8_conversion(lk.dtype)
+        and is_datetime64tz_dtype(lk.dtype)
+        and is_datetime64tz_dtype(rk.dtype)
+    ):
+        # GH#23179: get timezone-correct i8 directly instead of going through
+        # _ensure_datetimelike_to_i8.  This avoids the deprecation associated
+        # with astype(np.int64), which would turn tz-naive into UTC
+        # TODO(non-nano): need to make sure resolutions match
+        if getattr(lk, "unit", "ns") != getattr(rk, "unit", "ns"):
+            reso = max(
+                getattr(lk, "_creso", NpyDatetimeUnit.NPY_FR_ns),
+                getattr(rk, "_creso", NpyDatetimeUnit.NPY_FR_ns),
+            )
+            lk = lk.as_unit(reso)
+            rk = rk.as_unit(reso)
+
+    else:
+        lk = extract_array(lk, extract_numpy=True)
+        rk = extract_array(rk, extract_numpy=True)
+
+        if not is_dtype_equal(lk.dtype, rk.dtype):
+            if is_extension_array_dtype(lk.dtype):
+                lk = cast(ExtensionArray, lk)
+                lk = lk.to_numpy(dtype=object, na_value=np.nan)
+            if is_extension_array_dtype(rk.dtype):
+                rk = cast(ExtensionArray, rk)
+                rk = rk.to_numpy(dtype=object, na_value=np.nan)
+
+            if isinstance(lk, np.ndarray) and lk.dtype.kind == "i":
+                # GH#52451 avoid np.sign casting to float
+                lk = lk.astype(np.float64)
+            if isinstance(rk, np.ndarray) and rk.dtype.kind == "i":
+                rk = rk.astype(np.float64)
+
+        if lk.dtype == np.dtype("M8[ns]") and rk.dtype == np.dtype("M8[ns]"):
+            # GH#17983
+            # dt64utc is not a subclass of datetime64
+            # in order to have a homogeneous type (so that.factorize works)
+            # cast to datetime64[ns]
+            # TODO: non-nano case that isn't supported by factorize
+            lk = ensure_wrapped_if_datetimelike(lk)
+            rk = ensure_wrapped_if_datetimelike(rk)
+            lk = lk._ndarray.view("i8")
+            rk = rk._ndarray.view("i8")
+
+        if (
+            is_float_dtype(lk.dtype)
+            and is_float_dtype(rk.dtype)
+            and lk.dtype != rk.dtype
+        ):
+            lk, rk = lk.astype("f8"), rk.astype("f8")
+
+        if is_integer_dtype(lk.dtype) and is_integer_dtype(rk.dtype):
+            # GH#23917 TODO: needs tests for case where lk is int64 and rk
+            #  is uint64
+            if not is_integer_dtype(np.dtype("int64")):
+                # numpy bug with __getstate__
+                pass
+            elif is_integer_dtype(lk.dtype) and is_integer_dtype(rk.dtype):
+                # GH#23917 TODO: needs tests for case where lk is int64 and rk
+                #  is uint64
+                lk, rk = maybe_upcast(lk, rk)
+
+    klass = libhashtable.Factorizer
+    if is_int64_overflow_possible(lk) and is_int64_overflow_possible(rk):
+        klass = libhashtable.Int64Factorizer
+
+    rizer = klass(max(len(lk), len(rk)))
+
+    llab = rizer.factorize(lk)
+    rlab = rizer.factorize(rk)
+
+    count = rizer.get_count()
+
+    if sort:
+        uniques = rizer.uniques.to_array()
+        llab, rlab = _sort_labels(uniques, llab, rlab)
+
+    # NA group
+    lmask = llab == -1
+    rmask = rlab == -1
+
+    lany = lmask.any()
+    rany = rmask.any()
+
+    if lany or rany:
+        if lany:
+            np.putmask(llab, lmask, count)
+        if rany:
+            np.putmask(rlab, rmask, count)
+        count += 1
+
+    if how == "right":
+        return rlab, llab, count
+    return llab, rlab, count
+[/SEARCH]
+[REPLACE]
+def _factorize_keys(
+    lk: ArrayLike,
+    rk: ArrayLike,
+    sort: bool = True,
+    how: JoinHow | Literal["asof", "cross"] = "inner",
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp], int]:
+    # Some pre-processing for non-ndarray lk / rk
+    if is_categorical_dtype(lk.dtype) and is_categorical_dtype(rk.dtype):
+        assert is_categorical_dtype(rk.dtype)
+        assert is_categorical_dtype(lk.dtype)
+        # Cast rk to encoding so we can compare codes with lk
+
+        rk = cast("Categorical", rk)
+        lk = cast("Categorical", lk)
+
+        # Untyped since we do an if in the else to select what type we will
+        # actually use. Similar below.
+        lk = extract_array(lk, extract_numpy=True)  # type: ignore[assignment]
+        rk = extract_array(rk, extract_numpy=True)  # type: ignore[assignment]
+
+    elif (
+        is_extension_array_dtype(lk.dtype)
+        and is_extension_array_dtype(rk.dtype)
+        and is_dtype_equal(lk.dtype, rk.dtype)
+    ):
+        kl = extract_array(lk, extract_numpy=True)
+        kr = extract_array(rk, extract_numpy=True)
+        # if we are joining on datetime64tz, we need to drop the tz info
+        # until we fix the join on datetime64tz (see #18850, #19038, #15894)
+        kl = _maybeable_to_native(kl)
+        kr = _maybeable_to_native(kr)
+        lk = kl
+        rk = kr
+
+    elif (
+        needs_i8_conversion(lk.dtype)
+        and is_datetime64tz_dtype(lk.dtype)
+        and is_datetime64tz_dtype(rk.dtype)
+    ):
+        # GH#23179: get timezone-correct i8 directly instead of going through
+        # _ensure_datetimelike_to_i8.  This avoids the deprecation associated
+        # with astype(np.int64), which would turn tz-naive into UTC
+        # TODO(non-nano): need to make sure resolutions match
+        if getattr(lk, "unit", "ns") != getattr(rk, "unit", "ns"):
+            reso = max(
+                getattr(lk, "_creso", NpyDatetimeUnit.NPY_FR_ns),
+                getattr(rk, "_creso", NpyDatetimeUnit.NPY_FR_ns),
+            )
+            lk = lk.as_unit(reso)
+            rk = rk.as_unit(reso)
+
+    else:
+        lk = extract_array(lk, extract_numpy=True)
+        rk = extract_array(rk, extract_numpy=True)
+
+        if not is_dtype_equal(lk.dtype, rk.dtype):
+            if is_extension_array_dtype(lk.dtype):
+                lk = cast(ExtensionArray, lk)
+                lk = lk.to_numpy(dtype=object, na_value=np.nan)
+            if is_extension_array_dtype(rk.dtype):
+                rk = cast(ExtensionArray, rk)
+                rk = rk.to_numpy(dtype=object, na_value=np.nan)
+
+            if isinstance(lk, np.ndarray) and lk.dtype.kind == "i":
+                # GH#52451 avoid np.sign casting to float
+                lk = lk.astype(np.float64)
+            if isinstance(rk, np.ndarray) and rk.dtype.kind == "i":
+                rk = rk.astype(np.float64)
+
+        if lk.dtype == np.dtype("M8[ns]") and rk.dtype == np.dtype("M8[ns]"):
+            # GH#17983
+            # dt64utc is not a subclass of datetime64
+            # in order to have a homogeneous type (so that.factorize works)
+            # cast to datetime64[ns]
+            # TODO: non-nano case that isn't supported by factorize
+            lk = ensure_wrapped_if_datetimelike(lk)
+            rk = ensure_wrapped_if_datetimelike(rk)
+            lk = lk._ndarray.view("i8")
+            rk = rk._ndarray.view("i8")
+
+        if (
+            is_float_dtype(lk.dtype)
+            and is_float_dtype(rk.dtype)
+            and lk.dtype != rk.dtype
+        ):
+            lk, rk = lk.astype("f8"), rk.astype("f8")
+
+        if is_integer_dtype(lk.dtype) and is_integer_dtype(rk.dtype):
+            # GH#23917 TODO: needs tests for case where lk is int64 and rk
+            #  is uint64
+            if not is_integer_dtype(np.dtype("int64")):
+                # numpy bug with __getstate__
+                pass
+            elif is_integer_dtype(lk.dtype) and is_integer_dtype(rk.dtype):
+                # GH#23917 TODO: needs tests for case where lk is int64 and rk
+                #  is uint64
+                lk, rk = maybe_upcast(lk, rk)
+
+    klass = libhashtable.Factorizer
+    if is_int64_overflow_possible(lk) and is_int64_overflow_possible(rk):
+        klass = libhashtable.Int64Factorizer
+
+    rizer = klass(max(len(lk), len(rk)))
+
+    llab = rizer.factorize(lk)
+    rlab = rizer.factorize(rk)
+
+    count = rizer.get_count()
+
+    if sort:
+        uniques = rizer.uniques.to_array()
+        llab, rlab = _sort_labels(uniques, llab, rlab)
+
+    # NA group
+    lmask = llab == -1
+    rmask = rlab == -1
+
+    lany = lmask.any()
+    rany = rmask.any()
+
+    if lany or rany:
+        if lany:
+            np.putmask(llab, lmask, count)
+        if rany:
+            np.putmask(rlab, rmask, count)
+        count += 1
+
+    if how == "right":
+        return rlab, llab, count
+    return llab, rlab, count
+
+
+def _is_monotonic(arr: ArrayLike) -> bool:
+    """
+    Check if an array is monotonic (non-decreasing).
+    """
+    if len(arr) <= 1:
+        return True
+    
+    if hasattr(arr, 'is_monotonic_increasing'):
+        return bool(arr.is_monotonic_increasing)
+    
+    arr = np.asarray(arr)
+    if arr.dtype.kind in 'iuf':
+        return bool(libalgos.is_monotonic(arr, timelike=False)[0])
+    return False
+
+
+def _try_get_sorted_indices(arr: ArrayLike) -> npt.NDArray[np.intp] | None:
+    """
+    Try to get sorted indices for an array if it's not already sorted.
+    Returns None if we can't efficiently sort.
+    """
+    if hasattr(arr, 'argsort'):
+        return arr.argsort()
+    try:
+        return np.argsort(arr)
+    except TypeError:
+        return None
+[/REPLACE]
+
+pandas/core/reshape/merge.py
+[SEARCH]
+    # Optimization: check if all keys are monotonic and we have a single key
+    # In this case, we can use a linear merge algorithm instead of factorize + join
+    if (len(left_keys) == 1 and len(right_keys) == 1 and 
+        not sort and how in ("inner", "left", "right", "outer")):
+        left_arr = left_keys[0]
+        right_arr = right_keys[0]
+        
+        left_is_mono = _is_monotonic(left_arr)
+        right_is_mono = _is_monotonic(right_arr)
+        
+        if left_is_mono and right_is_mono:
+            return _get_monotonic_join_indexers(left_arr, right_arr, how=how)
+[/SEARCH]
+[REPLACE]
+    # Optimization: check if all keys are monotonic and we have a single key
+    # In this case, we can use a linear merge algorithm instead of factorize + join
+    if (len(left_keys) == 1 and len(right_keys) == 1 and 
+        not sort and how in ("inner", "left", "right", "outer")):
+        left_arr = left_keys[0]
+        right_arr = right_keys[0]
+        
+        left_is_mono = _is_monotonic(left_arr)
+        right_is_mono = _is_monotonic(right_arr)
+        
+        if left_is_mono and right_is_mono:
+            return _get_monotonic_join_indexers(left_arr, right_arr, how=how)
+        elif left_is_mono:
+            # Only left is monotonic, try to sort right and adjust
+            pass
+        elif right_is_mono:
+            # Only right is monotonic, try to sort left and adjust
+            pass
+[/REPLACE]
+
+pandas/core/reshape/merge.py
+[SEARCH]
+    # Optimization: check if all keys are monotonic and we have a single key
+    # In this case, we can use a linear merge algorithm instead of factorize + join
+    if (len(left_keys) == 1 and len(right_keys) == 1 and 
+        not sort and how in ("inner", "left", "right", "outer")):
+        left_arr = left_keys[0]
+        right_arr = right_keys[0]
+        
+        left_is_mono = _is_monotonic(left_arr)
+        right_is_mono = _is_monotonic(right_arr)
+        
+        if left_is_mono and right_is_mono:
+            return _get_monotonic_join_indexers(left_arr, right_arr, how=how)
+        elif left_is_mono:
+            # Only left is monotonic, try to sort right and adjust
+            pass
+        elif right_is_mono:
+            # Only right is monotonic, try to sort left and adjust
+            pass
+[/SEARCH]
+[REPLACE]
+    # Optimization: check if all keys are monotonic and we have a single key
+    # In this case, we can use a linear merge algorithm instead of factorize + join
+    if (len(left_keys) == 1 and len(right_keys) == 1 and 
+        not sort and how in ("inner", "left", "right", "outer")):
+        left_arr = left_keys[0]
+        right_arr = right_keys[0]
+        
+        left_is_mono = _is_monotonic(left_arr)
+        right_is_mono = _is_monotonic(right_arr)
+        
+        if left_is_mono and right_is_mono:
+            return _get_monotonic_join_indexers(left_arr, right_arr, how=how)
+[/REPLACE]
+
+pandas/core/reshape/merge.py
+[SEARCH]
+from pandas.core.sorting import is_int64_overflow_possible
+import pandas._libs.algos as libalgos
+[/SEARCH]
+[REPLACE]
+from pandas.core.sorting import is_int64_overflow_possible
+[/REPLACE]

@@ -1,0 +1,7 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+        level_nbytes = sum(i.memory_usage(deep=deep) for i in self.levels)
+[/SEARCH]
+[REPLACE]
+        level_nbytes = sum(i.memory_usage(deep=deep) for i in self._levels)
+[/REPLACE]

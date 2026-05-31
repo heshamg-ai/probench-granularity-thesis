@@ -1,0 +1,72 @@
+pandas/io/parsers/base_parser.py
+[SEARCH]
+    def converter(*date_cols, col: Hashable):
+        if date_parser is lib.no_default:
+            strs = parsing.concat_date_cols(date_cols)
+            date_fmt = (
+                date_format.get(col) if isinstance(date_format, dict) else date_format
+            )
+
+            result = tools.to_datetime(
+                ensure_object(strs),
+                format=date_fmt,
+                utc=False,
+                dayfirst=dayfirst,
+                errors="ignore",
+                cache=cache_dates,
+            )
+            if isinstance(result, DatetimeIndex):
+                arr = result.to_numpy()
+                arr.flags.writeable = True
+                return arr
+            return result._values
+[/SEARCH]
+[REPLACE]
+    def converter(*date_cols, col: Hashable):
+        if date_parser is lib.no_default:
+            date_fmt = (
+                date_format.get(col) if isinstance(date_format, dict) else date_format
+            )
+
+            if date_fmt is not None and len(date_cols) == 1:
+                from pandas.core.arrays import DatetimeArray
+
+                arr = DatetimeArray._from_sequence(
+                    date_cols[0], dtype="M8[ns]", copy=False
+                )
+                try:
+                    result = arr._strftime(date_fmt)
+                except ValueError:
+                    pass
+                else:
+                    out = tools.to_datetime(
+                        result,
+                        format=date_fmt,
+                        utc=False,
+                        dayfirst=dayfirst,
+                        errors="ignore",
+                        cache=cache_dates,
+                    )
+                    if isinstance(out, DatetimeIndex):
+                        out = out.to_numpy()
+                        out.flags.writeable = True
+                    else:
+                        out = out._values
+                    return out
+
+            strs = parsing.concat_date_cols(date_cols)
+
+            result = tools.to_datetime(
+                ensure_object(strs),
+                format=date_fmt,
+                utc=False,
+                dayfirst=dayfirst,
+                errors="ignore",
+                cache=cache_dates,
+            )
+            if isinstance(result, DatetimeIndex):
+                arr = result.to_numpy()
+                arr.flags.writeable = True
+                return arr
+            return result._values
+[/REPLACE]

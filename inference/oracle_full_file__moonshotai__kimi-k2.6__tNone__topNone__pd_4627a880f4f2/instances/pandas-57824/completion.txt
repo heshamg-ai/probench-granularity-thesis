@@ -1,0 +1,39 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def _wrap_reindex_result(self, target, indexer, preserve_names: bool):
+        if not isinstance(target, type(self)) and target.dtype.kind == "i":
+            target = self._shallow_copy(target._values, name=target.name)
+        return super()._wrap_reindex_result(target, indexer, preserve_names)
+[/SEARCH]
+[REPLACE]
+    def _wrap_reindex_result(self, target, indexer, preserve_names: bool):
+        if not isinstance(target, type(self)) and target.dtype.kind == "i":
+            target = self._shallow_copy(target._values, name=target.name)
+        return super()._wrap_reindex_result(target, indexer, preserve_names)
+
+    def round(self, decimals: int = 0) -> Self:
+        """
+        Round each value in the RangeIndex to the given number of decimals.
+
+        Since all values in a RangeIndex are integers, rounding does not
+        change the values. This method returns the RangeIndex itself for
+        efficiency.
+
+        Parameters
+        ----------
+        decimals : int, optional
+            Number of decimal places to round to. Has no effect on integer values.
+
+        Returns
+        -------
+        RangeIndex
+            The RangeIndex itself, as values are already integers.
+
+        Examples
+        --------
+        >>> idx = pd.RangeIndex(5)
+        >>> idx.round(2)
+        RangeIndex(start=0, stop=5, step=1)
+        """
+        return self._view()
+[/REPLACE]

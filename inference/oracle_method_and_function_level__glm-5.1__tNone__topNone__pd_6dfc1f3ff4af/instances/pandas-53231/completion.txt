@@ -1,0 +1,28 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+    klass, lk, rk = _convert_arrays_and_get_rizer_klass(lk, rk)
+
+    rizer = klass(max(len(lk), len(rk)))
+[/SEARCH]
+[REPLACE]
+    # For datetime64 and timedelta64 dtypes, we can use the much faster
+    # ObjectFactorizer path by viewing the int64 data as object.
+    # This avoids the overhead of the slow ObjectFactorizer path for datetime-like
+    # types and processes the raw int64 values at high speed.
+    if (
+        hasattr(lk, "dtype")
+        and hasattr(rk, "dtype")
+        and lk.dtype.kind in ("m", "M")
+        and rk.dtype.kind in ("m", "M")
+    ):
+        klass = libhashtable.ObjectFactorizer
+        if lk.dtype != rk.dtype:
+            # Ensure matching dtypes for a proper view
+            rk = rk.astype(lk.dtype, copy=False)
+        lk = lk.view("O")
+        rk = rk.view("O")
+    else:
+        klass, lk, rk = _convert_arrays_and_get_rizer_klass(lk, rk)
+
+    rizer = klass(max(len(lk), len(rk)))
+[/REPLACE]

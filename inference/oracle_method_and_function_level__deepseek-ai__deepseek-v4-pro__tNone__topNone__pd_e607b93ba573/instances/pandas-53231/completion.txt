@@ -1,0 +1,119 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+    if isinstance(lk.dtype, DatetimeTZDtype) and isinstance(rk.dtype, DatetimeTZDtype):
+        # Extract the ndarray (UTC-localized) values
+        # Note: we dont need the dtypes to match, as these can still be compared
+        lk, rk = cast("DatetimeArray", lk)._ensure_matching_resos(rk)
+        lk = cast("DatetimeArray", lk)._ndarray
+        rk = cast("DatetimeArray", rk)._ndarray
+
+    elif (
+        isinstance(lk.dtype, CategoricalDtype)
+        and isinstance(rk.dtype, CategoricalDtype)
+        and lk.dtype == rk.dtype
+    ):
+[/SEARCH]
+[REPLACE]
+    if isinstance(lk.dtype, DatetimeTZDtype) and isinstance(rk.dtype, DatetimeTZDtype):
+        # Extract the ndarray (UTC-localized) values
+        # Note: we dont need the dtypes to match, as these can still be compared
+        lk_arr = cast("DatetimeArray", lk)
+        rk_arr = cast("DatetimeArray", rk)
+        lk_arr, rk_arr = lk_arr._ensure_matching_resos(rk_arr)
+        lk = lk_arr._ndarray
+        rk = rk_arr._ndarray
+
+    elif (
+        isinstance(lk.dtype, CategoricalDtype)
+        and isinstance(rk.dtype, CategoricalDtype)
+        and lk.dtype == rk.dtype
+    ):
+[/REPLACE]
+
+pandas/core/reshape/merge.py
+[SEARCH]
+    if isinstance(lk, BaseMaskedArray):
+        assert isinstance(rk, BaseMaskedArray)
+        llab = rizer.factorize(lk._data, mask=lk._mask)
+        rlab = rizer.factorize(rk._data, mask=rk._mask)
+    elif isinstance(lk, ArrowExtensionArray):
+        assert isinstance(rk, ArrowExtensionArray)
+        # we can only get here with numeric dtypes
+        # TODO: Remove when we have a Factorizer for Arrow
+        llab = rizer.factorize(
+            lk.to_numpy(na_value=1, dtype=lk.dtype.numpy_dtype), mask=lk.isna()
+        )
+        rlab = rizer.factorize(
+            rk.to_numpy(na_value=1, dtype=lk.dtype.numpy_dtype), mask=rk.isna()
+        )
+    else:
+        # Argument 1 to "factorize" of "ObjectFactorizer" has incompatible type
+        # "Union[ndarray[Any, dtype[signedinteger[_64Bit]]],
+        # ndarray[Any, dtype[object_]]]"; expected "ndarray[Any, dtype[object_]]"
+        llab = rizer.factorize(lk)  # type: ignore[arg-type]
+        rlab = rizer.factorize(rk)  # type: ignore[arg-type]
+[/SEARCH]
+[REPLACE]
+    if isinstance(lk, BaseMaskedArray):
+        assert isinstance(rk, BaseMaskedArray)
+        llab = rizer.factorize(lk._data, mask=lk._mask)
+        rlab = rizer.factorize(rk._data, mask=rk._mask)
+    elif isinstance(lk, ArrowExtensionArray):
+        assert isinstance(rk, ArrowExtensionArray)
+        # we can only get here with numeric dtypes
+        # TODO: Remove when we have a Factorizer for Arrow
+        llab = rizer.factorize(
+            lk.to_numpy(na_value=1, dtype=lk.dtype.numpy_dtype), mask=lk.isna()
+        )
+        rlab = rizer.factorize(
+            rk.to_numpy(na_value=1, dtype=lk.dtype.numpy_dtype), mask=rk.isna()
+        )
+    elif isinstance(lk, np.ndarray) and isinstance(rk, np.ndarray) and lk.ndim == 1 and rk.ndim == 1 and lk.dtype == rk.dtype:
+        # Fast-path: homogeneous ndarray keys can skip generic factorizer overhead
+        if lk.dtype.kind == 'M' and lk.dtype != rk.dtype:
+            # Should not happen after resolution above, but belt-and-suspenders
+            pass
+        llab_int, rlab_int, count_int = _factorize_ndarray_skip_rizer(lk, rk)
+        llab = np.asarray(llab_int, dtype=np.intp)
+        rlab = np.asarray(rlab_int, dtype=np.intp)
+        count = count_int
+        # Bypass the rest of this function and jump to sort/NA handling
+        if sort:
+            uniques = np.unique(np.concatenate([lk[llab_int >= 0] if (llab_int >= 0).any() else lk[:0],
+                                                rk[rlab_int >= 0] if (rlab_int >= 0).any() else rk[:0]]))
+            llab, rlab = _sort_labels(uniques, llab, rlab)
+        lmask = llab == -1
+        lany = lmask.any()
+        rmask = rlab == -1
+        rany = rmask.any()
+        if lany or rany:
+            if lany:
+                np.putmask(llab, lmask, count)
+            if rany:
+                np.putmask(rlab, rmask, count)
+            count += 1
+        if how == "right":
+            return rlab, llab, count
+        return llab, rlab, count
+    else:
+        # Argument 1 to "factorize" of "ObjectFactorizer" has incompatible type
+        # "Union[ndarray[Any, dtype[signedinteger[_64Bit]]],
+        # ndarray[Any, dtype[object_]]]"; expected "ndarray[Any, dtype[object_]]"
+        llab = rizer.factorize(lk)  # type: ignore[arg-type]
+        rlab = rizer.factorize(rk)  # type: ignore[arg-type]
+[/REPLACE]
+
+pandas/core/reshape/merge.py
+[SEARCH]
+    assert llab.dtype == np.dtype(np.intp), llab.dtype
+    assert rlab.dtype == np.dtype(np.intp), rlab.dtype
+
+    count = rizer.get_count()
+[/SEARCH]
+[REPLACE]
+    assert llab.dtype == np.dtype(np.intp), llab.dtype
+    assert rlab.dtype == np.dtype(np.intp), rlab.dtype
+
+    if 'count' not in locals():
+        count = rizer.get_count()
+[/REPLACE]

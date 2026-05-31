@@ -1,0 +1,31 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        if (
+            is_object_dtype(dtype)
+            or pa.types.is_timestamp(pa_type)
+            or pa.types.is_duration(pa_type)
+        ):
+            result = np.array(list(self), dtype=dtype)
+        else:
+            result = np.asarray(self._data, dtype=dtype)
+            if copy or self._hasna:
+                result = result.copy()
+[/SEARCH]
+[REPLACE]
+        if is_object_dtype(dtype):
+            n = len(self)
+            result = np.empty(n, dtype=object)
+            if n:
+                off = 0
+                for c in self._data.chunks:
+                    lst = c.to_pylist()
+                    ln = len(lst)
+                    result[off:off + ln] = lst
+                    off += ln
+        elif pa.types.is_timestamp(pa_type) or pa.types.is_duration(pa_type):
+            result = np.array(list(self), dtype=dtype)
+        else:
+            result = np.asarray(self._data, dtype=dtype)
+            if copy or self._hasna:
+                result = result.copy()
+[/REPLACE]

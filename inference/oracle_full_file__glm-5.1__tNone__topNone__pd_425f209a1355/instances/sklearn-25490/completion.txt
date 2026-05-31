@@ -1,0 +1,173 @@
+Looking at the `MiniBatchDictionaryLearning.fit` method, the main bottleneck for small batch sizes is the repeated computation of `code.T @ code` in `_update_inner_stats`, which produces an `(n_components, n_components)` matrix. For small batch sizes relative to `n_components`, this is wasteful.
+
+By precomputing `gram = dictionary @ dictionary.T` once before the loop and passing it through to `sparse_encode`, we can:
+1. Save the Gram matrix recomputation on every iteration
+2. Precompute `B_increment = X.T @ code` and use the identity `code.T @ code = (gram @ code.T).T @ code` to avoid the full `(n_components, n_components)` matrix
+
+Here are the changes:
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+    def _minibatch_step(self, X, dictionary, random_state, step):
+        """Perform the update on the dictionary for one minibatch."""
+        batch_size = X.shape[0]
+
+        # Compute code for this batch
+        code = sparse_encode(
+            X,
+            dictionary,
+            algorithm=self._fit_algorithm,
+            alpha=self.alpha,
+            n_jobs=self.n_jobs,
+            check_input=False,
+            positive=self.positive_code,
+            max_iter=self.transform_max_iter,
+            verbose=self.verbose,
+        )
+
+        batch_cost = (
+            0.5 * ((X - code @ dictionary) ** 2).sum()
+            + self.alpha * np.sum(np.abs(code))
+        ) / batch_size
+
+        # Update inner stats
+        self._update_inner_stats(X, code, batch_size, step)
+[/SEARCH]
+[REPLACE]
+    def _minibatch_step(self, X, dictionary, random_state, step):
+        """Perform the update on the dictionary for one minibatch."""
+        batch_size = X.shape[0]
+
+        # Compute code for this batch
+        code = sparse_encode(
+            X,
+            dictionary,
+            algorithm=self._fit_algorithm,
+            alpha=self.alpha,
+            n_jobs=self.n_jobs,
+            check_input=False,
+            positive=self.positive_code,
+            max_iter=self.transform_max_iter,
+            verbose=self.verbose,
+            gram=self._gram,
+        )
+
+        batch_cost = (
+            0.5 * ((X - code @ dictionary) ** 2).sum()
+            + self.alpha * np.sum(np.abs(code))
+        ) / batch_size
+
+        # Update inner stats
+        # Precompute B_increment to derive A_increment efficiently for
+        # small batch sizes, avoiding the (n_components, n_components)
+        # intermediate from code.T @ code.
+        B_increment = X.T @ code / batch_size
+        A_increment = (self._gram @ code.T).T @ code / batch_size
+        self._update_inner_stats(X, code, batch_size, step, A_increment, B_increment)
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+    def _update_inner_stats(self, X, code, batch_size, step):
+        """Update the inner stats inplace."""
+        if step < batch_size - 1:
+            theta = (step + 1) * batch_size
+        else:
+            theta = batch_size**2 + step + 1 - batch_size
+        beta = (theta + 1 - batch_size) / (theta + 1)
+
+        self._A *= beta
+        self._A += code.T @ code / batch_size
+        self._B *= beta
+        self._B += X.T @ code / batch_size
+[/SEARCH]
+[REPLACE]
+    def _update_inner_stats(self, X, code, batch_size, step, A_increment, B_increment):
+        """Update the inner stats inplace."""
+        if step < batch_size - 1:
+            theta = (step + 1) * batch_size
+        else:
+            theta = batch_size**2 + step + 1 - batch_size
+        beta = (theta + 1 - batch_size) / (theta + 1)
+
+        self._A *= beta
+        self._A += A_increment
+        self._B *= beta
+        self._B += B_increment
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+        # Inner stats
+        self._A = np.zeros(
+            (self._n_components, self._n_components), dtype=X_train.dtype
+        )
+        self._B = np.zeros((n_features, self._n_components), dtype=X_train.dtype)
+
+        if self.max_iter is not None:
+[/SEARCH]
+[REPLACE]
+        # Inner stats
+        self._A = np.zeros(
+            (self._n_components, self._n_components), dtype=X_train.dtype
+        )
+        self._B = np.zeros((n_features, self._n_components), dtype=X_train.dtype)
+        self._gram = dictionary @ dictionary.T
+
+        if self.max_iter is not None:
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+                old_dict[:] = dictionary
+
+            self.n_steps_ = i + 1
+[/SEARCH]
+[REPLACE]
+                old_dict[:] = dictionary
+                self._gram = dictionary @ dictionary.T
+
+            self.n_steps_ = i + 1
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+                if self.callback is not None:
+                    self.callback(locals())
+
+            self.n_steps_ = n_iter
+[/SEARCH]
+[REPLACE]
+                if self.callback is not None:
+                    self.callback(locals())
+
+                self._gram = dictionary @ dictionary.T
+
+            self.n_steps_ = n_iter
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+            self._A = np.zeros((self._n_components, self._n_components), dtype=X.dtype)
+            self._B = np.zeros((X.shape[1], self._n_components), dtype=X.dtype)
+        else:
+            dictionary = self.components_
+
+        self._minibatch_step(X, dictionary, self._random_state, self.n_steps_)
+
+        self.components_ = dictionary
+        self.n_steps_ += 1
+[/SEARCH]
+[REPLACE]
+            self._A = np.zeros((self._n_components, self._n_components), dtype=X.dtype)
+            self._B = np.zeros((X.shape[1], self._n_components), dtype=X.dtype)
+            self._gram = dictionary @ dictionary.T
+        else:
+            dictionary = self.components_
+
+        self._minibatch_step(X, dictionary, self._random_state, self.n_steps_)
+
+        self.components_ = dictionary
+        self._gram = dictionary @ dictionary.T
+        self.n_steps_ += 1
+[/REPLACE]

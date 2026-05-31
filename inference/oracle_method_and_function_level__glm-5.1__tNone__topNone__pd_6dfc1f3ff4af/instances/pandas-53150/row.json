@@ -1,0 +1,58 @@
+{
+  "id": 24,
+  "scenario_id": "pandas-53150",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 53150,
+  "baseline_sha": "824fc8304e6f6f202ee169c7118242374654a4a9",
+  "reference_sha": "bc878d67209228216a1427f32ee185096e27c42b",
+  "task": "Optimize Series.add for PyArrow-backed string/binary arrays",
+  "entry_point": "pandas.Series.add",
+  "whats_new": "Performance improvement in Series.add for pyarrow string and binary dtypes",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-53150:baseline",
+      "digest": "sha256:36b38fa14442c77237605c71b70e1b68678419478d7f49423b66af6a7f73de83"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-53150:reference",
+      "digest": "sha256:4c5870093d64796c6f1530df865fe9a7759140daa51ce71a79a5db7e5204b3ef"
+    }
+  },
+  "params": [
+    {
+      "name": "Series Length",
+      "short_indicator": "N",
+      "explanation": "Size of the Series",
+      "values": [
+        "10000",
+        "100000",
+        "1000000"
+      ]
+    },
+    {
+      "name": "Dtype",
+      "short_indicator": "DT",
+      "explanation": "Data type of Series",
+      "values": [
+        "string_pyarrow",
+        "binary_pyarrow"
+      ]
+    },
+    {
+      "name": "Operand Type",
+      "short_indicator": "OT",
+      "explanation": "Type of second operand",
+      "values": [
+        "series",
+        "scalar"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/arrays/string_/test_string.py::test_add",
+    "pandas/tests/arrays/string_/test_string.py::test_add_2d",
+    "pandas/tests/arrays/string_/test_string.py::test_add_sequence"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.Series.add for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n- Only change what directly improves the optimization target.\n\nOPTIMIZATION REQUEST:\nOptimize Series.add for PyArrow-backed string/binary arrays\nOptimization function: pandas.Series.add\n\n\n[start of pandas/core/arrays/arrow/array.py]\n### Relevant context\n#### Class `pandas.core.arrays.arrow.array.ArrowExtensionArray`\n**Class Signature**\n```python\nclass ArrowExtensionArray(OpsMixin, ExtensionArraySupportsAnyAll, BaseStringArrayMethods):\n```\n**Class Attributes**\n```python\n    _pa_array: pa.ChunkedArray\n    _dtype: ArrowDtype\n    _dt_dayofweek = _dt_day_of_week\n    _dt_weekday = _dt_day_of_week\n    _dt_dayofyear = _dt_day_of_year\n    _dt_daysinmonth = _dt_days_in_month\n```\n**Class __init__ method**\n```python\n    def __init__(self, values: pa.Array | pa.ChunkedArray) -> None:\n        if pa_version_under7p0:\n            msg = \"pyarrow>=7.0.0 is required for PyArrow backed ArrowExtensionArray.\"\n            raise ImportError(msg)\n        if isinstance(values, pa.Array):\n            self._pa_array = pa.chunked_array([values])\n        elif isinstance(values, pa.ChunkedArray):\n            self._pa_array = values\n        else:\n            raise ValueError(\n                f\"Unsupported type '{type(values)}' for ArrowExtensionArray\"\n            )\n        self._dtype = ArrowDtype(self._pa_array.type)\n```\n##### Method `pandas.core.arrays.arrow.array.ArrowExtensionArray._evaluate_op_method`\n```python\ndef _evaluate_op_method(self, other, op, arrow_funcs):\n        pa_type = self._pa_array.type\n        if (pa.types.is_string(pa_type) or pa.types.is_binary(pa_type)) and op in [\n            operator.add,\n            roperator.radd,\n        ]:\n            length = self._pa_array.length()\n\n            seps: list[str] | list[bytes]\n            if pa.types.is_string(pa_type):\n                seps = [\"\"] * length\n            else:\n                seps = [b\"\"] * length\n\n            if is_scalar(other):\n                other = [other] * length\n            elif isinstance(other, type(self)):\n                other = other._pa_array\n            if op is operator.add:\n                result = pc.binary_join_element_wise(self._pa_array, other, seps)\n            else:\n                result = pc.binary_join_element_wise(other, self._pa_array, seps)\n            return type(self)(result)\n\n        pc_func = arrow_funcs[op.__name__]\n        if pc_func is NotImplemented:\n            raise NotImplementedError(f\"{op.__name__} not implemented.\")\n        if isinstance(other, ArrowExtensionArray):\n            result = pc_func(self._pa_array, other._pa_array)\n        elif isinstance(other, (np.ndarray, list)):\n            result = pc_func(self._pa_array, pa.array(other, from_pandas=True))\n        elif isinstance(other, BaseMaskedArray):\n            # GH 52625\n            result = pc_func(self._pa_array, other.__arrow_array__())\n        elif is_scalar(other):\n            if isna(other) and op.__name__ in ARROW_LOGICAL_FUNCS:\n                # pyarrow kleene ops require null to be typed\n                pa_scalar = pa.scalar(None, type=self._pa_array.type)\n            else:\n                pa_scalar = pa.scalar(other)\n            result = pc_func(self._pa_array, pa_scalar)\n        else:\n            raise NotImplementedError(\n                f\"{op.__name__} not implemented for {type(other)}\"\n            )\n        return type(self)(result)\n```\n[end of pandas/core/arrays/arrow/array.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

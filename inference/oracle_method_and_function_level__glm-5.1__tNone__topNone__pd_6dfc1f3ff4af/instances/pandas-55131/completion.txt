@@ -1,0 +1,58 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        masked = self._to_masked()
+
+        result = masked._groupby_op(
+            how=how,
+            has_dropped_na=has_dropped_na,
+            min_count=min_count,
+            ngroups=ngroups,
+            ids=ids,
+            **kwargs,
+        )
+        if isinstance(result, np.ndarray):
+            return result
+        return type(self)._from_sequence(result, copy=False)
+[/SEARCH]
+[REPLACE]
+        import pyarrow.compute as pc
+
+        from pandas.core.arrays.arrow import types as pat
+
+        if how in ("max", "min") and pat.is_temporal(self._pa_array.type):
+            pa_result = getattr(pc, how)(self._pa_array)
+            if has_dropped_na:
+                na = pa.null()
+                ids = ids.astype(np.intp, copy=False)
+                ngroups = int(ngroups)
+                seen = np.full(ngroups, False)
+                seen[ids] = True
+                if not seen.all():
+                    null_mask = ~seen
+                    chunks = []
+                    offset = 0
+                    for chunk in pa_result.chunks:
+                        length = len(chunk)
+                        for i in range(length):
+                            if null_mask[offset + i]:
+                                chunks.append(na)
+                            else:
+                                chunks.append(chunk[i])
+                        offset += length
+                    pa_result = pa.chunked_array([pa.array(chunks, type=pa_result.type)])
+            return type(self)(pa_result)
+
+        masked = self._to_masked()
+
+        result = masked._groupby_op(
+            how=how,
+            has_dropped_na=has_dropped_na,
+            min_count=min_count,
+            ngroups=ngroups,
+            ids=ids,
+            **kwargs,
+        )
+        if isinstance(result, np.ndarray):
+            return result
+        return type(self)._from_sequence(result, copy=False)
+[/REPLACE]

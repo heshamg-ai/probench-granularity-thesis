@@ -1,0 +1,41 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    # --------------------------------------------------------------------
+    # Reductions
+
+    def all(self) -> bool:
+        return 0 not in self._range
+[/SEARCH]
+[REPLACE]
+    # --------------------------------------------------------------------
+    # Reductions
+
+    def all(self) -> bool:
+        return 0 not in self._range
+
+    def round(self, decimals: int = 0) -> RangeIndex:
+        """
+        Round each value in the Index to the given number of decimals.
+
+        Parameters
+        ----------
+        decimals : int, optional
+            Number of decimal places to round to. If decimals is negative,
+            it specifies the number of positions to the left of the decimal point.
+
+        Returns
+        -------
+        RangeIndex
+            A new RangeIndex with the rounded values.
+
+        Examples
+        --------
+        >>> import pandas as pd
+        >>> idx = pd.RangeIndex(5)
+        >>> idx.round(2)
+        RangeIndex(start=0, stop=5, step=1)
+        """
+        # For RangeIndex, all values are integers, so rounding has no effect.
+        # We can return self instead of creating a new object.
+        return self
+[/REPLACE]

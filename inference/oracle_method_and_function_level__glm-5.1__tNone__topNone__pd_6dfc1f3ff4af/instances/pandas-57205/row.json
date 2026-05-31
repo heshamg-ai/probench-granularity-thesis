@@ -1,0 +1,95 @@
+{
+  "id": 61,
+  "scenario_id": "pandas-57205",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 57205,
+  "baseline_sha": "4ed67ac9ef3d9fde6fb8441bc9ea33c0d786649e",
+  "reference_sha": "7d81aa26f9d4036d8eadd5996aa1b26969ca8dc1",
+  "task": "Optimize DataFrame construction when dict and columns is specified",
+  "entry_point": "pandas.DataFrame",
+  "whats_new": "Performance improvement in DataFrame when ``data`` is a ``dict`` and ``columns`` is specified",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-57205:baseline",
+      "digest": "sha256:c26a6fc210b4186283025697d72c43cd5db455a79840515e5ce306686f89a83d"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-57205:reference",
+      "digest": "sha256:df8aa7e39529b70aa15871d789f6a772b71ec675170a8e7d563e608c6274344a"
+    }
+  },
+  "params": [
+    {
+      "name": "Num Rows",
+      "short_indicator": "R",
+      "explanation": "Number of rows in the DataFrame.",
+      "values": [
+        "1000",
+        "10000",
+        "100000"
+      ]
+    },
+    {
+      "name": "Num Columns",
+      "short_indicator": "C",
+      "explanation": "Number of columns in the DataFrame.",
+      "values": [
+        "10",
+        "100"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_with_tzaware_scalar",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_ordereddict",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_length1",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_with_index",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_with_index_and_columns",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_of_empty_lists",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_with_none",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_errors",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_invalid_items_unused",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_check_dtype_empty_numeric_column",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_check_dtype_empty_string_column",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_nan_key",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_nan_tuple_key",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_order_insertion",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_nan_key_and_columns",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_subclass_dict",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_defaultdict",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_block",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_cast",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_cast2",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_dont_upcast",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_of_tuples",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_of_ranges",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_of_iterators",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_of_generators",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_multiindex",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_datetime64_index",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_timedelta64_index",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_period_dict",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_dict_extension_scalar",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_nested_dict_frame_constructor",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_ordered_dict_nested_preserve_order",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_ordered_dict_preserve_order",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_constructor_mixed_dict_and_Series",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_datetime_date_tuple_columns_from_dict",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_dict_nocopy",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructors::test_construct_from_dict_ea_series",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructorIndexInference::test_frame_from_dict_of_series_overlapping_monthly_period_indexes",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructorIndexInference::test_frame_from_dict_with_mixed_tzaware_indexes",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructorIndexInference::test_dict_data_arrow_column_expansion",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructorWithDatetimeTZ::test_from_dict",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructorWithDatetimeTZ::test_frame_dict_constructor_datetime64_1680",
+    "pandas/tests/frame/test_constructors.py::TestDataFrameConstructorWithDatetimeTZ::test_nested_dict_construction",
+    "pandas/tests/frame/test_constructors.py::TestAllowNonNano::test_frame_from_dict_allow_non_nano",
+    "pandas/tests/copy_view/test_constructors.py::test_dataframe_from_dict_of_series",
+    "pandas/tests/copy_view/test_constructors.py::test_dataframe_from_dict_of_series_with_dtype",
+    "pandas/tests/copy_view/test_constructors.py::test_dataframe_from_dict_of_series_with_reindex",
+    "pandas/tests/copy_view/test_constructors.py::test_frame_from_dict_of_index"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.DataFrame for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n- Only change what directly improves the optimization target.\n\nOPTIMIZATION REQUEST:\nOptimize DataFrame construction when dict and columns is specified\nOptimization function: pandas.DataFrame\n\n\n[start of pandas/core/internals/construction.py]\n### Relevant context\n#### Function `pandas.core.internals.construction.dict_to_mgr`\n```python\ndef dict_to_mgr(\n    data: dict,\n    index,\n    columns,\n    *,\n    dtype: DtypeObj | None = None,\n    copy: bool = True,\n) -> Manager:\n    \"\"\"\n    Segregate Series based on type and coerce into matrices.\n    Needs to handle a lot of exceptional cases.\n\n    Used in DataFrame.__init__\n    \"\"\"\n    arrays: Sequence[Any] | Series\n\n    if columns is not None:\n        from pandas.core.series import Series\n\n        arrays = Series(data, index=columns, dtype=object)\n        missing = arrays.isna()\n        if index is None:\n            # GH10856\n            # raise ValueError if only scalars in dict\n            index = _extract_index(arrays[~missing])\n        else:\n            index = ensure_index(index)\n\n        # no obvious \"empty\" int column\n        if missing.any() and not is_integer_dtype(dtype):\n            nan_dtype: DtypeObj\n\n            if dtype is not None:\n                # calling sanitize_array ensures we don't mix-and-match\n                #  NA dtypes\n                midxs = missing.values.nonzero()[0]\n                for i in midxs:\n                    arr = sanitize_array(arrays.iat[i], index, dtype=dtype)\n                    arrays.iat[i] = arr\n            else:\n                # GH#1783\n                nan_dtype = np.dtype(\"object\")\n                val = construct_1d_arraylike_from_scalar(np.nan, len(index), nan_dtype)\n                nmissing = missing.sum()\n                if copy:\n                    rhs = [val] * nmissing\n                else:\n                    # GH#45369\n                    rhs = [val.copy() for _ in range(nmissing)]\n                arrays.loc[missing] = rhs\n\n        arrays = list(arrays)\n        columns = ensure_index(columns)\n\n    else:\n        keys = list(data.keys())\n        columns = Index(keys) if keys else default_index(0)\n        arrays = [com.maybe_iterable_to_list(data[k]) for k in keys]\n\n    if copy:\n        # We only need to copy arrays that will not get consolidated, i.e.\n        #  only EA arrays\n        arrays = [\n            x.copy()\n            if isinstance(x, ExtensionArray)\n            else x.copy(deep=True)\n            if (\n                isinstance(x, Index)\n                or isinstance(x, ABCSeries)\n                and is_1d_only_ea_dtype(x.dtype)\n            )\n            else x\n            for x in arrays\n        ]\n\n    return arrays_to_mgr(arrays, columns, index, dtype=dtype, consolidate=copy)\n```\n[end of pandas/core/internals/construction.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

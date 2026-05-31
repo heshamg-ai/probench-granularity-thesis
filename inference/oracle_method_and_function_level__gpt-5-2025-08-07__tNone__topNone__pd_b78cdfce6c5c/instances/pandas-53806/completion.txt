@@ -1,0 +1,11 @@
+pandas/core/sorting.py
+[SEARCH]
+    if sort and len(obs_group_ids) > 0:
+        obs_group_ids, comp_ids = _reorder_by_uniques(obs_group_ids, comp_ids)
+[/SEARCH]
+[REPLACE]
+    if sort and len(obs_group_ids) > 0:
+        # Fastpath: if uniques are already sorted ascending, no need to reorder
+        if not (obs_group_ids[1:] >= obs_group_ids[:-1]).all():
+            obs_group_ids, comp_ids = _reorder_by_uniques(obs_group_ids, comp_ids)
+[/REPLACE]

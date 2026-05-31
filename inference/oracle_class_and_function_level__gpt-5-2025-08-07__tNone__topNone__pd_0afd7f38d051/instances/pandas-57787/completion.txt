@@ -1,0 +1,90 @@
+pandas/core/arrays/categorical.py
+[SEARCH]
+                # we're inferring from values
+                dtype = CategoricalDtype(categories, dtype.ordered)
+[/SEARCH]
+[REPLACE]
+                # we're inferring from values
+                # Preserve RangeIndex when possible to save memory
+                if not isinstance(categories, ABCIndex):
+                    if getattr(categories, "dtype", None) is not None and categories.dtype.kind in "iu" and categories.size > 1:
+                        step = categories[1] - categories[0]
+                        if step != 0:
+                            expected = categories[0] + step * np.arange(categories.size, dtype=categories.dtype)
+                            if np.array_equal(categories, expected):
+                                from pandas import RangeIndex
+                                start = lib.item_from_zerodim(categories[0])
+                                step_val = lib.item_from_zerodim(step)
+                                stop = start + step_val * categories.size
+                                categories = RangeIndex(start=start, stop=stop, step=step_val)
+                dtype = CategoricalDtype(categories, dtype.ordered)
+[/REPLACE]
+
+pandas/core/arrays/categorical.py
+[SEARCH]
+        from pandas import (
+            Index,
+            to_datetime,
+            to_numeric,
+            to_timedelta,
+        )
+[/SEARCH]
+[REPLACE]
+        from pandas import (
+            Index,
+            RangeIndex,
+            to_datetime,
+            to_numeric,
+            to_timedelta,
+        )
+[/REPLACE]
+
+pandas/core/arrays/categorical.py
+[SEARCH]
+        elif not cats.is_monotonic_increasing:
+            # Sort categories and recode for unknown categories.
+            unsorted = cats.copy()
+            categories = cats.sort_values()
+
+            codes = recode_for_categories(inferred_codes, unsorted, categories)
+            dtype = CategoricalDtype(categories, ordered=False)
+        else:
+            dtype = CategoricalDtype(cats, ordered=False)
+            codes = inferred_codes
+[/SEARCH]
+[REPLACE]
+        elif not cats.is_monotonic_increasing:
+            # Sort categories and recode for unknown categories.
+            unsorted = cats.copy()
+            categories = cats.sort_values()
+            # Preserve RangeIndex when categories are an arithmetic progression
+            if categories.dtype.kind in "iu" and len(categories) > 1:
+                first = categories[0]
+                second = categories[1]
+                step = second - first
+                if step != 0:
+                    expected = first + step * np.arange(len(categories), dtype=categories.dtype)
+                    if np.array_equal(np.asarray(categories), np.asarray(expected)):
+                        start = lib.item_from_zerodim(first)
+                        step_val = lib.item_from_zerodim(step)
+                        stop = start + step_val * len(categories)
+                        categories = RangeIndex(start=start, stop=stop, step=step_val)
+
+            codes = recode_for_categories(inferred_codes, unsorted, categories)
+            dtype = CategoricalDtype(categories, ordered=False)
+        else:
+            # Preserve RangeIndex when categories are an arithmetic progression
+            if cats.dtype.kind in "iu" and len(cats) > 1:
+                first = cats[0]
+                second = cats[1]
+                step = second - first
+                if step != 0:
+                    expected = first + step * np.arange(len(cats), dtype=cats.dtype)
+                    if np.array_equal(np.asarray(cats), np.asarray(expected)):
+                        start = lib.item_from_zerodim(first)
+                        step_val = lib.item_from_zerodim(step)
+                        stop = start + step_val * len(cats)
+                        cats = RangeIndex(start=start, stop=stop, step=step_val)
+            dtype = CategoricalDtype(cats, ordered=False)
+            codes = inferred_codes
+[/REPLACE]

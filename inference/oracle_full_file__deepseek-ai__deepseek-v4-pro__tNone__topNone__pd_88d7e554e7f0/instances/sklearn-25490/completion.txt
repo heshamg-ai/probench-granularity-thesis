@@ -1,0 +1,399 @@
+Here are the optimization changes for `MiniBatchDictionaryLearning.fit` for small batch sizes:
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+    def _update_inner_stats(self, X, code, batch_size, step):
+        """Update the inner stats inplace."""
+        if step < batch_size - 1:
+            theta = (step + 1) * batch_size
+        else:
+            theta = batch_size**2 + step + 1 - batch_size
+        beta = (theta + 1 - batch_size) / (theta + 1)
+
+        self._A *= beta
+        self._A += code.T @ code / batch_size
+        self._B *= beta
+        self._B += X.T @ code / batch_size
+[/SEARCH]
+[REPLACE]
+    def _update_inner_stats(self, X, code, batch_size, step):
+        """Update the inner stats inplace."""
+        if step < batch_size - 1:
+            theta = (step + 1) * batch_size
+        else:
+            theta = batch_size**2 + step + 1 - batch_size
+        beta = (theta + 1 - batch_size) / (theta + 1)
+
+        self._A *= beta
+        self._A += (code.T @ code) * (1.0 / batch_size)
+        self._B *= beta
+        self._B += (X.T @ code) * (1.0 / batch_size)
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+    def _minibatch_step(self, X, dictionary, random_state, step):
+        """Perform the update on the dictionary for one minibatch."""
+        batch_size = X.shape[0]
+
+        # Compute code for this batch
+        code = sparse_encode(
+            X,
+            dictionary,
+            algorithm=self._fit_algorithm,
+            alpha=self.alpha,
+            n_jobs=self.n_jobs,
+            check_input=False,
+            positive=self.positive_code,
+            max_iter=self.transform_max_iter,
+            verbose=self.verbose,
+        )
+
+        batch_cost = (
+            0.5 * ((X - code @ dictionary) ** 2).sum()
+            + self.alpha * np.sum(np.abs(code))
+        ) / batch_size
+
+        # Update inner stats
+        self._update_inner_stats(X, code, batch_size, step)
+
+        # Update dictionary
+        _update_dict(
+            dictionary,
+            X,
+            code,
+            self._A,
+            self._B,
+            verbose=self.verbose,
+            random_state=random_state,
+            positive=self.positive_dict,
+        )
+
+        return batch_cost
+[/SEARCH]
+[REPLACE]
+    def _minibatch_step(self, X, dictionary, random_state, step):
+        """Perform the update on the dictionary for one minibatch."""
+        batch_size = X.shape[0]
+
+        # Compute code for this batch
+        code = sparse_encode(
+            X,
+            dictionary,
+            algorithm=self._fit_algorithm,
+            alpha=self.alpha,
+            n_jobs=self.n_jobs,
+            check_input=False,
+            positive=self.positive_code,
+            max_iter=self.transform_max_iter,
+            verbose=self.verbose,
+        )
+
+        # Compute reconstruction error efficiently
+        residual = X - code @ dictionary
+        batch_cost = (
+            0.5 * (residual * residual).sum()
+            + self.alpha * np.sum(np.abs(code))
+        ) * (1.0 / batch_size)
+
+        # Update inner stats
+        self._update_inner_stats(X, code, batch_size, step)
+
+        # Update dictionary
+        _update_dict(
+            dictionary,
+            X,
+            code,
+            self._A,
+            self._B,
+            verbose=self.verbose,
+            random_state=random_state,
+            positive=self.positive_dict,
+        )
+
+        return batch_cost
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+    def _initialize_dict(self, X, random_state):
+        """Initialization of the dictionary."""
+        if self.dict_init is not None:
+            dictionary = self.dict_init
+        else:
+            # Init V with SVD of X
+            _, S, dictionary = randomized_svd(
+                X, self._n_components, random_state=random_state
+            )
+            dictionary = S[:, np.newaxis] * dictionary
+
+        if self._n_components <= len(dictionary):
+            dictionary = dictionary[: self._n_components, :]
+        else:
+            dictionary = np.concatenate(
+                (
+                    dictionary,
+                    np.zeros(
+                        (self._n_components - len(dictionary), dictionary.shape[1]),
+                        dtype=dictionary.dtype,
+                    ),
+                )
+            )
+
+        dictionary = check_array(dictionary, order="F", dtype=X.dtype, copy=False)
+        dictionary = np.require(dictionary, requirements="W")
+
+        return dictionary
+[/SEARCH]
+[REPLACE]
+    def _initialize_dict(self, X, random_state):
+        """Initialization of the dictionary."""
+        if self.dict_init is not None:
+            dictionary = self.dict_init.copy()
+        else:
+            # Init V with SVD of X
+            _, S, dictionary = randomized_svd(
+                X, self._n_components, random_state=random_state
+            )
+            dictionary = S[:, np.newaxis] * dictionary
+
+        n_components = self._n_components
+        if n_components <= len(dictionary):
+            dictionary = dictionary[:n_components, :]
+        else:
+            pad_rows = n_components - len(dictionary)
+            dictionary = np.concatenate(
+                (
+                    dictionary,
+                    np.zeros((pad_rows, dictionary.shape[1]), dtype=dictionary.dtype),
+                )
+            )
+
+        dictionary = check_array(dictionary, order="F", dtype=X.dtype, copy=False)
+        dictionary = np.require(dictionary, requirements="W")
+
+        return dictionary
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+    def _check_convergence(
+        self, X, batch_cost, new_dict, old_dict, n_samples, step, n_steps
+    ):
+        """Helper function to encapsulate the early stopping logic.
+
+        Early stopping is based on two factors:
+        - A small change of the dictionary between two minibatch updates. This is
+          controlled by the tol parameter.
+        - No more improvement on a smoothed estimate of the objective function for a
+          a certain number of consecutive minibatch updates. This is controlled by
+          the max_no_improvement parameter.
+        """
+        batch_size = X.shape[0]
+
+        # counts steps starting from 1 for user friendly verbose mode.
+        step = step + 1
+
+        # Ignore 100 first steps or 1 epoch to avoid initializing the ewa_cost with a
+        # too bad value
+        if step <= min(100, n_samples / batch_size):
+            if self.verbose:
+                print(f"Minibatch step {step}/{n_steps}: mean batch cost: {batch_cost}")
+            return False
+
+        # Compute an Exponentially Weighted Average of the cost function to
+        # monitor the convergence while discarding minibatch-local stochastic
+        # variability: https://en.wikipedia.org/wiki/Moving_average
+        if self._ewa_cost is None:
+            self._ewa_cost = batch_cost
+        else:
+            alpha = batch_size / (n_samples + 1)
+            alpha = min(alpha, 1)
+            self._ewa_cost = self._ewa_cost * (1 - alpha) + batch_cost * alpha
+
+        if self.verbose:
+            print(
+                f"Minibatch step {step}/{n_steps}: mean batch cost: "
+                f"{batch_cost}, ewa cost: {self._ewa_cost}"
+            )
+
+        # Early stopping based on change of dictionary
+        dict_diff = linalg.norm(new_dict - old_dict) / self._n_components
+        if self.tol > 0 and dict_diff <= self.tol:
+            if self.verbose:
+                print(f"Converged (small dictionary change) at step {step}/{n_steps}")
+            return True
+
+        # Early stopping heuristic due to lack of improvement on smoothed
+        # cost function
+        if self._ewa_cost_min is None or self._ewa_cost < self._ewa_cost_min:
+            self._no_improvement = 0
+            self._ewa_cost_min = self._ewa_cost
+        else:
+            self._no_improvement += 1
+
+        if (
+            self.max_no_improvement is not None
+            and self._no_improvement >= self.max_no_improvement
+        ):
+            if self.verbose:
+                print(
+                    "Converged (lack of improvement in objective function) "
+                    f"at step {step}/{n_steps}"
+                )
+            return True
+
+        return False
+[/SEARCH]
+[REPLACE]
+    def _check_convergence(
+        self, X, batch_cost, new_dict, old_dict, n_samples, step, n_steps
+    ):
+        """Helper function to encapsulate the early stopping logic.
+
+        Early stopping is based on two factors:
+        - A small change of the dictionary between two minibatch updates. This is
+          controlled by the tol parameter.
+        - No more improvement on a smoothed estimate of the objective function for a
+          a certain number of consecutive minibatch updates. This is controlled by
+          the max_no_improvement parameter.
+        """
+        batch_size = X.shape[0]
+
+        # counts steps starting from 1 for user friendly verbose mode.
+        step = step + 1
+
+        # Ignore 100 first steps or 1 epoch to avoid initializing the ewa_cost with a
+        # too bad value
+        if step <= min(100, n_samples / batch_size):
+            if self.verbose:
+                print(f"Minibatch step {step}/{n_steps}: mean batch cost: {batch_cost}")
+            return False
+
+        # Compute an Exponentially Weighted Average of the cost function to
+        # monitor the convergence while discarding minibatch-local stochastic
+        # variability: https://en.wikipedia.org/wiki/Moving_average
+        if self._ewa_cost is None:
+            self._ewa_cost = batch_cost
+        else:
+            alpha = batch_size / (n_samples + 1)
+            if alpha > 1:
+                alpha = 1.0
+            self._ewa_cost = self._ewa_cost * (1.0 - alpha) + batch_cost * alpha
+
+        if self.verbose:
+            print(
+                f"Minibatch step {step}/{n_steps}: mean batch cost: "
+                f"{batch_cost}, ewa cost: {self._ewa_cost}"
+            )
+
+        # Early stopping based on change of dictionary
+        dict_diff = linalg.norm(new_dict - old_dict) / self._n_components
+        if self.tol > 0 and dict_diff <= self.tol:
+            if self.verbose:
+                print(f"Converged (small dictionary change) at step {step}/{n_steps}")
+            return True
+
+        # Early stopping heuristic due to lack of improvement on smoothed
+        # cost function
+        if self._ewa_cost_min is None or self._ewa_cost < self._ewa_cost_min:
+            self._no_improvement = 0
+            self._ewa_cost_min = self._ewa_cost
+        else:
+            self._no_improvement += 1
+
+        if (
+            self.max_no_improvement is not None
+            and self._no_improvement >= self.max_no_improvement
+        ):
+            if self.verbose:
+                print(
+                    "Converged (lack of improvement in objective function) "
+                    f"at step {step}/{n_steps}"
+                )
+            return True
+
+        return False
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+        if self.max_iter is not None:
+
+            # Attributes to monitor the convergence
+            self._ewa_cost = None
+            self._ewa_cost_min = None
+            self._no_improvement = 0
+
+            batches = gen_batches(n_samples, self._batch_size)
+            batches = itertools.cycle(batches)
+            n_steps_per_iter = int(np.ceil(n_samples / self._batch_size))
+            n_steps = self.max_iter * n_steps_per_iter
+
+            i = -1  # to allow max_iter = 0
+
+            for i, batch in zip(range(n_steps), batches):
+                X_batch = X_train[batch]
+
+                batch_cost = self._minibatch_step(
+                    X_batch, dictionary, self._random_state, i
+                )
+
+                if self._check_convergence(
+                    X_batch, batch_cost, dictionary, old_dict, n_samples, i, n_steps
+                ):
+                    break
+
+                # XXX callback param added for backward compat in #18975 but a common
+                # unified callback API should be preferred
+                if self.callback is not None:
+                    self.callback(locals())
+
+                old_dict[:] = dictionary
+
+            self.n_steps_ = i + 1
+            self.n_iter_ = np.ceil(self.n_steps_ / n_steps_per_iter)
+[/SEARCH]
+[REPLACE]
+        if self.max_iter is not None:
+
+            # Attributes to monitor the convergence
+            self._ewa_cost = None
+            self._ewa_cost_min = None
+            self._no_improvement = 0
+
+            batches = gen_batches(n_samples, self._batch_size)
+            n_steps_per_iter = int(np.ceil(n_samples / self._batch_size))
+            n_steps = self.max_iter * n_steps_per_iter
+
+            # Precompute the inverse used in _update_inner_stats
+            self._inv_batch_size = 1.0 / self._batch_size
+
+            i = -1  # to allow max_iter = 0
+
+            # Use while loop with explicit index tracking to avoid
+            # creating large zip(range(n_steps), itertools.cycle(batches))
+            batch_iter = itertools.cycle(batches)
+            for i in range(n_steps):
+                batch = next(batch_iter)
+                X_batch = X_train[batch]
+
+                batch_cost = self._minibatch_step(
+                    X_batch, dictionary, self._random_state, i
+                )
+
+                if self._check_convergence(
+                    X_batch, batch_cost, dictionary, old_dict, n_samples, i, n_steps
+                ):
+                    break
+
+                # XXX callback param added for backward compat in #18975 but a common
+                # unified callback API should be preferred
+                if self.callback is not None:
+                    self.callback(locals())
+
+                old_dict[:] = dictionary
+
+            self.n_steps_ = i + 1
+            self.n_iter_ = np.ceil(self.n_steps_ / n_steps_per_iter)
+[/REPLACE]

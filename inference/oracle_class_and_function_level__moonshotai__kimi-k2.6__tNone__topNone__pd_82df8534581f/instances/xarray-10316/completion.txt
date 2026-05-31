@@ -1,0 +1,187 @@
+ xarray/core/indexing.py
+[SEARCH]
+class OuterIndexer(ExplicitIndexer):
+    """Tuple for outer/orthogonal indexing.
+
+    All elements should be int, slice or 1-dimensional np.ndarray objects with an
+    integer dtype. Indexing is applied independently along each axis, and axes
+    indexed with an integer are dropped from the result.
+
+    This type of indexing works like MATLAB/Fortran.
+    """
+
+    __slots__ = ()
+
+    def __init__(
+        self,
+        key: tuple[
+            int | np.integer | slice | np.ndarray[Any, np.dtype[np.generic]],
+            ...,
+        ],
+    ):
+        if not isinstance(key, tuple):
+            raise TypeError(f"key must be a tuple: {key!r}")
+
+        new_key = []
+        for k in key:
+            if isinstance(k, integer_types):
+                k = int(k)
+            elif isinstance(k, slice):
+                k = as_integer_slice(k)
+            elif is_duck_array(k):
+                if not np.issubdtype(k.dtype, np.integer):
+                    raise TypeError(
+                        f"invalid indexer array, does not have integer dtype: {k!r}"
+                    )
+                if k.ndim > 1:  # type: ignore[union-attr]
+                    raise TypeError(
+                        f"invalid indexer array for {type(self).__name__}; must be scalar "
+                        f"or have 1 dimension: {k!r}"
+                    )
+                k = k.astype(np.int64)  # type: ignore[union-attr]
+            else:
+                raise TypeError(
+                    f"unexpected indexer type for {type(self).__name__}: {k!r}"
+                )
+            new_key.append(k)
+        super().__init__(tuple(new_key))
+[/SEARCH]
+[REPLACE]
+class OuterIndexer(ExplicitIndexer):
+    """Tuple for outer/orthogonal indexing.
+
+    All elements should be int, slice or 1-dimensional np.ndarray objects with an
+    integer dtype. Indexing is applied independently along each axis, and axes
+    indexed with an integer are dropped from the result.
+
+    This type of indexing works like MATLAB/Fortran.
+    """
+
+    __slots__ = ()
+
+    def __init__(
+        self,
+        key: tuple[
+            int | np.integer | slice | np.ndarray[Any, np.dtype[np.generic]],
+            ...,
+        ],
+    ):
+        if not isinstance(key, tuple):
+            raise TypeError(f"key must be a tuple: {key!r}")
+
+        new_key = []
+        for k in key:
+            if isinstance(k, integer_types):
+                k = int(k)
+            elif isinstance(k, slice):
+                k = as_integer_slice(k)
+            elif is_duck_array(k):
+                if not np.issubdtype(k.dtype, np.integer):
+                    raise TypeError(
+                        f"invalid indexer array, does not have integer dtype: {k!r}"
+                    )
+                if k.ndim > 1:  # type: ignore[union-attr]
+                    raise TypeError(
+                        f"invalid indexer array for {type(self).__name__}; must be scalar "
+                        f"or have 1 dimension: {k!r}"
+                    )
+                k = np.asarray(k, dtype=np.int64)
+            else:
+                raise TypeError(
+                    f"unexpected indexer type for {type(self).__name__}: {k!r}"
+                )
+            new_key.append(k)
+        super().__init__(tuple(new_key))
+[/REPLACE]
+
+xarray/core/indexing.py
+[SEARCH]
+class VectorizedIndexer(ExplicitIndexer):
+    """Tuple for vectorized indexing.
+
+    All elements should be slice or N-dimensional np.ndarray objects with an
+    integer dtype and the same number of dimensions.
+
+    Indexing follows proposed rules for np.ndarray.vindex, which matches
+    NumPy's advanced indexing rules (including broadcasting) except sliced
+    axes are always moved to the end:
+    https://github.com/numpy/numpy/pull/6256
+    """
+
+    __slots__ = ()
+
+    def __init__(self, key: tuple[slice | np.ndarray[Any, np.dtype[np.generic]], ...]):
+        if not isinstance(key, tuple):
+            raise TypeError(f"key must be a tuple: {key!r}")
+
+        new_key = []
+        ndim = None
+        for k in key:
+            if isinstance(k, slice):
+                k = as_integer_slice(k)
+            elif is_duck_array(k):
+                if not np.issubdtype(k.dtype, np.integer):
+                    raise TypeError(
+                        f"invalid indexer array, does not have integer dtype: {k!r}"
+                    )
+                if ndim is None:
+                    ndim = k.ndim  # type: ignore[union-attr]
+                elif ndim != k.ndim:  # type: ignore[union-attr]
+                    ndims = [k.ndim for k in key if isinstance(k, np.ndarray)]
+                    raise ValueError(
+                        "invalid indexer key: ndarray arguments "
+                        f"have different numbers of dimensions: {ndims}"
+                    )
+                k = k.astype(np.int64)  # type: ignore[union-attr]
+            else:
+                raise TypeError(
+                    f"unexpected indexer type for {type(self).__name__}: {k!r}"
+                )
+            new_key.append(k)
+        super().__init__(tuple(new_key))
+[/SEARCH]
+[REPLACE]
+class VectorizedIndexer(ExplicitIndexer):
+    """Tuple for vectorized indexing.
+
+    All elements should be slice or N-dimensional np.ndarray objects with an
+    integer dtype and the same number of dimensions.
+
+    Indexing follows proposed rules for np.ndarray.vindex, which matches
+    NumPy's advanced indexing rules (including broadcasting) except sliced
+    axes are always moved to the end:
+    https://github.com/numpy/numpy/pull/6256
+    """
+
+    __slots__ = ()
+
+    def __init__(self, key: tuple[slice | np.ndarray[Any, np.dtype[np.generic]], ...]):
+        if not isinstance(key, tuple):
+            raise TypeError(f"key must be a tuple: {key!r}")
+
+        new_key = []
+        ndim = None
+        for k in key:
+            if isinstance(k, slice):
+                k = as_integer_slice(k)
+            elif is_duck_array(k):
+                if not np.issubdtype(k.dtype, np.integer):
+                    raise TypeError(
+                        f"invalid indexer array, does not have integer dtype: {k!r}"
+                    )
+                if ndim is None:
+                    ndim = k.ndim  # type: ignore[union-attr]
+                elif ndim != k.ndim:  # type: ignore[union-attr]
+                    ndims = [k.ndim for k in key if isinstance(k, np.ndarray)]
+                    raise ValueError(
+                        "invalid indexer key: ndarray arguments "
+                        f"have different numbers of dimensions: {ndims}"
+                    )
+                k = np.asarray(k, dtype=np.int64)
+            else:
+                raise TypeError(
+                    f"unexpected indexer type for {type(self).__name__}: {k!r}"
+                )
+            new_key.append(k)
+        super().__init__(tuple(new_key))
+[/REPLACE]

@@ -1,0 +1,48 @@
+pandas/core/generic.py
+[SEARCH]
+        cond = -cond if inplace else cond
+        cond = cond.reindex(self._info_axis, axis=self._info_axis_number, copy=False)
+[/SEARCH]
+[REPLACE]
+        # Fastpath: if cond is an ExtensionArray-backed boolean DataFrame,
+        # convert to a single NumPy boolean ndarray to avoid per-column handling
+        use_array_mask = False
+        if isinstance(cond, ABCDataFrame):
+            dtypes = cond.dtypes
+            if all(is_bool_dtype(dt) for dt in dtypes) and any(
+                is_extension_array_dtype(dt) for dt in dtypes
+            ):
+                mask = cond.to_numpy(dtype=bool, na_value=fill_value)
+                if inplace:
+                    mask = np.logical_not(mask)
+                use_array_mask = True
+
+        if not use_array_mask:
+            cond = -cond if inplace else cond
+            cond = cond.reindex(self._info_axis, axis=self._info_axis_number, copy=False)
+            mask = cond
+[/REPLACE]
+
+pandas/core/generic.py
+[SEARCH]
+            new_data = self._mgr.putmask(mask=cond, new=other, align=align)
+[/SEARCH]
+[REPLACE]
+            new_data = self._mgr.putmask(mask=mask, new=other, align=align)
+[/REPLACE]
+
+pandas/core/generic.py
+[SEARCH]
+            new_data = self._mgr.where(
+                other=other,
+                cond=cond,
+                align=align,
+            )
+[/SEARCH]
+[REPLACE]
+            new_data = self._mgr.where(
+                other=other,
+                cond=mask,
+                align=align,
+            )
+[/REPLACE]

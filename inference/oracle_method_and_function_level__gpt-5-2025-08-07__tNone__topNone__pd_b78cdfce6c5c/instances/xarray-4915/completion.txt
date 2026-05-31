@@ -1,0 +1,114 @@
+xarray/core/rolling.py
+[SEARCH]
+            del kwargs["dim"]
+[/SEARCH]
+[REPLACE]
+            del kwargs["dim"]
+
+        # Fast path for multi-dimensional mean on NumPy arrays
+        if (
+            array_agg_func is duck_array_ops.mean
+            and not is_duck_dask_array(self.obj.data)
+            and len(self.dim) > 1
+        ):
+            res = self._fast_mean_numpy(keep_attrs=keep_attrs)
+            if res is not None:
+                return res
+[/REPLACE]
+
+xarray/core/rolling.py
+[SEARCH]
+            return self.reduce(array_agg_func, keep_attrs=keep_attrs, **kwargs)
+[/SEARCH]
+[REPLACE]
+            return self.reduce(array_agg_func, keep_attrs=keep_attrs, **kwargs)
+
+    def _fast_mean_numpy(self, keep_attrs):
+        """
+        Fast NumPy implementation of rolling mean for multi-dimensional windows.
+        Returns a DataArray on success, or None to fallback to generic path.
+        """
+        # Only handle pure NumPy arrays with float or complex dtype
+        data = self.obj.data
+        if is_duck_dask_array(data):
+            return None
+
+        dtype = np.asarray(data).dtype
+        if not (np.issubdtype(dtype, np.floating) or np.issubdtype(dtype, np.complexfloating)):
+            return None
+
+        # Determine accumulator and result dtypes
+        if np.issubdtype(dtype, np.complexfloating):
+            acc_dtype = np.complex128
+            res_dtype = np.result_type(dtype, np.complex128)
+        else:
+            acc_dtype = np.float64
+            res_dtype = np.result_type(dtype, np.float64)
+
+        arr = np.asarray(data, dtype=acc_dtype)
+
+        # Build validity mask (True for non-NaN)
+        valid = ~np.isnan(arr)
+
+        sum_arr = np.where(valid, arr, 0)
+        count_arr = valid.astype(np.float64, copy=False)
+
+        # Helper to compute 1D rolling sum via cumsum with minimal padding
+        def _rolling_sum_axis(a, axis, window, left):
+            n = a.shape[axis]
+            # cspad has an extra leading slot for exclusive cumsum and left/right padding
+            pad_len = left + window  # total prefix length used in slice indices below
+            cshape = list(a.shape)
+            cshape[axis] = n + pad_len
+            cspad = np.zeros(cshape, dtype=a.dtype)
+
+            # Insert a into cspad starting at index (1 + left) along axis
+            sl = [slice(None)] * a.ndim
+            sl[axis] = slice(1 + left, 1 + left + n)
+            cspad[tuple(sl)] = a
+
+            # Exclusive-style cumsum using the leading zero slot
+            csum = np.cumsum(cspad, axis=axis)
+
+            # Compute s[i] = csum[i + left + window] - csum[i + left]
+            s1 = [slice(None)] * a.ndim
+            s0 = [slice(None)] * a.ndim
+            s1[axis] = slice(left + window, left + window + n)
+            s0[axis] = slice(left, left + n)
+            return csum[tuple(s1)] - csum[tuple(s0)]
+
+        # Apply rolling sums sequentially over each rolling dimension
+        for d, w, c in zip(self.dim, self.window, self.center):
+            axis = self.obj.get_axis_num(d)
+            if c:
+                left = (w - 1) // 2
+            else:
+                left = w - 1
+            sum_arr = _rolling_sum_axis(sum_arr, axis, w, left)
+            count_arr = _rolling_sum_axis(count_arr, axis, w, left)
+
+        # Compute mean safely; initialize with NaN and divide where count != 0
+        with np.errstate(invalid="ignore", divide="ignore"):
+            out = np.full(sum_arr.shape, np.nan, dtype=res_dtype)
+            np.divide(sum_arr, count_arr, out=out, where=count_arr != 0)
+
+        # Apply min_periods mask
+        min_count = self.min_periods
+        if min_count is not None:
+            mask = count_arr < float(min_count)
+            if mask.any():
+                out[mask] = np.nan
+
+        # Build DataArray result
+        from .dataarray import DataArray
+
+        attrs = self.obj.attrs if keep_attrs else {}
+        result = DataArray(
+            out,
+            dims=self.obj.dims,
+            coords=self.obj.coords,
+            attrs=attrs,
+            name=self.obj.name,
+        )
+        return result
+[/REPLACE]

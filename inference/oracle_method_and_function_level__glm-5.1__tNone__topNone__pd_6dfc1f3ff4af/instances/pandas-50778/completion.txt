@@ -1,0 +1,74 @@
+pandas/core/internals/blocks.py
+[SEARCH]
+        # Exclude anything that we know we won't contain
+        pairs = [
+            (x, y) for x, y in zip(src_list, dest_list) if self._can_hold_element(x)
+        ]
+        if not len(pairs):
+            # shortcut, nothing to replace
+            return [self] if inplace else [self.copy()]
+
+        src_len = len(pairs) - 1
+
+        if is_string_dtype(values.dtype):
+            # Calculate the mask once, prior to the call of comp
+            # in order to avoid repeating the same computations
+            mask = ~isna(values)
+            masks = [
+                compare_or_regex_search(values, s[0], regex=regex, mask=mask)
+                for s in pairs
+            ]
+        else:
+            # GH#38086 faster if we know we dont need to check for regex
+            masks = [missing.mask_missing(values, s[0]) for s in pairs]
+
+        masks = [extract_bool_array(x) for x in masks]
+[/SEARCH]
+[REPLACE]
+        # Exclude anything that we know we won't contain
+        pairs = [
+            (x, y) for x, y in zip(src_list, dest_list) if self._can_hold_element(x)
+        ]
+        if not len(pairs):
+            # shortcut, nothing to replace
+            return [self] if inplace else [self.copy()]
+
+        # Optimization: for non-regex, non-categorical, non-extension,
+        # non-object blocks, use vectorized searchsorted on unique values
+        # to compute all masks at once.
+        if (
+            not regex
+            and not isinstance(values, Categorical)
+            and not self.is_extension
+            and not self.is_object
+            and not is_string_dtype(values.dtype)
+            and not isna(values).any()
+        ):
+            uniques, inv = algorithms.unique(values, return_inverse=True)
+            src_arr = np.array(
+                [s[0] for s in pairs], dtype=values.dtype if hasattr(values, 'dtype') else None
+            )
+            idx = uniques.searchsorted(src_arr, side='left')
+            idx[idx == len(uniques)] = -1
+            found = uniques[idx] == src_arr
+
+            masks = []
+            for i in range(len(pairs)):
+                m = np.zeros(values.shape, dtype=np.bool_)
+                if found[i]:
+                    m[inv == idx[i]] = True
+                masks.append(m)
+        elif is_string_dtype(values.dtype):
+            # Calculate the mask once, prior to the call of comp
+            # in order to avoid repeating the same computations
+            mask = ~isna(values)
+            masks = [
+                compare_or_regex_search(values, s[0], regex=regex, mask=mask)
+                for s in pairs
+            ]
+            masks = [extract_bool_array(x) for x in masks]
+        else:
+            # GH#38086 faster if we know we dont need to check for regex
+            masks = [missing.mask_missing(values, s[0]) for s in pairs]
+            masks = [extract_bool_array(x) for x in masks]
+[/REPLACE]

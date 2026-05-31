@@ -1,0 +1,46 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        result_data = []
+        for lst in split.to_pylist():
+            if lst is None:
+                result_data.append([False] * len(uniques_sorted))
+            else:
+                res = pc.is_in(uniques_sorted, pa.array(set(lst)))
+                result_data.append(res.to_pylist())
+        result = type(self)(pa.array(result_data))
+        return result, uniques_sorted.to_pylist()
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        uniques_list = uniques_sorted.to_pylist()
+
+        # Build a dictionary mapping each unique value to its index
+        unique_indices = {val: i for i, val in enumerate(uniques_list)}
+
+        n_uniques = len(uniques_list)
+        n_rows = len(split)
+
+        # Initialize result as a 2D boolean numpy array (more memory efficient
+        # than list of lists, and allows vectorized operations)
+        result_data = np.zeros((n_rows, n_uniques), dtype=bool)
+
+        # Populate the boolean matrix
+        for i, lst in enumerate(split.to_pylist()):
+            if lst is not None:
+                for val in lst:
+                    idx = unique_indices.get(val)
+                    if idx is not None:
+                        result_data[i, idx] = True
+
+        # Convert to list of lists for pyarrow array construction
+        # We use the numpy array's tolist() which is efficient
+        result = type(self)(pa.array(result_data.tolist()))
+        return result, uniques_list
+[/REPLACE]

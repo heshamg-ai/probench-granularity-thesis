@@ -1,0 +1,50 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        result_data = []
+        for lst in split.to_pylist():
+            if lst is None:
+                result_data.append([False] * len(uniques_sorted))
+            else:
+                res = pc.is_in(uniques_sorted, pa.array(set(lst)))
+                result_data.append(res.to_pylist())
+        result = type(self)(pa.array(result_data))
+        return result, uniques_sorted.to_pylist()
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        uniques_np = uniques_sorted.to_pandas().values
+
+        n_rows = len(split)
+        n_cols = len(uniques_sorted)
+
+        nulls = pc.is_null(split)
+        non_null_idx = pc.indices_nonzero(pc.invert(nulls))
+
+        split_non_null = split.take(non_null_idx)
+
+        exploded = pc.list_flatten(split_non_null)
+        exploded_idx = pc.list_parent_indices(split_non_null)
+
+        match_mask = pc.is_in(uniques_sorted, exploded)
+        col_indices = pc.index_in(uniques_sorted, exploded)
+
+        col_indices_filtered = col_indices.filter(match_mask)
+        row_indices_filtered = exploded_idx.filter(match_mask)
+
+        result_buf = np.zeros((n_rows, n_cols), dtype=np.uint8)
+
+        if len(row_indices_filtered) > 0:
+            row_np = row_indices_filtered.to_numpy()
+            col_np = col_indices_filtered.to_numpy()
+            result_buf[row_np, col_np] = 1
+
+        result = type(self)(pa.array(result_buf, type=pa.bool_()))
+        return result, uniques_np.tolist()
+[/REPLACE]

@@ -1,0 +1,200 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _to_masked(self):
+        pa_dtype = self._pa_array.type
+
+        if pa.types.is_floating(pa_dtype) or pa.types.is_integer(pa_dtype):
+            na_value = 1
+        elif pa.types.is_boolean(pa_dtype):
+            na_value = True
+        else:
+            raise NotImplementedError
+
+        dtype = _arrow_dtype_mapping()[pa_dtype]
+        mask = self.isna()
+        arr = self.to_numpy(dtype=dtype.numpy_dtype, na_value=na_value)
+        return dtype.construct_array_type()(arr, mask)
+[/SEARCH]
+[REPLACE]
+    def _to_masked(self):
+        pa_dtype = self._pa_array.type
+
+        if pa.types.is_floating(pa_dtype) or pa.types.is_integer(pa_dtype):
+            na_value = 1
+        elif pa.types.is_boolean(pa_dtype):
+            na_value = True
+        elif (
+            pa.types.is_timestamp(pa_dtype)
+            or pa.types.is_duration(pa_dtype)
+            or pa.types.is_date(pa_dtype)
+            or pa.types.is_time(pa_dtype)
+        ):
+            na_value = 0
+        else:
+            raise NotImplementedError
+
+        dtype = _arrow_dtype_mapping()[pa_dtype]
+        mask = self.isna()
+        arr = self.to_numpy(dtype=dtype.numpy_dtype, na_value=na_value)
+        return dtype.construct_array_type()(arr, mask)
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _groupby_op(
+        self,
+        *,
+        how: str,
+        has_dropped_na: bool,
+        min_count: int,
+        ngroups: int,
+        ids: npt.NDArray[np.intp],
+        **kwargs,
+    ):
+        if isinstance(self.dtype, StringDtype):
+            return super()._groupby_op(
+                how=how,
+                has_dropped_na=has_dropped_na,
+                min_count=min_count,
+                ngroups=ngroups,
+                ids=ids,
+                **kwargs,
+            )
+
+        masked = self._to_masked()
+
+        result = masked._groupby_op(
+            how=how,
+            has_dropped_na=has_dropped_na,
+            min_count=min_count,
+            ngroups=ngroups,
+            ids=ids,
+            **kwargs,
+        )
+        if isinstance(result, np.ndarray):
+            return result
+        return type(self)._from_sequence(result, copy=False)
+[/SEARCH]
+[REPLACE]
+    def _groupby_op(
+        self,
+        *,
+        how: str,
+        has_dropped_na: bool,
+        min_count: int,
+        ngroups: int,
+        ids: npt.NDArray[np.intp],
+        **kwargs,
+    ):
+        if isinstance(self.dtype, StringDtype):
+            return super()._groupby_op(
+                how=how,
+                has_dropped_na=has_dropped_na,
+                min_count=min_count,
+                ngroups=ngroups,
+                ids=ids,
+                **kwargs,
+            )
+
+        pa_dtype = self._pa_array.type
+        if (
+            how in ("max", "min", "first", "last")
+            and min_count <= 0
+            and not kwargs
+            and not has_dropped_na
+            and (pa.types.is_timestamp(pa_dtype) or pa.types.is_duration(pa_dtype))
+        ):
+            pa_result = _groupby_temporal_maxmin_pyarrow(
+                self._pa_array, how=how, ngroups=ngroups, ids=ids
+            )
+            return type(self)(pa_result)
+
+        masked = self._to_masked()
+
+        result = masked._groupby_op(
+            how=how,
+            has_dropped_na=has_dropped_na,
+            min_count=min_count,
+            ngroups=ngroups,
+            ids=ids,
+            **kwargs,
+        )
+        if isinstance(result, np.ndarray):
+            return result
+        return type(self)._from_sequence(result, copy=False)
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+def transpose_homogeneous_pyarrow(
+[/SEARCH]
+[REPLACE]
+def _groupby_temporal_maxmin_pyarrow(
+    pa_array: pa.ChunkedArray,
+    *,
+    how: str,
+    ngroups: int,
+    ids: npt.NDArray[np.intp],
+) -> pa.Array:
+    """
+    Compute groupby max/min for timestamp/duration arrays directly via
+    PyArrow compute functions, avoiding the NumPy round-trip used by
+    the masked-array path.
+    """
+    # Combine chunks to get a single contiguous Array for the hash_ functions
+    # which expect a single Array input.
+    data = pa_array.combine_chunks()
+    ids_arr = pa.array(ids, type=pa.int64())
+
+    if how in ("first", "last"):
+        # first: take the element at the first occurrence in each group
+        # last:  take the element at the last occurrence in each group
+        pc_op = getattr(pc, f"list_{how}")
+        # Build lists per group, then extract the first/last element
+        grouped = pc.list_flatten(
+            pc.list_slice(
+                pc.array_sort_indices(ids_arr),
+                0,
+                pc.count(ids_arr),
+            )
+        )
+        # The approach above is fragile; instead use hash_list first/last:
+        # hash_list returns lists for each group, then we pick first/last
+        lists = pc.list_flatten(
+            pc.array_sort_indices(ids_arr)
+        )
+        # Simpler: build groups via hash_list
+        lists = pc.hash_list(
+            data,
+            ids_arr,
+            ngroups,
+        )
+        result = pc_op(lists, skip_nulls=False)
+        return result
+
+    # For max/min, convert duration -> int64, operate, then cast back.
+    # Timestamps are already backed by int64 underneath and pyarrow's hash_*
+    # functions handle them natively since Arrow 13+, but duration may still
+    # need casting. We do the safe thing: cast durations to int64, run the
+    # hash, then cast back.
+    pa_type = data.type
+
+    if pa.types.is_duration(pa_type):
+        data = data.cast(pa.int64())
+
+    if how == "max":
+        result = pc.hash_max(data, ids_arr, ngroups)
+    elif how == "min":
+        result = pc.hash_min(data, ids_arr, ngroups)
+    else:
+        raise ValueError(f"Unsupported how='{how}'")
+
+    if pa.types.is_duration(pa_type):
+        result = result.cast(pa_type)
+
+    # hash_max/hash_min can produce nulls for empty groups; that's fine.
+    return result
+
+
+def transpose_homogeneous_pyarrow(
+[/REPLACE]

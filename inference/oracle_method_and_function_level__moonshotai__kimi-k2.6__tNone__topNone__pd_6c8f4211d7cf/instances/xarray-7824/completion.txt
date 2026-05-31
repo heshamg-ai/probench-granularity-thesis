@@ -1,0 +1,58 @@
+xarray/core/concat.py
+[SEARCH]
+    # determine which variables to concatenate
+    concat_over, equals, concat_dim_lengths = _calc_concat_over(
+        datasets, dim, dim_names, data_vars, coords, compat
+    )
+
+    # determine which variables to merge, and then merge them according to compat
+    variables_to_merge = (coord_names | data_names) - concat_over - unlabeled_dims
+
+    result_vars = {}
+    result_indexes = {}
+
+    if variables_to_merge:
+        grouped = {
+            k: v
+            for k, v in collect_variables_and_indexes(list(datasets)).items()
+            if k in variables_to_merge
+        }
+        merged_vars, merged_indexes = merge_collected(
+            grouped, compat=compat, equals=equals
+        )
+        result_vars.update(merged_vars)
+        result_indexes.update(merged_indexes)
+
+    result_vars.update(dim_coords)
+[/SEARCH]
+[REPLACE]
+    # determine which variables to concatenate
+    concat_over, equals, concat_dim_lengths = _calc_concat_over(
+        datasets, dim, dim_names, data_vars, coords, compat
+    )
+
+    # determine which variables to merge, and then merge them according to compat
+    variables_to_merge = (coord_names | data_names) - concat_over - unlabeled_dims
+
+    result_vars = {}
+    result_indexes = {}
+
+    if variables_to_merge:
+        # Collect variables and indexes only for variables we need to merge.
+        # This avoids building large intermediate structures for variables
+        # that will be concatenated, not merged.
+        grouped: dict[Hashable, list] = {}
+        for k in variables_to_merge:
+            for ds in datasets:
+                if k in ds._variables:
+                    # Build MergeElement-like tuple (variable, index)
+                    element = (ds._variables[k], ds._indexes.get(k))
+                    grouped.setdefault(k, []).append(element)
+        merged_vars, merged_indexes = merge_collected(
+            grouped, compat=compat, equals=equals
+        )
+        result_vars.update(merged_vars)
+        result_indexes.update(merged_indexes)
+
+    result_vars.update(dim_coords)
+[/REPLACE]

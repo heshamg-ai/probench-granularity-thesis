@@ -1,0 +1,115 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def argsort(self, *args, **kwargs) -> npt.NDArray[np.intp]:
+        """
+        Returns the indices that would sort the index and its
+        underlying data.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+
+        See Also
+        --------
+        numpy.ndarray.argsort
+        """
+        ascending = kwargs.pop("ascending", True)  # EA compat
+        kwargs.pop("kind", None)  # e.g. "mergesort" is irrelevant
+        nv.validate_argsort(args, kwargs)
+
+        if self._range.step > 0:
+            result = np.arange(len(self), dtype=np.intp)
+        else:
+            result = np.arange(len(self) - 1, -1, -1, dtype=np.intp)
+
+        if not ascending:
+            result = result[::-1]
+        return result
+[/SEARCH]
+[REPLACE]
+    def argsort(self, *args, **kwargs) -> npt.NDArray[np.intp]:
+        """
+        Returns the indices that would sort the index and its
+        underlying data.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+
+        See Also
+        --------
+        numpy.ndarray.argsort
+        """
+        ascending = kwargs.pop("ascending", True)  # EA compat
+        kwargs.pop("kind", None)  # e.g. "mergesort" is irrelevant
+        nv.validate_argsort(args, kwargs)
+
+        return self._argminmax("sort", ascending)
+
+    def argmin(self, axis=None, skipna: bool = True, *args, **kwargs) -> int:
+        """
+        Return int position of the smallest value in the Index.
+
+        It is always 0 for a monotonically increasing RangeIndex,
+        and len(self) - 1 for a monotonically decreasing RangeIndex.
+
+        Parameters
+        ----------
+        axis : None
+            Dummy argument to keep compatibility with Index.
+        skipna : bool, default True
+            Dummy argument to keep compatibility with Index.
+        *args, **kwargs
+            Dummy argument to keep compatibility with Index.
+
+        Returns
+        -------
+        int
+            Position of the minimum (0 for increasing, len-1 for decreasing).
+        """
+        nv.validate_minmax_axis(axis)
+        nv.validate_min(args, kwargs)
+        if len(self) == 0:
+            raise ValueError("attempt to get argmin of an empty sequence")
+        return 0 if self._range.step > 0 else len(self) - 1
+
+    def argmax(self, axis=None, skipna: bool = True, *args, **kwargs) -> int:
+        """
+        Return int position of the largest value in the Index.
+
+        It is always 0 for a monotonically decreasing RangeIndex,
+        and len(self) - 1 for a monotonically increasing RangeIndex.
+
+        Parameters
+        ----------
+        axis : None
+            Dummy argument to keep compatibility with Index.
+        skipna : bool, default True
+            Dummy argument to keep compatibility with Index.
+        *args, **kwargs
+            Dummy argument to keep compatibility with Index.
+
+        Returns
+        -------
+        int
+            Position of the maximum (0 for decreasing, len-1 for increasing).
+        """
+        nv.validate_minmax_axis(axis)
+        nv.validate_max(args, kwargs)
+        if len(self) == 0:
+            raise ValueError("attempt to get argmax of an empty sequence")
+        return 0 if self._range.step < 0 else len(self) - 1
+
+    def _argminmax(self, meth: str, ascending: bool = True) -> npt.NDArray[np.intp]:
+        """
+        Shared implementation for argsort-based argmin/argmax array output.
+        """
+        if self._range.step > 0:
+            result = np.arange(len(self), dtype=np.intp)
+        else:
+            result = np.arange(len(self) - 1, -1, -1, dtype=np.intp)
+
+        if not ascending:
+            result = result[::-1]
+        return result
+[/REPLACE]

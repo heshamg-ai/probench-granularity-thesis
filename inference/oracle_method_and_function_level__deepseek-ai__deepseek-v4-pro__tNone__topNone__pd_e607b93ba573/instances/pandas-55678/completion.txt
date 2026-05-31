@@ -1,0 +1,24 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+                if needs_i8_conversion(lbv.dtype):
+                    lbv = lbv.view("i8")
+                if needs_i8_conversion(rbv.dtype):
+                    rbv = rbv.view("i8")
+[/SEARCH]
+[REPLACE]
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+                if lbv.dtype != rbv.dtype:
+                    common_dtype = np.result_type(lbv.dtype, rbv.dtype)
+                    lbv = lbv.astype(common_dtype)
+                    rbv = rbv.astype(common_dtype)
+                if needs_i8_conversion(lbv.dtype):
+                    # Fast path: view both arrays as i8 in one go to avoid
+                    # extra array allocations and dtype checks.
+                    lbv = lbv.view("i8")
+                    rbv = rbv.view("i8")
+[/REPLACE]

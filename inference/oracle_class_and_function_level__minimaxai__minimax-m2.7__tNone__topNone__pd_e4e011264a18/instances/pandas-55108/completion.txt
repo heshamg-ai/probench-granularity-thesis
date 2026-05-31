@@ -1,0 +1,62 @@
+
+
+Looking at the `difference` method and `_difference` implementation, I can optimize for the disjoint indexes case. When indexes are completely disjoint (no common elements), we can return `self` directly without computing the set difference.
+
+The key insight is that if we can quickly determine that `self` and `other` have no common elements, we can skip the expensive `setdiff1d` operation and return early.
+
+Let me implement this optimization:
+
+pandas/core/indexes/base.py
+[SEARCH]
+    def _difference(self, other, sort):
+        # overridden by RangeIndex
+
+        this = self.unique()
+
+        indexer = this.get_indexer_for(other)
+        indexer = indexer.take((indexer != -1).nonzero()[0])
+
+        label_diff = np.setdiff1d(np.arange(this.size), indexer, assume_unique=True)
+
+        the_diff: MultiIndex | ArrayLike
+        if isinstance(this, ABCMultiIndex):
+            the_diff = this.take(label_diff)
+        else:
+            the_diff = this._values.take(label_diff)
+        the_diff = _maybe_try_sort(the_diff, sort)
+
+        return the_diff
+[/SEARCH]
+[REPLACE]
+    def _difference(self, other, sort):
+        # overridden by RangeIndex
+
+        this = self.unique()
+
+        if this._index_as_unique and this._can_use_libjoin:
+            # Fast path for unique, monotonic indexes: check if indexes are disjoint
+            indexer = this.get_indexer(other)
+            if (indexer == -1).all():
+                # No elements of self are in other -> difference is self
+                if isinstance(this, ABCMultiIndex):
+                    the_diff = this
+                else:
+                    the_diff = this._values
+                if sort is True:
+                    the_diff = _maybe_try_sort(the_diff, sort)
+                return the_diff
+
+        indexer = this.get_indexer_for(other)
+        indexer = indexer.take((indexer != -1).nonzero()[0])
+
+        label_diff = np.setdiff1d(np.arange(this.size), indexer, assume_unique=True)
+
+        the_diff: MultiIndex | ArrayLike
+        if isinstance(this, ABCMultiIndex):
+            the_diff = this.take(label_diff)
+        else:
+            the_diff = this._values.take(label_diff)
+        the_diff = _maybe_try_sort(the_diff, sort)
+
+        return the_diff
+[/REPLACE]

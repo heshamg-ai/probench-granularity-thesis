@@ -1,0 +1,116 @@
+
+
+```python
+pandas/core/indexes/multi.py
+[SEARCH]
+    @Appender(_index_shared_docs["intersection"])  # type: ignore[arg-type]
+    def intersection(
+        self,
+        other: MultiIndex | ArrayLike,
+        sort: bool | None = None,
+    ) -> MultiIndex:
+        # Invalidate the caching for this method
+        self._tuples = None
+        if sort is None:
+            sort = False
+
+        if not isinstance(other, MultiIndex):
+            other = MultiIndex.from_tuples(other)
+        elif self._tuples is not None and other._tuples is not None:
+            # We can use the cached tuples for both
+            return self._intersection(other, sort=sort)
+
+        # Maybe the other has the tuples cached?
+        if other._tuples is not None:
+            return other._intersection(self, sort=sort)
+
+        # Extract from either axis
+        self_codes = self.codes
+        other_codes = other.codes
+
+        # The set comprehension doesn't work because we need
+        # to keep the order of the codes for each element.
+        # So instead, use a dict to map code tuple -> index
+        # This will maintain the order of self's codes
+        codes_intersect: dict[int, int] = {}
+        other_codes_as_set: set[tuple] = set(map(tuple, other_codes))
+
+        for i, code in enumerate(self_codes):
+            if code in other_codes_as_set:
+                codes_intersect[i] = 1
+
+        # Now, generate the new codes
+        # We want to maintain the order of self's codes
+        new_codes = [[c for c in self_codes[i]] for i in codes_intersect]
+
+        return MultiIndex(
+            levels=self._levels,
+            codes=new_codes,
+            verify_integrity=False,
+        )
+[/SEARCH]
+[REPLACE]
+    @Appender(_index_shared_docs["intersection"])  # type: ignore[arg-type]
+    def intersection(
+        self,
+        other: MultiIndex | ArrayLike,
+        sort: bool | None = None,
+    ) -> MultiIndex:
+        # Invalidate the caching for this method
+        self._tuples = None
+        if sort is None:
+            sort = False
+
+        if not isinstance(other, MultiIndex):
+            other = MultiIndex.from_tuples(other)
+        elif self._tuples is not None and other._tuples is not None:
+            # We can use the cached tuples for both
+            return self._intersection(other, sort=sort)
+
+        # Maybe the other has the tuples cached?
+        if other._tuples is not None:
+            return other._intersection(self, sort=sort)
+
+        # Extract from either axis
+        self_codes = self.codes
+        other_codes = other.codes
+
+        n_levels = len(self_codes)
+        n_self = len(self_codes[0]) if n_self_codes := self_codes else 0
+
+        if n_self == 0:
+            return MultiIndex([], names=self.names)
+
+        # Pre-allocate a boolean mask for the size of self
+        # This avoids repeated set lookups and list operations
+        self_len = len(self_codes[0])
+        mask = [False] * self_len
+
+        # Build a frozen set of other_codes tuples for O(1) lookups
+        other_set = set(zip(*other_codes))
+
+        # Vectorized membership test using the pre-built set
+        for i, code in enumerate(self_codes):
+            if i == 0:
+                for idx in range(self_len):
+                    if code[idx] in {c[idx] for c in other_set}:
+                        mask[idx] = True
+            else:
+                # Update mask based on subsequent levels
+                for idx in range(self_len):
+                    if mask[idx] and code[idx] not in {c[i] for c in other_set}:
+                        mask[idx] = False
+
+        # Build new codes only where mask is True
+        new_codes = [[c[idx] for idx, m in enumerate(mask) if m] for c in self_codes]
+
+        if not new_codes or not new_codes[0]:
+            return MultiIndex([], names=self.names)
+
+        return MultiIndex(
+            levels=self._levels,
+            codes=new_codes,
+            verify_integrity=False,
+        )
+[/REPLACE]
+```

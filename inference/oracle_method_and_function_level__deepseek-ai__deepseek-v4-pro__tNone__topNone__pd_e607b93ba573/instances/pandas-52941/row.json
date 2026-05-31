@@ -1,0 +1,59 @@
+{
+  "id": 20,
+  "scenario_id": "pandas-52941",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 52941,
+  "baseline_sha": "103d3b2bb8912c87f3ec11c1048e7e0a19225fef",
+  "reference_sha": "8aa78e54e4f1af270e08d95115b3abab39e9f42b",
+  "task": "Optimize DataFrame.filter(items=...) execution for large items lists that include many non-existent column labels",
+  "entry_point": "pandas.Dataframe.filter",
+  "whats_new": "Performance improvement in DataFrame.filter when ``items`` is given",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-52941:baseline",
+      "digest": "sha256:ff8c035445d87ffb7b06a8f200f42cc4641b3afdee2290f06a5984793af40fa1"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-52941:reference",
+      "digest": "sha256:c9c58a1a721dc85495ad034a16b1c90016aa26295da71a79953c8b95f6ecb0cd"
+    }
+  },
+  "params": [
+    {
+      "name": "Rows",
+      "short_indicator": "R",
+      "explanation": "Number of rows in DataFrame",
+      "values": [
+        "1000",
+        "10000",
+        "100000"
+      ]
+    },
+    {
+      "name": "Columns",
+      "short_indicator": "C",
+      "explanation": "Number of columns",
+      "values": [
+        "10",
+        "100"
+      ]
+    },
+    {
+      "name": "Items List Size",
+      "short_indicator": "ILS",
+      "explanation": "Size of items list to filter",
+      "values": [
+        "100",
+        "1000",
+        "10000"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/copy_view/test_methods.py::test_filter",
+    "pandas/tests/frame/methods/test_filter.py::TestDataFrameFilter::test_filter",
+    "pandas/tests/frame/methods/test_filter.py::TestDataFrameFilter::test_filter_corner"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.Dataframe.filter for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize DataFrame.filter(items=...) execution for large items lists that include many non-existent column labels\nOptimization function: pandas.Dataframe.filter\n\n\n[start of pandas/core/generic.py]\n### Relevant context\n#### Class `pandas.core.generic.NDFrame`\n**Class Signature**\n```python\nclass NDFrame(PandasObject, indexing.IndexingMixin):\n```\n**Class Attributes**\n```python\n    _internal_names: list[str] = [\n        \"_mgr\",\n        \"_cacher\",\n        \"_item_cache\",\n        \"_cache\",\n        \"_is_copy\",\n        \"_name\",\n        \"_metadata\",\n        \"__array_struct__\",\n        \"__array_interface__\",\n        \"_flags\",\n    ]\n    _internal_names_set: set[str] = set(_internal_names)\n    _accessors: set[str] = set()\n    _hidden_attrs: frozenset[str] = frozenset([])\n    _metadata: list[str] = []\n    _is_copy: weakref.ReferenceType[NDFrame] | str | None = None\n    _mgr: Manager\n    _attrs: dict[Hashable, Any]\n    _typ: str\n    _AXIS_ORDERS: list[Literal[\"index\", \"columns\"]]\n    _AXIS_TO_AXIS_NUMBER: dict[Axis, AxisInt] = {0: 0, \"index\": 0, \"rows\": 0}\n    _info_axis_number: int\n    _info_axis_name: Literal[\"index\", \"columns\"]\n    _AXIS_LEN: int\n    __bool__ = __nonzero__\n    __hash__: ClassVar[None]  # type: ignore[assignment]\n    __array_priority__: int = 1000\n    kurtosis = kurt\n    product = prod\n```\n**Class __init__ method**\n```python\n    def __init__(self, data: Manager) -> None:\n        object.__setattr__(self, \"_is_copy\", None)\n        object.__setattr__(self, \"_mgr\", data)\n        object.__setattr__(self, \"_item_cache\", {})\n        object.__setattr__(self, \"_attrs\", {})\n        object.__setattr__(self, \"_flags\", Flags(self, allows_duplicate_labels=True))\n```\n##### Method `pandas.core.generic.NDFrame.filter`\n```python\ndef filter(\n        self,\n        items=None,\n        like: str | None = None,\n        regex: str | None = None,\n        axis: Axis | None = None,\n    ) -> Self:\n        \"\"\"\n        Subset the dataframe rows or columns according to the specified index labels.\n\n        Note that this routine does not filter a dataframe on its\n        contents. The filter is applied to the labels of the index.\n\n        Parameters\n        ----------\n        items : list-like\n            Keep labels from axis which are in items.\n        like : str\n            Keep labels from axis for which \"like in label == True\".\n        regex : str (regular expression)\n            Keep labels from axis for which re.search(regex, label) == True.\n        axis : {0 or ‘index’, 1 or ‘columns’, None}, default None\n            The axis to filter on, expressed either as an index (int)\n            or axis name (str). By default this is the info axis, 'columns' for\n            DataFrame. For `Series` this parameter is unused and defaults to `None`.\n\n        Returns\n        -------\n        same type as input object\n\n        See Also\n        --------\n        DataFrame.loc : Access a group of rows and columns\n            by label(s) or a boolean array.\n\n        Notes\n        -----\n        The ``items``, ``like``, and ``regex`` parameters are\n        enforced to be mutually exclusive.\n\n        ``axis`` defaults to the info axis that is used when indexing\n        with ``[]``.\n\n        Examples\n        --------\n        >>> df = pd.DataFrame(np.array(([1, 2, 3], [4, 5, 6])),\n        ...                   index=['mouse', 'rabbit'],\n        ...                   columns=['one', 'two', 'three'])\n        >>> df\n                one  two  three\n        mouse     1    2      3\n        rabbit    4    5      6\n\n        >>> # select columns by name\n        >>> df.filter(items=['one', 'three'])\n                 one  three\n        mouse     1      3\n        rabbit    4      6\n\n        >>> # select columns by regular expression\n        >>> df.filter(regex='e$', axis=1)\n                 one  three\n        mouse     1      3\n        rabbit    4      6\n\n        >>> # select rows containing 'bbi'\n        >>> df.filter(like='bbi', axis=0)\n                 one  two  three\n        rabbit    4    5      6\n        \"\"\"\n        nkw = common.count_not_none(items, like, regex)\n        if nkw > 1:\n            raise TypeError(\n                \"Keyword arguments `items`, `like`, or `regex` \"\n                \"are mutually exclusive\"\n            )\n\n        if axis is None:\n            axis = self._info_axis_name\n        labels = self._get_axis(axis)\n\n        if items is not None:\n            name = self._get_axis_name(axis)\n            # error: Keywords must be strings\n            return self.reindex(  # type: ignore[misc]\n                **{name: [r for r in items if r in labels]}  # type: ignore[arg-type]\n            )\n        elif like:\n\n            def f(x) -> bool_t:\n                assert like is not None  # needed for mypy\n                return like in ensure_str(x)\n\n            values = labels.map(f)\n            return self.loc(axis=axis)[values]\n        elif regex:\n\n            def f(x) -> bool_t:\n                return matcher.search(ensure_str(x)) is not None\n\n            matcher = re.compile(regex)\n            values = labels.map(f)\n            return self.loc(axis=axis)[values]\n        else:\n            raise TypeError(\"Must pass either `items`, `like`, or `regex`\")\n```\n[end of pandas/core/generic.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

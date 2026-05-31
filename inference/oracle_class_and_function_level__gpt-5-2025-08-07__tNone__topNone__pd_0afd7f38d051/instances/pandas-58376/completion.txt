@@ -1,0 +1,44 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+[/SEARCH]
+[REPLACE]
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+
+    def value_counts(
+        self,
+        normalize: bool = False,
+        sort: bool = True,
+        ascending: bool = False,
+        bins=None,
+        dropna: bool = True,
+    ) -> Series:
+        if bins is not None or len(self) == 0:
+            return super().value_counts(
+                normalize=normalize,
+                sort=sort,
+                ascending=ascending,
+                bins=bins,
+                dropna=dropna,
+            )
+
+        from pandas import Series as _Series, Index as _Index
+
+        # All values in a RangeIndex are unique and non-NA
+        n = len(self)
+        if normalize:
+            values = np.empty(n, dtype=np.float64)
+            values.fill(1.0 / n)
+            name = "proportion"
+        else:
+            values = np.ones(n, dtype=np.int64)
+            name = "count"
+
+        idx = _Index(self._data)
+        result = _Series(values, index=idx, name=name)
+        # Sorting by counts is a no-op since all counts are identical;
+        # preserve original order to match stable behavior.
+        return result
+[/REPLACE]

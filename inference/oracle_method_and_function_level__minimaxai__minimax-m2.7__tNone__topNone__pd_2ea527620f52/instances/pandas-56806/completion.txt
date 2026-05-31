@@ -1,0 +1,70 @@
+
+
+Looking at this problem, I need to optimize `Index.take` for the case when indices represents a full-range selection (i.e., all elements in order). This avoids unnecessary overhead from `algos.take`.
+
+Let me implement the optimization:
+
+pandas/core/indexes/base.py
+[SEARCH]
+        if is_scalar(indices):
+            raise TypeError("Expected indices to be array-like")
+        indices = ensure_platform_int(indices)
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+
+        # Note: we discard fill_value and use self._na_value, only relevant
+        #  in the case where allow_fill is True and fill_value is not None
+        values = self._values
+        if isinstance(values, np.ndarray):
+            taken = algos.take(
+                values, indices, allow_fill=allow_fill, fill_value=self._na_value
+            )
+        else:
+            # algos.take passes 'axis' keyword which not all EAs accept
+            taken = values.take(
+                indices, allow_fill=allow_fill, fill_value=self._na_value
+            )
+        return self._constructor._simple_new(taken, name=self.name)
+[/SEARCH]
+[REPLACE]
+        if is_scalar(indices):
+            raise TypeError("Expected indices to be array-like")
+        indices = ensure_platform_int(indices)
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+
+        # Fast path for full-range indices (all elements in order)
+        n = len(self)
+        if n == 0:
+            # Empty index case
+            values = self._values
+            if isinstance(values, np.ndarray):
+                taken = algos.take(
+                    values, indices, allow_fill=allow_fill, fill_value=self._na_value
+                )
+            else:
+                taken = values.take(
+                    indices, allow_fill=allow_fill, fill_value=self._na_value
+                )
+        elif len(indices) == n and np.all(np.diff(indices) == 1) and indices[0] == 0:
+            # Full-range indices: all elements selected in consecutive order
+            values = self._values
+            if isinstance(values, np.ndarray):
+                taken = values.copy()
+            else:
+                taken = values.take(
+                    indices, allow_fill=allow_fill, fill_value=self._na_value
+                )
+        else:
+            # Note: we discard fill_value and use self._na_value, only relevant
+            #  in the case where allow_fill is True and fill_value is not None
+            values = self._values
+            if isinstance(values, np.ndarray):
+                taken = algos.take(
+                    values, indices, allow_fill=allow_fill, fill_value=self._na_value
+                )
+            else:
+                # algos.take passes 'axis' keyword which not all EAs accept
+                taken = values.take(
+                    indices, allow_fill=allow_fill, fill_value=self._na_value
+                )
+        return self._constructor._simple_new(taken, name=self.name)
+[/REPLACE]

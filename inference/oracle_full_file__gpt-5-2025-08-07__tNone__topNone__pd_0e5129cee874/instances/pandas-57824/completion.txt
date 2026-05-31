@@ -1,0 +1,42 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+[/SEARCH]
+[REPLACE]
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+
+    def round(self, decimals: int = 0) -> Self:
+        """
+        Round each value in the Index to the given number of decimals.
+
+        For RangeIndex (integral values), rounding is a no-op when it cannot
+        change any values; in that case, return a RangeIndex view to avoid
+        materializing an Index. Otherwise, fall back to the base implementation.
+        """
+        # Empty RangeIndex: nothing to round, preserve type
+        if len(self) == 0:
+            return self._view()
+
+        # Rounding integers with non-negative decimals is a no-op
+        if decimals >= 0:
+            return self._view()
+
+        # For negative decimals, if all values are multiples of the rounding
+        # factor, rounding is a no-op. This holds when both start and step
+        # are divisible by factor.
+        try:
+            factor = 10 ** (-decimals)
+        except Exception:
+            return super().round(decimals)
+
+        if factor == 1:
+            return self._view()
+
+        if self.start % factor == 0 and self.step % factor == 0:
+            return self._view()
+
+        # Fallback: construct via base implementation (returns Index)
+        return super().round(decimals)
+[/REPLACE]

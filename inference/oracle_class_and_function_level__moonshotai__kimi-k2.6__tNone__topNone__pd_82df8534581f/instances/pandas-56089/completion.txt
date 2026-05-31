@@ -1,0 +1,42 @@
+ pandas/core/reshape/encoding.py
+[SEARCH]
+def _get_dummies_1d(
+    data,
+    prefix,
+    prefix_sep: str | Iterable[str] | dict[str, str] = "_",
+    dummy_na: bool = False,
+    sparse: bool = False,
+    drop_first: bool = False,
+    dtype: NpDtype | None = None,
+) -> DataFrame:
+    from pandas.core.reshape.concat import concat
+
+    # Series avoids inconsistent NaN handling
+    codes, levels = factorize_from_iterable(Series(data, copy=False))
+[/SEARCH]
+[REPLACE]
+def _get_dummies_1d(
+    data,
+    prefix,
+    prefix_sep: str | Iterable[str] | dict[str, str] = "_",
+    dummy_na: bool = False,
+    sparse: bool = False,
+    drop_first: bool = False,
+    dtype: NpDtype | None = None,
+) -> DataFrame:
+    from pandas.core.reshape.concat import concat
+
+    # Series avoids inconsistent NaN handling
+    # Fast path for Categorical: use pre-computed codes and categories directly
+    if isinstance(data, Categorical):
+        codes = data.codes.copy()
+        levels = Index(data.categories)
+        # Convert to Series for consistent index handling in rest of function
+        data = Series(data, copy=False)
+    elif isinstance(data, Series) and isinstance(data.array, Categorical):
+        cat = data.array
+        codes = cat.codes.copy()
+        levels = Index(cat.categories)
+    else:
+        codes, levels = factorize_from_iterable(Series(data, copy=False))
+[/REPLACE]

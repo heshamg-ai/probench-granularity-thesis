@@ -1,0 +1,60 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    _range: range
+    _values: np.ndarray
+[/SEARCH]
+[REPLACE]
+    _range: range
+    _values: np.ndarray
+
+    @final
+    def value_counts(
+        self,
+        normalize: bool = False,
+        sort: bool = True,
+        ascending: bool = False,
+        bins=None,
+        dropna: bool = True,
+    ) -> Series:
+        from pandas import Series
+
+        if bins is not None:
+            return super().value_counts(
+                normalize=normalize,
+                sort=sort,
+                ascending=ascending,
+                bins=bins,
+                dropna=dropna,
+            )
+
+        n = len(self)
+        if n == 0:
+            return Series(
+                [], dtype="int64" if not normalize else "float64", name="count" if not normalize else "proportion"
+            )
+
+        start = self._range.start
+        step = self._range.step
+        if step == 0:
+            raise ValueError("RangeIndex step must not be 0")
+
+        has_na = False
+        if not dropna:
+            has_na = is_valid_na_for_dtype(self.dtype, self.dtype.na_value) if hasattr(self.dtype, 'na_value') else False
+            has_na = False  # RangeIndex is integer, no NA
+
+        values = np.arange(start, start + n * step, step, dtype=np.intp)
+        counts = np.ones(n, dtype=np.int64)
+        index = values
+
+        result = Series(counts, index=index, name="count" if not normalize else "proportion", copy=False)
+
+        if sort:
+            result = result.sort_values(ascending=ascending)
+
+        if normalize and n > 0:
+            result = result.astype("float64") / n
+            result.name = "proportion"
+
+        return result
+[/REPLACE]

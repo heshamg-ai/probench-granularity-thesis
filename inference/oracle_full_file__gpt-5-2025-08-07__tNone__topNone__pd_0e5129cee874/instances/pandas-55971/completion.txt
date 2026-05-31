@@ -1,0 +1,16 @@
+pandas/_testing/asserters.py
+[SEARCH]
+    if check_like:
+        left = left.reindex_like(right)
+[/SEARCH]
+[REPLACE]
+    if check_like:
+        # Fast path for permuting to match right's order without full reindex
+        if not left.index.equals(right.index):
+            indexer = left.index.get_indexer_for(right.index)
+            if (indexer >= 0).all():
+                left = left.take(indexer)
+            else:
+                # Fallback to reindex_like to preserve exact semantics
+                left = left.reindex_like(right)
+[/REPLACE]

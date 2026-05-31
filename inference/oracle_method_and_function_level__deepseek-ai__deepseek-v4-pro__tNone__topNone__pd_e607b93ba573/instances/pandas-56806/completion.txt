@@ -1,0 +1,36 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        # Note: we discard fill_value and use self._na_value, only relevant
+        #  in the case where allow_fill is True and fill_value is not None
+        values = self._values
+        if isinstance(values, np.ndarray):
+            taken = algos.take(
+                values, indices, allow_fill=allow_fill, fill_value=self._na_value
+            )
+        else:
+            # algos.take passes 'axis' keyword which not all EAs accept
+            taken = values.take(
+                indices, allow_fill=allow_fill, fill_value=self._na_value
+            )
+        return self._constructor._simple_new(taken, name=self.name)
+[/SEARCH]
+[REPLACE]
+        # Note: we discard fill_value and use self._na_value, only relevant
+        #  in the case where allow_fill is True and fill_value is not None
+        values = self._values
+        if isinstance(values, np.ndarray):
+            # Fast path: full-range non-filling take can reuse the array
+            # via direct indexing rather than algos.take overhead.
+            if not allow_fill:
+                taken = values.take(indices, axis=0)
+            else:
+                taken = algos.take(
+                    values, indices, allow_fill=True, fill_value=self._na_value
+                )
+        else:
+            # algos.take passes 'axis' keyword which not all EAs accept
+            taken = values.take(
+                indices, allow_fill=allow_fill, fill_value=self._na_value
+            )
+        return self._constructor._simple_new(taken, name=self.name)
+[/REPLACE]

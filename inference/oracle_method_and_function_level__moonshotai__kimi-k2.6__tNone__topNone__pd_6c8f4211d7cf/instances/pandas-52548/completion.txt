@@ -1,0 +1,19 @@
+ pandas/io/parsers/base_parser.py
+[SEARCH]
+        # Pyarrow engine returns Series which we need to convert to
+        # numpy array before converter, its a no-op for other parsers
+        data_dict[colspec] = converter(
+            np.asarray(data_dict[colspec]), col=colspec
+        )
+[/SEARCH]
+[REPLACE]
+        # Pyarrow engine returns Series/ExtensionArray which we need to convert to
+        # numpy array before converter, its a no-op for other parsers.
+        # Use .to_numpy() for ArrowExtensionArray to avoid copying when possible
+        col_data = data_dict[colspec]
+        if hasattr(col_data, "to_numpy"):
+            col_data = col_data.to_numpy(dtype=object, na_value=np.nan)
+        else:
+            col_data = np.asarray(col_data)
+        data_dict[colspec] = converter(col_data, col=colspec)
+[/REPLACE]

@@ -1,0 +1,171 @@
+
+
+```python
+pandas/core/groupby/groupby.py
+[SEARCH]
+    @final
+    def size(self) -> Series:
+        """
+        Return the computed group sizes.
+
+        Returns
+        -------
+        Series
+            The returned Series will have a float dtype.
+
+        See Also
+        --------
+        DataFrame.groupby.size : Return the group sizes.
+        GroupBy.count : Return the count of values in each group.
+        Series.groupby : Group Series using a mapper.
+
+        Examples
+        --------
+        >>> df = pd.DataFrame(
+        ...     {"A": ["foo", "foo", "bar"], "B": ["one", "two", "one"]}, dtype=object
+        ... )
+        >>> df.groupby("A").size()
+        A
+        foo    2
+        bar    1
+        dtype: int64
+
+        >>> df.groupby(["A", "B"]).size()
+        A    B
+        foo  one    1
+             two    1
+        bar  one    1
+        dtype: int64
+        """
+        result = self._grouper.size()
+        return self._wrap_applied_output(
+            result, None, is_numeric=False, is_all NA=False
+        )
+[/SEARCH]
+[REPLACE]
+    @final
+    def size(self) -> Series:
+        """
+        Return the computed group sizes.
+
+        Returns
+        -------
+        Series
+            The returned Series will have a float dtype.
+
+        See Also
+        --------
+        DataFrame.groupby.size : Return the group sizes.
+        GroupBy.count : Return the count of values in each group.
+        Series.groupby : Group Series using a mapper.
+
+        Examples
+        --------
+        >>> df = pd.DataFrame(
+        ...     {"A": ["foo", "foo", "bar"], "B": ["one", "two", "one"]}, dtype=object
+        ... )
+        >>> df.groupby("A").size()
+        A
+        foo    2
+        bar    1
+        dtype: int64
+
+        >>> df.groupby(["A", "B"]).size()
+        A    B
+        foo  one    1
+             two    1
+        bar  one    1
+        dtype: int64
+        """
+        result = self._grouper.size()
+        return self._wrap_applied_output(
+            result, None, is_numeric=False, is_all NA=False
+        )
+[/REPLACE]
+```
+
+```python
+pandas/core/groupby/ops.py
+[SEARCH]
+    def size(self) -> Series:
+        ids, obs_group_ids = self.group_info
+        if len(ids) == 0:
+            return self._grouper.size_dtype(self.group_keys_seq)
+
+        mask = ids != -1
+        ids = ids[mask]
+
+        obs_group_ids = ensure_int64(obs_group_ids)
+
+        if self.has_dropped_nan:
+            # Count non-NaN values only
+            counts = np.bincount(
+                ids, minlength=len(obs_group_ids)
+            )
+        else:
+            counts = np.bincount(ids, minlength=len(obs_group_ids))
+
+        # build the result from the group ids and counts
+        index = self.result_index
+        if self.should_sort:
+            sorter = np.argsort(obs_group_ids, kind="quicksort")
+            counts = counts[sorter]
+            obs_group_ids = obs_group_ids[sorter]
+        else:
+            # keep the order as the group keys
+            index = index.take(obs_group_ids)
+
+        return Series(
+            counts,
+            index=index,
+            dtype=np.int64,
+        )
+[/SEARCH]
+[REPLACE]
+    def size(self) -> Series:
+        ids, obs_group_ids = self.group_info
+        if len(ids) == 0:
+            return self._grouper.size_dtype(self.group_keys_seq)
+
+        mask = ids != -1
+        ids = ids[mask]
+
+        obs_group_ids = ensure_int64(obs_group_ids)
+
+        if self.has_dropped_nan:
+            # Count non-NaN values only
+            counts = np.bincount(
+                ids, minlength=len(obs_group_ids)
+            )
+        else:
+            counts = np.bincount(ids, minlength=len(obs_group_ids))
+
+        # build the result from the group ids and counts
+        index = self.result_index
+        if self.should_sort:
+            sorter = np.argsort(obs_group_ids, kind="quicksort")
+            counts = counts[sorter]
+            obs_group_ids = obs_group_ids[sorter]
+        else:
+            # keep the order as the group keys
+            index = index.take(obs_group_ids)
+
+        return Series(
+            counts,
+            index=index,
+            dtype=np.int64,
+        )
+[/REPLACE]
+```
+
+```python
+pandas/core/groupby/grouper.py
+[SEARCH]
+    def size(self) -> Series:
+        ...
+[/SEARCH]
+[REPLACE]
+    def size(self) -> Series:
+        ...
+[/REPLACE]
+```

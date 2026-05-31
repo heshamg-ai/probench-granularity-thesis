@@ -1,0 +1,414 @@
+Here are the changes to optimize `DataFrame.merge` for monotonic, sorted keys:
+
+pandas/core/reshape/merge.py
+[SEARCH]
+def get_join_indexers(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    sort: bool = False,
+    how: JoinHow = "inner",
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+    """
+
+    Parameters
+    ----------
+    left_keys : list[ndarray, ExtensionArray, Index, Series]
+    right_keys : list[ndarray, ExtensionArray, Index, Series]
+    sort : bool, default False
+    how : {'inner', 'outer', 'left', 'right'}, default 'inner'
+
+    Returns
+    -------
+    np.ndarray[np.intp]
+        Indexer into the left_keys.
+    np.ndarray[np.intp]
+        Indexer into the right_keys.
+    """
+    assert len(left_keys) == len(
+        right_keys
+    ), "left_keys and right_keys must be the same length"
+
+    # fast-path for empty left/right
+    left_n = len(left_keys[0])
+    right_n = len(right_keys[0])
+    if left_n == 0:
+        if how in ["left", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["right", "outer"]:
+            return _get_no_sort_one_missing_indexer(right_n, True)
+    elif right_n == 0:
+        if how in ["right", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["left", "outer"]:
+            return _get_no_sort_one_missing_indexer(left_n, False)
+
+    # get left & right join labels and num. of levels at each location
+    mapped = (
+        _factorize_keys(left_keys[n], right_keys[n], sort=sort)
+        for n in range(len(left_keys))
+    )
+    zipped = zip(*mapped)
+    llab, rlab, shape = (list(x) for x in zipped)
+
+    # get flat i8 keys from label lists
+    lkey, rkey = _get_join_keys(llab, rlab, tuple(shape), sort)
+
+    # factorize keys to a dense i8 space
+    # `count` is the num. of unique keys
+    # set(lkey) | set(rkey) == range(count)
+
+    lkey, rkey, count = _factorize_keys(lkey, rkey, sort=sort)
+    # preserve left frame order if how == 'left' and sort == False
+    kwargs = {}
+    if how in ("inner", "left", "right"):
+        kwargs["sort"] = sort
+    join_func = {
+        "inner": libjoin.inner_join,
+        "left": libjoin.left_outer_join,
+        "right": lambda x, y, count, **kwargs: libjoin.left_outer_join(
+            y, x, count, **kwargs
+        )[::-1],
+        "outer": libjoin.full_outer_join,
+    }[how]
+
+    # error: Cannot call function of unknown type
+    return join_func(lkey, rkey, count, **kwargs)  # type: ignore[operator]
+[/SEARCH]
+[REPLACE]
+def get_join_indexers(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    sort: bool = False,
+    how: JoinHow = "inner",
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+    """
+
+    Parameters
+    ----------
+    left_keys : list[ndarray, ExtensionArray, Index, Series]
+    right_keys : list[ndarray, ExtensionArray, Index, Series]
+    sort : bool, default False
+    how : {'inner', 'outer', 'left', 'right'}, default 'inner'
+
+    Returns
+    -------
+    np.ndarray[np.intp]
+        Indexer into the left_keys.
+    np.ndarray[np.intp]
+        Indexer into the right_keys.
+    """
+    assert len(left_keys) == len(
+        right_keys
+    ), "left_keys and right_keys must be the same length"
+
+    # fast-path for empty left/right
+    left_n = len(left_keys[0])
+    right_n = len(right_keys[0])
+    if left_n == 0:
+        if how in ["left", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["right", "outer"]:
+            return _get_no_sort_one_missing_indexer(right_n, True)
+    elif right_n == 0:
+        if how in ["right", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["left", "outer"]:
+            return _get_no_sort_one_missing_indexer(left_n, False)
+
+    # Fast-path for sorted monotonic keys on a single level
+    if (
+        len(left_keys) == 1
+        and not sort
+        and len(left_keys[0]) > 0
+        and len(right_keys[0]) > 0
+    ):
+        lvals = left_keys[0]
+        rvals = right_keys[0]
+        if lvals.dtype == rvals.dtype and (
+            isinstance(lvals, np.ndarray)
+            and isinstance(rvals, np.ndarray)
+        ):
+            # Check if both are monotonic increasing
+            l_mono = _is_monotonic_increasing(lvals)
+            r_mono = _is_monotonic_increasing(rvals)
+            if l_mono and r_mono:
+                try:
+                    return _sorted_join_indexers(
+                        np.asarray(lvals),
+                        np.asarray(rvals),
+                        how=how,
+                    )
+                except Exception:
+                    # fall back to the general path on any failure
+                    pass
+
+    # get left & right join labels and num. of levels at each location
+    mapped = (
+        _factorize_keys(left_keys[n], right_keys[n], sort=sort)
+        for n in range(len(left_keys))
+    )
+    zipped = zip(*mapped)
+    llab, rlab, shape = (list(x) for x in zipped)
+
+    # get flat i8 keys from label lists
+    lkey, rkey = _get_join_keys(llab, rlab, tuple(shape), sort)
+
+    # factorize keys to a dense i8 space
+    # `count` is the num. of unique keys
+    # set(lkey) | set(rkey) == range(count)
+
+    lkey, rkey, count = _factorize_keys(lkey, rkey, sort=sort)
+    # preserve left frame order if how == 'left' and sort == False
+    kwargs = {}
+    if how in ("inner", "left", "right"):
+        kwargs["sort"] = sort
+    join_func = {
+        "inner": libjoin.inner_join,
+        "left": libjoin.left_outer_join,
+        "right": lambda x, y, count, **kwargs: libjoin.left_outer_join(
+            y, x, count, **kwargs
+        )[::-1],
+        "outer": libjoin.full_outer_join,
+    }[how]
+
+    # error: Cannot call function of unknown type
+    return join_func(lkey, rkey, count, **kwargs)  # type: ignore[operator]
+[/REPLACE]
+
+pandas/core/reshape/merge.py
+[SEARCH]
+    # error: Cannot call function of unknown type
+    return join_func(lkey, rkey, count, **kwargs)  # type: ignore[operator]
+[/SEARCH]
+[REPLACE]
+def _is_monotonic_increasing(arr: np.ndarray) -> bool:
+    """
+    Check whether the given array is strictly or non-strictly monotonic increasing.
+    Returns True for arrays with all equal values as well.
+    """
+    if len(arr) <= 1:
+        return True
+    # Use memcmp-style check for non-decreasing property
+    # This avoids creating a large boolean array
+    return not (arr[1:] < arr[:-1]).any()
+
+
+def _sorted_join_indexers(
+    left: np.ndarray,
+    right: np.ndarray,
+    how: JoinHow = "inner",
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+    """
+    Compute join indexers for two sorted, monotonic, same-dtype arrays
+    without hashing or factorization.
+
+    Parameters
+    ----------
+    left : np.ndarray
+        Sorted monotonic increasing values.
+    right : np.ndarray
+        Sorted monotonic increasing values.
+    how : {'inner', 'outer', 'left', 'right'}
+
+    Returns
+    -------
+    left_indexer : np.ndarray[np.intp]
+    right_indexer : np.ndarray[np.intp]
+    """
+    # Use searchsorted to find matching positions.
+    # For each key in the smaller array, find where it would be inserted
+    # in the larger array, then walk both sides.
+
+    if how == "inner":
+        return _sorted_inner_join(left, right)
+    elif how == "left":
+        return _sorted_left_join(left, right)
+    elif how == "right":
+        right_idx, left_idx = _sorted_left_join(right, left)
+        return left_idx, right_idx
+    elif how == "outer":
+        return _sorted_outer_join(left, right)
+    else:
+        raise ValueError(f"Unsupported join how: {how}")
+
+
+def _sorted_inner_join(
+    left: np.ndarray, right: np.ndarray
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+    """
+    Inner join for sorted monotonic arrays.
+    For each element in the smaller array, find all matching elements
+    in the larger array using searchsorted to bound the range.
+    """
+    n_left = len(left)
+    n_right = len(right)
+
+    if n_left == 0 or n_right == 0:
+        return np.array([], dtype=np.intp), np.array([], dtype=np.intp)
+
+    # Walk both arrays simultaneously
+    li = 0
+    ri = 0
+    left_indices = []
+    right_indices = []
+
+    while li < n_left and ri < n_right:
+        lval = left[li]
+        rval = right[ri]
+
+        if lval < rval:
+            li += 1
+        elif rval < lval:
+            ri += 1
+        else:
+            # Found matching value: count duplicates on both sides
+            # Advance left through duplicates
+            l_start = li
+            while li < n_left and left[li] == lval:
+                li += 1
+            l_count = li - l_start
+
+            # Advance right through duplicates
+            r_start = ri
+            while ri < n_right and right[ri] == rval:
+                ri += 1
+            r_count = ri - r_start
+
+            # Cross product of duplicates
+            for l_idx in range(l_start, li):
+                for r_idx in range(r_start, ri):
+                    left_indices.append(l_idx)
+                    right_indices.append(r_idx)
+
+    if not left_indices:
+        return np.array([], dtype=np.intp), np.array([], dtype=np.intp)
+
+    return np.array(left_indices, dtype=np.intp), np.array(right_indices, dtype=np.intp)
+
+
+def _sorted_left_join(
+    left: np.ndarray, right: np.ndarray
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+    """
+    Left outer join for sorted monotonic arrays.
+    All rows from left are preserved; for unmatched left rows,
+    the right indexer is -1.
+    """
+    n_left = len(left)
+    n_right = len(right)
+
+    if n_left == 0:
+        return np.array([], dtype=np.intp), np.array([], dtype=np.intp)
+
+    if n_right == 0:
+        return np.arange(n_left, dtype=np.intp), np.full(n_left, -1, dtype=np.intp)
+
+    li = 0
+    ri = 0
+    left_indices = []
+    right_indices = []
+
+    while li < n_left and ri < n_right:
+        lval = left[li]
+        rval = right[ri]
+
+        if lval < rval:
+            # No match for this left value
+            left_indices.append(li)
+            right_indices.append(-1)
+            li += 1
+        elif rval < lval:
+            ri += 1
+        else:
+            # Matching value: cross product
+            l_start = li
+            while li < n_left and left[li] == lval:
+                li += 1
+
+            r_start = ri
+            while ri < n_right and right[ri] == rval:
+                ri += 1
+
+            for l_idx in range(l_start, li):
+                for r_idx in range(r_start, ri):
+                    left_indices.append(l_idx)
+                    right_indices.append(r_idx)
+
+    # Remaining left items have no match
+    while li < n_left:
+        left_indices.append(li)
+        right_indices.append(-1)
+        li += 1
+
+    return np.array(left_indices, dtype=np.intp), np.array(right_indices, dtype=np.intp)
+
+
+def _sorted_outer_join(
+    left: np.ndarray, right: np.ndarray
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+    """
+    Full outer join for sorted monotonic arrays.
+    """
+    n_left = len(left)
+    n_right = len(right)
+
+    if n_left == 0:
+        return (
+            np.full(n_right, -1, dtype=np.intp),
+            np.arange(n_right, dtype=np.intp),
+        )
+    if n_right == 0:
+        return (
+            np.arange(n_left, dtype=np.intp),
+            np.full(n_left, -1, dtype=np.intp),
+        )
+
+    li = 0
+    ri = 0
+    left_indices = []
+    right_indices = []
+
+    while li < n_left and ri < n_right:
+        lval = left[li]
+        rval = right[ri]
+
+        if lval < rval:
+            left_indices.append(li)
+            right_indices.append(-1)
+            li += 1
+        elif rval < lval:
+            left_indices.append(-1)
+            right_indices.append(ri)
+            ri += 1
+        else:
+            # Matching value: cross product
+            l_start = li
+            while li < n_left and left[li] == lval:
+                li += 1
+
+            r_start = ri
+            while ri < n_right and right[ri] == rval:
+                ri += 1
+
+            for l_idx in range(l_start, li):
+                for r_idx in range(r_start, ri):
+                    left_indices.append(l_idx)
+                    right_indices.append(r_idx)
+
+    # Remaining left
+    while li < n_left:
+        left_indices.append(li)
+        right_indices.append(-1)
+        li += 1
+
+    # Remaining right
+    while ri < n_right:
+        left_indices.append(-1)
+        right_indices.append(ri)
+        ri += 1
+
+    return np.array(left_indices, dtype=np.intp), np.array(right_indices, dtype=np.intp)
+
+    # error: Cannot call function of unknown type
+    return join_func(lkey, rkey, count, **kwargs)  # type: ignore[operator]
+[/REPLACE]

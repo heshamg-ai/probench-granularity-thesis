@@ -1,0 +1,108 @@
+ sklearn/neighbors/_nearest_centroid.py
+[SEARCH]
+    def predict(self, X):
+        """Perform classification on an array of test vectors `X`.
+
+        The predicted class `C` for each sample in `X` is returned.
+
+        Parameters
+        ----------
+        X : {array-like, sparse matrix} of shape (n_samples, n_features)
+            Test samples.
+
+        Returns
+        -------
+        C : ndarray of shape (n_samples,)
+            The predicted classes.
+
+        Notes
+        -----
+        If the metric constructor parameter is `"precomputed"`, `X` is assumed
+        to be the distance matrix between the data to be predicted and
+        `self.centroids_`.
+        """
+        check_is_fitted(self)
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+
+        return self.classes_[
+            pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)
+        ]
+[/SEARCH]
+[REPLACE]
+    def predict(self, X):
+        """Perform classification on an array of test vectors `X`.
+
+        The predicted class `C` for each sample in `X` is returned.
+
+        Parameters
+        ----------
+        X : {array-like, sparse matrix} of shape (n_samples, n_features)
+            Test samples.
+
+        Returns
+        -------
+        C : ndarray of shape (n_samples,)
+            The predicted classes.
+
+        Notes
+        -----
+        If the metric constructor parameter is `"precomputed"`, `X` is assumed
+        to be the distance matrix between the data to be predicted and
+        `self.centroids_`.
+        """
+        check_is_fitted(self)
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+
+        metric = self.metric
+        centroids = self.centroids_
+        classes = self.classes_
+
+        # Fast path for common metrics using optimized Cython backends
+        if metric == "euclidean":
+            # For Euclidean, use argmin of squared distances to avoid sqrt
+            # cdist with 'sqeuclidean' is faster than 'euclidean'
+            distances = scipy.spatial.distance.cdist(X, centroids, metric="sqeuclidean")
+            return classes[distances.argmin(axis=1)]
+        elif metric == "manhattan":
+            # cdist with 'cityblock' uses optimized C backends
+            distances = scipy.spatial.distance.cdist(X, centroids, metric="cityblock")
+            return classes[distances.argmin(axis=1)]
+        elif metric == "cosine":
+            # For cosine: maximize cosine similarity = minimize negative dot product / norms
+            # Equivalent to argmin of ||x - c||^2 under cosine distance
+            # But we use the direct metric for exact semantics
+            X_norm = np.linalg.norm(X, axis=1, keepdims=True)
+            centroids_norm = np.linalg.norm(centroids, axis=1, keepdims=True).T
+            # When a vector is zero, cosine is undefined; scipy returns 0 in such cases
+            # We match scipy behavior by using safe division
+            dot_product = X @ centroids.T
+            with np.errstate(divide="ignore", invalid="ignore"):
+                distances = 1.0 - dot_product / (X_norm @ centroids_norm)
+            # Match scipy's behavior for zero vectors
+            np.clip(distances, 0.0, 2.0, out=distances)
+            np.nan_to_num(distances, copy=False, nan=0.0)
+            return classes[distances.argmin(axis=1)]
+        else:
+            # Fallback for all other metrics
+            return classes[
+                pairwise_distances(X, centroids, metric=metric).argmin(axis=1)
+            ]
+[/REPLACE]
+sklearn/neighbors/_nearest_centroid.py
+[SEARCH]
+import warnings
+
+import numpy as np
+from scipy import sparse as sp
+
+from ..base import BaseEstimator, ClassifierMixin, _fit_context
+[/SEARCH]
+[REPLACE]
+import warnings
+
+import numpy as np
+import scipy
+from scipy import sparse as sp
+
+from ..base import BaseEstimator, ClassifierMixin, _fit_context
+[/REPLACE]

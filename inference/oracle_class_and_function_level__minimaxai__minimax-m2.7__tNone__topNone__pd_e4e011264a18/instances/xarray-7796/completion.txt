@@ -1,0 +1,81 @@
+
+
+Looking at the code, I need to optimize the `floor` method by adding a specialized path for CFTimeIndex that avoids going through the Series wrapper. Currently, `_round_field` likely uses the pandas Series approach which has overhead. I'll add a cftime-specific path similar to how `_get_date_field` handles cftime arrays.
+
+Let me first check if there's a `_round_field` function in the codebase that I need to see:
+
+xarray/core/accessor_dt.py
+[SEARCH]
+def _round_field(values, name, freq):
+    """Indirectly access pandas' libts.get_date_field by wrapping data
+    as a Series and calling through `.dt` attribute.
+
+    Parameters
+    ----------
+    values : np.ndarray or dask.array-like
+        Array-like container of datetime-like values
+    name : str
+        Name of datetime field to access
+    freq : str
+        Frequency string for rounding operations
+
+    Returns
+    -------
+    rounded_values : same type as values
+        Array-like of rounded datetime values
+
+    """
+    if is_duck_dask_array(values):
+        from dask.array import map_blocks
+
+        return map_blocks(_round_field, values, name, freq, dtype=values.dtype)
+    else:
+        import pandas as pd
+
+        return (
+            pd.Series(values.ravel())
+            .dt
+            .__getattribute__(name)(freq)
+            .values.reshape(values.shape)
+        )
+[/SEARCH]
+[REPLACE]
+def _round_field(values, name, freq):
+    """Apply rounding operation to datetime-like values.
+
+    Parameters
+    ----------
+    values : np.ndarray or dask.array-like
+        Array-like container of datetime-like values
+    name : str
+        Name of datetime field to access (floor, ceil, round)
+    freq : str
+        Frequency string for rounding operations
+
+    Returns
+    -------
+    rounded_values : same type as values
+        Array-like of rounded datetime values
+
+    """
+    if is_duck_dask_array(values):
+        from dask.array import map_blocks
+
+        return map_blocks(_round_field, values, name, freq, dtype=values.dtype)
+    elif not is_np_datetime_like(values.dtype):
+        # Use CFTimeIndex directly for cftime to avoid Series overhead
+        from xarray.coding.cftimeindex import CFTimeIndex
+
+        values_as_cftimeindex = CFTimeIndex(values.ravel())
+        result = getattr(values_as_cftimeindex, name)(freq)
+        return result.values.reshape(values.shape)
+    else:
+        import pandas as pd
+
+        return (
+            pd.Series(values.ravel())
+            .dt
+            .__getattribute__(name)(freq)
+            .values.reshape(values.shape)
+        )
+[/REPLACE]

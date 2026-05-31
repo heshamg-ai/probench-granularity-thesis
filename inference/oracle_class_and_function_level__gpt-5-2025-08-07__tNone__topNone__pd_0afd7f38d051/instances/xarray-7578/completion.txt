@@ -1,0 +1,89 @@
+xarray/core/rolling.py
+[SEARCH]
+        dataset = {}
+        for key, da in self.obj.data_vars.items():
+            # keeps rollings only for the dataset depending on self.dim
+            dims = [d for d in self.dim if d in da.dims]
+            if dims:
+                wi = {d: window_dims[i] for i, d in enumerate(self.dim) if d in da.dims}
+                st = {d: strides[i] for i, d in enumerate(self.dim) if d in da.dims}
+
+                dataset[key] = self.rollings[key].construct(
+                    window_dim=wi,
+                    fill_value=fill_value,
+                    stride=st,
+                    keep_attrs=keep_attrs,
+                )
+            else:
+                dataset[key] = da.copy()
+
+            # as the DataArrays can be copied we need to delete the attrs
+            if not keep_attrs:
+                dataset[key].attrs = {}
+
+        attrs = self.obj.attrs if keep_attrs else {}
+
+        return Dataset(dataset, coords=self.obj.coords, attrs=attrs).isel(
+            {d: slice(None, None, s) for d, s in zip(self.dim, strides)}
+        )
+[/SEARCH]
+[REPLACE]
+        # Precompute mappings for window dims and strides
+        dim_to_window = dict(zip(self.dim, window_dims))
+        dim_to_stride = dict(zip(self.dim, strides))
+
+        # Prepare indexers for striding
+        indexers = {d: slice(None, None, s) for d, s in dim_to_stride.items() if s != 1}
+        has_stride = bool(indexers)
+        has_indexes = bool(getattr(self.obj, "xindexes", {}))
+
+        dataset = {}
+        for key, da in self.obj.data_vars.items():
+            # keeps rollings only for the dataset depending on self.dim
+            dims = [d for d in self.dim if d in da.dims]
+            if dims:
+                wi = {d: dim_to_window[d] for d in dims}
+                st = {d: dim_to_stride[d] for d in dims}
+
+                result = self.rollings[key].construct(
+                    window_dim=wi,
+                    fill_value=fill_value,
+                    stride=st,
+                    keep_attrs=keep_attrs,
+                )
+                # Apply per-variable stride when no indexes to avoid Dataset-level isel
+                if has_stride and not has_indexes:
+                    var_indexers = {d: indexers[d] for d in dims if d in indexers}
+                    if var_indexers:
+                        result = result.isel(var_indexers)
+                dataset[key] = result
+            else:
+                result = da.copy()
+                if has_stride and not has_indexes:
+                    var_indexers = {d: sl for d, sl in indexers.items() if d in result.dims}
+                    if var_indexers:
+                        result = result.isel(var_indexers)
+                dataset[key] = result
+
+            # as the DataArrays can be copied we need to delete the attrs
+            if not keep_attrs:
+                dataset[key].attrs = {}
+
+        attrs = self.obj.attrs if keep_attrs else {}
+
+        if has_stride and not has_indexes:
+            # Pre-slice coords to avoid Dataset-level isel when there are no indexes
+            coords_out = {}
+            for name, coord in self.obj.coords.items():
+                c_indexers = {d: sl for d, sl in indexers.items() if d in coord.dims}
+                if c_indexers:
+                    coords_out[name] = coord.isel(c_indexers)
+                else:
+                    coords_out[name] = coord
+            return Dataset(dataset, coords=coords_out, attrs=attrs)
+
+        if has_stride:
+            return Dataset(dataset, coords=self.obj.coords, attrs=attrs).isel(indexers)
+        else:
+            return Dataset(dataset, coords=self.obj.coords, attrs=attrs)
+[/REPLACE]

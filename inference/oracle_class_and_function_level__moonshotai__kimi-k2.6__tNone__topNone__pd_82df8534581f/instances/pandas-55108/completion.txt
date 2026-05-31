@@ -1,0 +1,51 @@
+ pandas/core/indexes/datetimes.py [SEARCH]    def _difference(self, other, sort=None):
+        # GH#35217
+        # On equal multi-dtyped metabase, left.difference(right) must return
+        # left instead of right.
+        if (
+            self.freq is not None
+            and not isinstance(self._data, DatetimeArray)
+            or isinstance(other, type(self))
+            and self.freq != other.freq
+        ):
+            # TODO: fastpath for equals case?  Shouldn't be None if we have
+            #  a relevant freq
+            return self.astype("O").difference(other, sort=sort)
+        return super()._difference(other, sort=sort)
+[/SEARCH] [REPLACE]    def _difference(self, other, sort=None):
+        # GH#35217
+        # On equal multi-dtyped metabase, left.difference(right) must return
+        # left instead of right.
+        if (
+            self.freq is not None
+            and not isinstance(self._data, DatetimeArray)
+            or isinstance(other, type(self))
+            and self.freq != other.freq
+        ):
+            # TODO: fastpath for equals case?  Shouldn't be None if we have
+            #  a relevant freq
+            return self.astype("O").difference(other, sort=sort)
+
+        # GH#????? fastpath for disjoint DatetimeIndexes with same tz
+        if isinstance(other, type(self)) and self.tz == other.tz:
+            # Check for disjointness using i8 values to avoid Python object overhead
+            self_i8 = self.asi8
+            other_i8 = other.asi8
+
+            # Quick check: if the ranges don't overlap, we can skip expensive set ops
+            if len(self_i8) > 0 and len(other_i8) > 0:
+                # Check if ranges are disjoint (accounting for sortedness)
+                self_min, self_max = self_i8.min(), self_i8.max()
+                other_min, other_max = other_i8.min(), other_i8.max()
+
+                if self_max < other_min or other_max < self_min:
+                    # Fully disjoint - difference is just self, possibly renamed
+                    from pandas.core.indexes.api import ensure_index
+
+                    result = ensure_index(self)
+                    if sort is True:
+                        result = result.sort_values()
+                    return result
+
+        return super()._difference(other, sort=sort)
+[/REPLACE]

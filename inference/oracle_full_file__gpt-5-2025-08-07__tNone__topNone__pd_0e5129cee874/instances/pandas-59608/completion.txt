@@ -1,0 +1,32 @@
+pandas/io/formats/csvs.py
+[SEARCH]
+        nrows = len(self.data_index)
+[/SEARCH]
+[REPLACE]
+        nrows = len(self.data_index) if self.index else len(self.obj)
+[/REPLACE]
+
+pandas/io/formats/csvs.py
+[SEARCH]
+        ix = self.data_index[slicer]._get_values_for_csv(**self._number_format)
+        libwriters.write_csv_rows(
+            data,
+            ix,
+            self.nlevels,
+            self.cols,
+            self.writer,
+        )
+[/SEARCH]
+[REPLACE]
+        if self.nlevels:
+            ix = self.data_index[slicer]._get_values_for_csv(**self._number_format)
+        else:
+            ix = ()
+        libwriters.write_csv_rows(
+            data,
+            ix,
+            self.nlevels,
+            self.cols,
+            self.writer,
+        )
+[/REPLACE]

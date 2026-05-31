@@ -1,0 +1,46 @@
+{
+  "id": 100,
+  "scenario_id": "xarray-9429",
+  "repo": "pydata/xarray",
+  "pr_number": 9429,
+  "baseline_sha": "a8c989673d0ea0cd099ede136efa117eaeb7ae1d",
+  "reference_sha": "9cf13664fb048b1490cce91e5ddc3d3ca39354be",
+  "task": "Optimize DataArray.groupby when grouping by cftime object arrays",
+  "entry_point": "xarray.DataArray.groupby",
+  "whats_new": "Speed up grouping by avoiding deep-copy of non-dimension coordinates",
+  "optimization_target": "Runtime, Memory",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/xarray-9429:baseline",
+      "digest": "sha256:7f3257458e67db68baae9b2f186e2f3d8679f50b8212d901837930b685acf22d"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/xarray-9429:reference",
+      "digest": "sha256:36edc189cd134a558f7afb2423ac51fe68b96cf0c276e5d7cf75cf2edd937f17"
+    }
+  },
+  "params": [
+    {
+      "name": "n_y",
+      "short_indicator": "ny",
+      "explanation": "Number of y points (spatial dimension)",
+      "values": [
+        "10",
+        "100"
+      ]
+    },
+    {
+      "name": "n_x",
+      "short_indicator": "nx",
+      "explanation": "Number of x points (spatial dimension)",
+      "values": [
+        "10",
+        "100"
+      ]
+    }
+  ],
+  "core_tests": [
+    "xarray/tests/test_cftimeindex.py::test_groupby"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize xarray.DataArray.groupby for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize DataArray.groupby when grouping by cftime object arrays\nOptimization function: xarray.DataArray.groupby\n\n\n[start of xarray/groupers.py]\n### Relevant context\n#### Class `xarray.groupers.TimeResampler`\n**Class Signature**\n```python\n@dataclass(repr=False)\nclass TimeResampler(Resampler):\n```\n**Class Attributes**\n```python\n    freq: str\n    closed: SideOptions | None = field(default=None)\n    label: SideOptions | None = field(default=None)\n    origin: str | DatetimeLike = field(default=\"start_day\")\n    offset: pd.Timedelta | datetime.timedelta | str | None = field(default=None)\n    index_grouper: CFTimeGrouper | pd.Grouper = field(init=False, repr=False)\n    group_as_index: pd.Index = field(init=False, repr=False)\n```\n##### Method `xarray.groupers.TimeResampler.factorize`\n```python\ndef factorize(self, group: T_Group) -> EncodedGroups:\n        self._init_properties(group)\n        full_index, first_items, codes_ = self._get_index_and_items()\n        sbins = first_items.values.astype(np.int64)\n        group_indices: GroupIndices = tuple(\n            [slice(i, j) for i, j in zip(sbins[:-1], sbins[1:])]\n            + [slice(sbins[-1], None)]\n        )\n\n        unique_coord = Variable(\n            dims=group.name, data=first_items.index, attrs=group.attrs\n        )\n        codes = group.copy(data=codes_.reshape(group.shape))\n\n        return EncodedGroups(\n            codes=codes,\n            group_indices=group_indices,\n            full_index=full_index,\n            unique_coord=unique_coord,\n            coords=_coordinates_from_variable(unique_coord),\n        )\n```\n#### Class `xarray.groupers.UniqueGrouper`\n**Class Signature**\n```python\n@dataclass\nclass UniqueGrouper(Grouper):\n```\n**Class Attributes**\n```python\n    _group_as_index: pd.Index | None = field(default=None, repr=False)\n```\n##### Method `xarray.groupers.UniqueGrouper._factorize_dummy`\n```python\ndef _factorize_dummy(self) -> EncodedGroups:\n        size = self.group.size\n        # no need to factorize\n        # use slices to do views instead of fancy indexing\n        # equivalent to: group_indices = group_indices.reshape(-1, 1)\n        group_indices: GroupIndices = tuple(slice(i, i + 1) for i in range(size))\n        size_range = np.arange(size)\n        full_index: pd.Index\n        unique_coord: _DummyGroup | Variable\n        if isinstance(self.group, _DummyGroup):\n            codes = self.group.to_dataarray().copy(data=size_range)\n            unique_coord = self.group\n            full_index = pd.RangeIndex(self.group.size)\n            coords = Coordinates()\n        else:\n            codes = self.group.copy(data=size_range)\n            unique_coord = self.group.variable.to_base_variable()\n            full_index = self.group_as_index\n            if isinstance(full_index, pd.MultiIndex):\n                coords = Coordinates.from_pandas_multiindex(\n                    full_index, dim=self.group.name\n                )\n            else:\n                if TYPE_CHECKING:\n                    assert isinstance(unique_coord, Variable)\n                coords = _coordinates_from_variable(unique_coord)\n\n        return EncodedGroups(\n            codes=codes,\n            group_indices=group_indices,\n            full_index=full_index,\n            unique_coord=unique_coord,\n            coords=coords,\n        )\n```\n##### Method `xarray.groupers.UniqueGrouper._factorize_unique`\n```python\ndef _factorize_unique(self) -> EncodedGroups:\n        # look through group to find the unique values\n        sort = not isinstance(self.group_as_index, pd.MultiIndex)\n        unique_values, codes_ = unique_value_groups(self.group_as_index, sort=sort)\n        if (codes_ == -1).all():\n            raise ValueError(\n                \"Failed to group data. Are you grouping by a variable that is all NaN?\"\n            )\n        codes = self.group.copy(data=codes_.reshape(self.group.shape))\n        unique_coord = Variable(\n            dims=codes.name, data=unique_values, attrs=self.group.attrs\n        )\n        full_index = pd.Index(unique_values)\n\n        return EncodedGroups(\n            codes=codes,\n            full_index=full_index,\n            unique_coord=unique_coord,\n            coords=_coordinates_from_variable(unique_coord),\n        )\n```\n[end of xarray/groupers.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

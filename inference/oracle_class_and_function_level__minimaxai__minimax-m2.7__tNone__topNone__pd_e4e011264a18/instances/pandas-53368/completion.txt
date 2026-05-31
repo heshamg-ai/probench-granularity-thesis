@@ -1,0 +1,69 @@
+
+
+Looking at the code, I need to optimize `get_indexer_for` for PyArrow-backed timestamp/duration dtypes. The key is that PyArrow stores timestamp/duration as int64 nanoseconds internally, so we can use the underlying int64 representation for faster lookups instead of going through the general ExtensionEngine path.
+
+Let me implement the optimization:
+
+pandas/core/indexes/base.py
+[SEARCH]
+    @final
+    def get_indexer_for(self, target) -> npt.NDArray[np.intp]:
+        """
+        Guaranteed return of an indexer even when non-unique.
+
+        This dispatches to get_indexer or get_indexer_non_unique
+        as appropriate.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+            List of indices.
+
+        Examples
+        --------
+        >>> idx = pd.Index([np.nan, 'var1', np.nan])
+        >>> idx.get_indexer_for([np.nan])
+        array([0, 2])
+        """
+        if self._index_as_unique:
+            return self.get_indexer(target)
+        indexer, _ = self.get_indexer_non_unique(target)
+        return indexer
+[/SEARCH]
+[REPLACE]
+    @final
+    def get_indexer_for(self, target) -> npt.NDArray[np.intp]:
+        """
+        Guaranteed return of an indexer even when non-unique.
+
+        This dispatches to get_indexer or get_indexer_non_unique
+        as appropriate.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+            List of indices.
+
+        Examples
+        --------
+        >>> idx = pd.Index([np.nan, 'var1', np.nan])
+        >>> idx.get_indexer_for([np.nan])
+        array([0, 2])
+        """
+        # Fast path for PyArrow-backed timestamp/duration dtypes
+        if isinstance(self._values, ArrowExtensionArray) and (
+            self.dtype.kind == "M" or self.dtype.kind == "m"
+        ):
+            target = ensure_index(target)
+            # Convert to int64 for efficient comparison
+            index_values = self._values.to_numpy()
+            target_values = target._values.to_numpy()
+            # Use sorted search for indexer - O(n log n) instead of O(n) hash
+            indexer = np.searchsorted(index_values, target_values)
+            return ensure_platform_int(indexer)
+
+        if self._index_as_unique:
+            return self.get_indexer(target)
+        indexer, _ = self.get_indexer_non_unique(target)
+        return indexer
+[/REPLACE]

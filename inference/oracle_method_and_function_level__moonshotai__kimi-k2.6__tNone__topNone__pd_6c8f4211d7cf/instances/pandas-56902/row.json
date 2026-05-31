@@ -1,0 +1,57 @@
+{
+  "id": 59,
+  "scenario_id": "pandas-56902",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 56902,
+  "baseline_sha": "4921e0b2290f881e17bd21685289e46ae4894155",
+  "reference_sha": "3827df1e0900ef6e13b984667a755a27fa1d28ef",
+  "task": "Optimize DataFrameGroupBy.ffill, DataFrameGroupBy.bfill, SeriesGroupBy.ffill, and SeriesGroupBy.bfill",
+  "entry_point": "pandas.core.groupby.DataFrameGroupBy.ffill",
+  "whats_new": "Performance improvement in DataFrameGroupBy.ffill, DataFrameGroupBy.bfill, SeriesGroupBy.ffill, and SeriesGroupBy.bfill",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-56902:baseline",
+      "digest": "sha256:3e30d2a555a2f8c10ecb5dbe5dc7fc791c7c90af6a49857c627ec5ce00ecc55f"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-56902:reference",
+      "digest": "sha256:e52dc23eca63a5869be19761637d73378d7395142b2dd52b25c01e307baba716"
+    }
+  },
+  "params": [
+    {
+      "name": "Num Rows",
+      "short_indicator": "R",
+      "explanation": "Number of rows in the DataFrame.",
+      "values": [
+        "100000",
+        "1000000",
+        "10000000"
+      ]
+    },
+    {
+      "name": "Number of Groups",
+      "short_indicator": "G",
+      "explanation": "How many different group labels appear in the groupby operation.",
+      "values": [
+        "2",
+        "5"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/groupby/test_missing.py::test_groupby_column_index_name_lost_fill_funcs",
+    "pandas/tests/groupby/test_missing.py::test_groupby_fill_duplicate_column_names",
+    "pandas/tests/groupby/test_missing.py::test_ffill_handles_nan_groups",
+    "pandas/tests/groupby/test_groupby.py::test_shift_bfill_ffill_tz",
+    "pandas/tests/groupby/test_groupby.py::test_groupby_selection_with_methods",
+    "pandas/tests/groupby/transform/test_transform.py::test_transform_ffill",
+    "pandas/tests/groupby/transform/test_transform.py::test_group_fill_methods",
+    "pandas/tests/groupby/transform/test_transform.py::test_pad_stable_sorting",
+    "pandas/tests/groupby/transform/test_transform.py::test_pct_change",
+    "pandas/tests/groupby/transform/test_transform.py::test_ffill_bfill_non_unique_multilevel",
+    "pandas/tests/groupby/transform/test_transform.py::test_ffill_not_in_axis"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.core.groupby.DataFrameGroupBy.ffill for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize DataFrameGroupBy.ffill, DataFrameGroupBy.bfill, SeriesGroupBy.ffill, and SeriesGroupBy.bfill\nOptimization function: pandas.core.groupby.DataFrameGroupBy.ffill\n\n\n[start of pandas/core/groupby/groupby.py]\n### Relevant context\n#### Class `pandas.core.groupby.groupby.GroupBy`\n**Class Signature**\n```python\nclass GroupBy(BaseGroupBy[NDFrameT]):\n```\n**Class Attributes**\n```python\n    _grouper: ops.BaseGrouper\n    as_index: bool\n```\n**Class __init__ method**\n```python\n    def __init__(\n        self,\n        obj: NDFrameT,\n        keys: _KeysArgType | None = None,\n        axis: Axis = 0,\n        level: IndexLabel | None = None,\n        grouper: ops.BaseGrouper | None = None,\n        exclusions: frozenset[Hashable] | None = None,\n        selection: IndexLabel | None = None,\n        as_index: bool = True,\n        sort: bool = True,\n        group_keys: bool = True,\n        observed: bool | lib.NoDefault = lib.no_default,\n        dropna: bool = True,\n    ) -> None:\n        self._selection = selection\n\n        assert isinstance(obj, NDFrame), type(obj)\n\n        self.level = level\n\n        if not as_index:\n            if axis != 0:\n                raise ValueError(\"as_index=False only valid for axis=0\")\n\n        self.as_index = as_index\n        self.keys = keys\n        self.sort = sort\n        self.group_keys = group_keys\n        self.dropna = dropna\n\n        if grouper is None:\n            grouper, exclusions, obj = get_grouper(\n                obj,\n                keys,\n                axis=axis,\n                level=level,\n                sort=sort,\n                observed=False if observed is lib.no_default else observed,\n                dropna=self.dropna,\n            )\n\n        if observed is lib.no_default:\n            if any(ping._passed_categorical for ping in grouper.groupings):\n                warnings.warn(\n                    \"The default of observed=False is deprecated and will be changed \"\n                    \"to True in a future version of pandas. Pass observed=False to \"\n                    \"retain current behavior or observed=True to adopt the future \"\n                    \"default and silence this warning.\",\n                    FutureWarning,\n                    stacklevel=find_stack_level(),\n                )\n            observed = False\n        self.observed = observed\n\n        self.obj = obj\n        self.axis = obj._get_axis_number(axis)\n        self._grouper = grouper\n        self.exclusions = frozenset(exclusions) if exclusions else frozenset()\n```\n##### Method `pandas.core.groupby.groupby.GroupBy._fill`\n```python\n@final\n    def _fill(self, direction: Literal[\"ffill\", \"bfill\"], limit: int | None = None):\n        \"\"\"\n        Shared function for `pad` and `backfill` to call Cython method.\n\n        Parameters\n        ----------\n        direction : {'ffill', 'bfill'}\n            Direction passed to underlying Cython function. `bfill` will cause\n            values to be filled backwards. `ffill` and any other values will\n            default to a forward fill\n        limit : int, default None\n            Maximum number of consecutive values to fill. If `None`, this\n            method will convert to -1 prior to passing to Cython\n\n        Returns\n        -------\n        `Series` or `DataFrame` with filled values\n\n        See Also\n        --------\n        pad : Returns Series with minimum number of char in object.\n        backfill : Backward fill the missing values in the dataset.\n        \"\"\"\n        # Need int value for Cython\n        if limit is None:\n            limit = -1\n\n        ids, _, _ = self._grouper.group_info\n        sorted_labels = np.argsort(ids, kind=\"mergesort\").astype(np.intp, copy=False)\n        if direction == \"bfill\":\n            sorted_labels = sorted_labels[::-1]\n\n        col_func = partial(\n            libgroupby.group_fillna_indexer,\n            labels=ids,\n            sorted_labels=sorted_labels,\n            limit=limit,\n            dropna=self.dropna,\n        )\n\n        def blk_func(values: ArrayLike) -> ArrayLike:\n            mask = isna(values)\n            if values.ndim == 1:\n                indexer = np.empty(values.shape, dtype=np.intp)\n                col_func(out=indexer, mask=mask)\n                return algorithms.take_nd(values, indexer)\n\n            else:\n                # We broadcast algorithms.take_nd analogous to\n                #  np.take_along_axis\n                if isinstance(values, np.ndarray):\n                    dtype = values.dtype\n                    if self._grouper.has_dropped_na:\n                        # dropped null groups give rise to nan in the result\n                        dtype = ensure_dtype_can_hold_na(values.dtype)\n                    out = np.empty(values.shape, dtype=dtype)\n                else:\n                    # Note: we only get here with backfill/pad,\n                    #  so if we have a dtype that cannot hold NAs,\n                    #  then there will be no -1s in indexer, so we can use\n                    #  the original dtype (no need to ensure_dtype_can_hold_na)\n                    out = type(values)._empty(values.shape, dtype=values.dtype)\n\n                for i, value_element in enumerate(values):\n                    # call group_fillna_indexer column-wise\n                    indexer = np.empty(values.shape[1], dtype=np.intp)\n                    col_func(out=indexer, mask=mask[i])\n                    out[i, :] = algorithms.take_nd(value_element, indexer)\n                return out\n\n        mgr = self._get_data_to_aggregate()\n        res_mgr = mgr.apply(blk_func)\n\n        new_obj = self._wrap_agged_manager(res_mgr)\n\n        if self.axis == 1:\n            # Only relevant for DataFrameGroupBy\n            new_obj = new_obj.T\n            new_obj.columns = self.obj.columns\n\n        new_obj.index = self.obj.index\n        return new_obj\n```\n[end of pandas/core/groupby/groupby.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

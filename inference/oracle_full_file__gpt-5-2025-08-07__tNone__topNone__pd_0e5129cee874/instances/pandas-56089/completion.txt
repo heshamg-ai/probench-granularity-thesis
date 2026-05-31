@@ -1,0 +1,45 @@
+pandas/core/reshape/encoding.py
+[SEARCH]
+    else:
+        # take on axis=1 + transpose to ensure ndarray layout is column-major
+        eye_dtype: NpDtype
+        if isinstance(_dtype, np.dtype):
+            eye_dtype = _dtype
+        else:
+            eye_dtype = np.bool_
+        dummy_mat = np.eye(number_of_cols, dtype=eye_dtype).take(codes, axis=1).T
+
+        if not dummy_na:
+            # reset NaN GH4446
+            dummy_mat[codes == -1] = 0
+
+        if drop_first:
+            # remove first GH12042
+            dummy_mat = dummy_mat[:, 1:]
+            dummy_cols = dummy_cols[1:]
+        return DataFrame(dummy_mat, index=index, columns=dummy_cols, dtype=_dtype)
+[/SEARCH]
+[REPLACE]
+    else:
+        eye_dtype: NpDtype
+        if isinstance(_dtype, np.dtype):
+            eye_dtype = _dtype
+        else:
+            eye_dtype = np.bool_
+        N = len(codes)
+        if number_of_cols == 0:
+            dummy_mat = np.empty((N, 0), dtype=eye_dtype)
+        else:
+            dummy_mat = np.zeros((N, number_of_cols), dtype=eye_dtype)
+            valid = codes != -1
+            if valid.any():
+                rows = np.nonzero(valid)[0]
+                cols = codes[valid]
+                one = np.array(1, dtype=eye_dtype)
+                dummy_mat[rows, cols] = one
+        if drop_first:
+            # remove first GH12042
+            dummy_mat = dummy_mat[:, 1:]
+            dummy_cols = dummy_cols[1:]
+        return DataFrame(dummy_mat, index=index, columns=dummy_cols, dtype=_dtype)
+[/REPLACE]

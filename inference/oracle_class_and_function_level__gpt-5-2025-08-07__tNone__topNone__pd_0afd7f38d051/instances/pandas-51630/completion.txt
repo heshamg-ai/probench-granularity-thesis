@@ -1,0 +1,27 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def isna(self) -> npt.NDArray[np.bool_]:
+        """
+        Boolean NumPy array indicating if each value is missing.
+
+        This should return a 1-D array the same length as 'self'.
+        """
+        return self._data.is_null().to_numpy()
+[/SEARCH]
+[REPLACE]
+    def isna(self) -> npt.NDArray[np.bool_]:
+        """
+        Boolean NumPy array indicating if each value is missing.
+
+        This should return a 1-D array the same length as 'self'.
+        """
+        # Fast paths for zero-null and all-null arrays to avoid Arrow allocations
+        data = self._data
+        n = len(data)
+        nc = data.null_count
+        if nc == 0:
+            return np.zeros(n, dtype=np.bool_)
+        if nc == n:
+            return np.ones(n, dtype=np.bool_)
+        return data.is_null().to_numpy()
+[/REPLACE]

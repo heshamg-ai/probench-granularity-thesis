@@ -1,0 +1,67 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def to_numpy(
+        self,
+        dtype: npt.DTypeLike | None = None,
+        copy: bool = False,
+        na_value: object = lib.no_default,
+    ) -> np.ndarray:
+        if dtype is None and self._hasna:
+            dtype = object
+        if na_value is lib.no_default:
+            na_value = self.dtype.na_value
+
+        pa_type = self._data.type
+        if (
+            is_object_dtype(dtype)
+            or pa.types.is_timestamp(pa_type)
+            or pa.types.is_duration(pa_type)
+        ):
+            result = np.array(list(self), dtype=dtype)
+        else:
+            result = np.asarray(self._data, dtype=dtype)
+            if copy or self._hasna:
+                result = result.copy()
+        if self._hasna:
+            result[self.isna()] = na_value
+        return result
+[/SEARCH]
+[REPLACE]
+    def to_numpy(
+        self,
+        dtype: npt.DTypeLike | None = None,
+        copy: bool = False,
+        na_value: object = lib.no_default,
+    ) -> np.ndarray:
+        if dtype is None and self._hasna:
+            dtype = object
+        if na_value is lib.no_default:
+            na_value = self.dtype.na_value
+
+        pa_type = self._data.type
+        if (
+            is_object_dtype(dtype)
+            or pa.types.is_timestamp(pa_type)
+            or pa.types.is_duration(pa_type)
+        ):
+            data = self._data
+            # Optimized object-array conversion: pyarrow's to_pylist()
+            # is significantly faster than iterating via list(self).
+            scalars = data.to_pylist()
+            na_idx = data.is_null().to_numpy(zero_copy_only=False)
+            # Avoid creating an ndarray via np.array() when we
+            # immediately need to assign na_value anyway; allocate
+            # an empty object array and fill it.
+            result = np.empty(len(scalars), dtype=object)
+            for i in range(len(scalars)):
+                result[i] = scalars[i]
+            result[na_idx] = na_value
+            return result
+        else:
+            result = np.asarray(self._data, dtype=dtype)
+            if copy or self._hasna:
+                result = result.copy()
+        if self._hasna:
+            result[self.isna()] = na_value
+        return result
+[/REPLACE]

@@ -1,0 +1,40 @@
+ pandas/core/generic.py
+[SEARCH]
+        cond = cond.reindex(self._info_axis, axis=self._info_axis_number)
+[/SEARCH]
+[REPLACE]
+        cond = cond.reindex(self._info_axis, axis=self._info_axis_number)
+
+        # Optimization: For DataFrame cond with many columns, avoid per-column
+        # dtype checks and object ndarray conversion by checking block dtypes
+        # at the BlockManager level. This preserves semantics while improving
+        # performance for wide DataFrames.
+        if isinstance(cond, ABCDataFrame) and not cond.empty:
+            # Fast path: check if all blocks are already boolean
+            if not cond._mgr.any_extension_types:
+                # Check if we can avoid the per-column loop entirely
+                all_bool_blocks = all(
+                    is_bool_dtype(blk.dtype) for blk in cond._mgr.blocks
+                )
+                if all_bool_blocks:
+                    # Skip the per-column dtype check and object conversion
+                    pass
+                else:
+                    # Need to convert, but do it efficiently via blocks
+                    # rather than column-by-column
+                    if not all(is_bool_dtype(_dt) for _dt in cond.dtypes):
+                        raise TypeError(msg.format(dtype=cond.dtypes))
+                    # Convert efficiently if needed
+                    cond = cond._constructor(
+                        cond.to_numpy(dtype=bool, na_value=fill_value),
+                        **cond._construct_axes_dict(),
+                    )
+            else:
+                # Has extension types, use original path but optimized
+                if not all(is_bool_dtype(_dt) for _dt in cond.dtypes):
+                    raise TypeError(msg.format(dtype=cond.dtypes))
+                cond = cond._constructor(
+                    cond.to_numpy(dtype=bool, na_value=fill_value),
+                    **cond._construct_axes_dict(),
+                )
+[/REPLACE]

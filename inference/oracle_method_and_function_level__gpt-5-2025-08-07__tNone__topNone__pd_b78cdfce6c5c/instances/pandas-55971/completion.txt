@@ -1,0 +1,18 @@
+pandas/_testing/asserters.py
+[SEARCH]
+    if isinstance(left, MultiIndex):
+        right = cast(MultiIndex, right)
+
+        for level in range(left.nlevels):
+[/SEARCH]
+[REPLACE]
+    if isinstance(left, MultiIndex):
+        right = cast(MultiIndex, right)
+
+        if check_exact and check_categorical and left.equals(right):
+            for level in range(left.nlevels):
+                _check_types(left.levels[level], right.levels[level], obj=obj)
+        else:
+
+            for level in range(left.nlevels):
+[/REPLACE]

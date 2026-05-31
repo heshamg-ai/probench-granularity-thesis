@@ -1,0 +1,38 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+        if all(
+            (isinstance(o, MultiIndex) and o.nlevels >= self.nlevels) for o in other
+        ):
+            arrays, names = [], []
+            for i in range(self.nlevels):
+                label = self._get_level_values(i)
+                appended = [o._get_level_values(i) for o in other]
+                arrays.append(label.append(appended))
+                single_label_name = all(label.name == x.name for x in appended)
+                names.append(label.name if single_label_name else None)
+            return MultiIndex.from_arrays(arrays, names=names)
+[/SEARCH]
+[REPLACE]
+        if all(
+            (isinstance(o, MultiIndex) and o.nlevels >= self.nlevels) for o in other
+        ):
+            # fastpath when all MultiIndex have same number of levels
+            if all(o.nlevels == self.nlevels for o in other):
+                names = []
+                self_names = self.names
+                for i in range(self.nlevels):
+                    n = self_names[i]
+                    single_label_name = all(n == o.names[i] for o in other)
+                    names.append(n if single_label_name else None)
+                to_concat = (self._values,) + tuple(o._values for o in other)
+                new_tuples = np.concatenate(to_concat)
+                return MultiIndex.from_tuples(new_tuples, names=names)
+            arrays, names = [], []
+            for i in range(self.nlevels):
+                label = self._get_level_values(i)
+                appended = [o._get_level_values(i) for o in other]
+                arrays.append(label.append(appended))
+                single_label_name = all(label.name == x.name for x in appended)
+                names.append(label.name if single_label_name else None)
+            return MultiIndex.from_arrays(arrays, names=names)
+[/REPLACE]

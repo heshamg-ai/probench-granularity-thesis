@@ -1,0 +1,141 @@
+ pandas/core/indexes/range.py
+[SEARCH]
+    def factorize(
+        self, sort: bool = False, use_na_sentinel: bool = True
+    ) -> tuple[npt.NDArray[np.intp], RangeIndex]:
+        if sort and self.step < 0:
+            codes = np.arange(len(self) - 1, -1, -1, dtype=np.intp)
+            uniques = self[::-1]
+        else:
+            codes = np.arange(len(self), dtype=np.intp)
+            uniques = self
+        return codes, uniques
+[/SEARCH]
+[REPLACE]
+    def factorize(
+        self, sort: bool = False, use_na_sentinel: bool = True
+    ) -> tuple[npt.NDArray[np.intp], RangeIndex]:
+        if sort and self.step < 0:
+            codes = np.arange(len(self) - 1, -1, -1, dtype=np.intp)
+            uniques = self[::-1]
+        else:
+            codes = np.arange(len(self), dtype=np.intp)
+            uniques = self
+        return codes, uniques
+
+    def value_counts(
+        self,
+        normalize: bool = False,
+        sort: bool = True,
+        ascending: bool = False,
+        bins=None,
+        dropna: bool = True,
+    ):
+        """
+        Return a Series containing counts of unique values.
+
+        The resulting object will be in descending order so that the first
+        element is the most frequently-occurring element. Excludes NA values by
+        default.
+
+        Parameters
+        ----------
+        normalize : bool, default False
+            If True then the object returned will contain the relative
+            frequencies of the unique values.
+        sort : bool, default True
+            Sort by frequencies when True. Preserve the order of the data when False.
+        ascending : bool, default False
+            Sort in ascending order.
+        bins : int, optional
+            Rather than count values, group them into half-open bins,
+            a convenience for ``pd.cut``, only works with numeric data.
+        dropna : bool, default True
+            Don't include counts of NaN.
+
+        Returns
+        -------
+        Series
+
+        See Also
+        --------
+        Series.count: Number of non-NA elements in a Series.
+        DataFrame.count: Number of non-NA elements in a DataFrame.
+
+        Examples
+        --------
+        >>> index = pd.RangeIndex(4)
+        >>> index.value_counts()
+        0    1
+        1    1
+        2    1
+        3    1
+        dtype: int64
+        """
+        from pandas import Series, RangeIndex, Index
+        import pandas.core.algorithms as algorithms
+
+        if bins is not None:
+            return super().value_counts(
+                normalize=normalize,
+                sort=sort,
+                ascending=ascending,
+                bins=bins,
+                dropna=dropna,
+            )
+
+        if len(self) == 0:
+            return Series(
+                [],
+                dtype="int64",
+                name="count",
+                index=Index([], dtype=self.dtype),
+            )
+
+        # RangeIndex has all unique values by design, so each value appears exactly once
+        # Build the result without materializing the full array
+        if self.step > 0:
+            uniques = self
+            counts = np.ones(len(self), dtype=np.int64)
+        else:
+            # For negative step, we need to reverse to maintain ascending value order
+            # but only if sort=False; if sort=True, we'll sort by count anyway
+            uniques = self[::-1]
+            counts = np.ones(len(self), dtype=np.int64)
+
+        if sort:
+            # Sort by counts (all 1s), then by values for stable ordering
+            # When counts are equal, we sort by the actual values
+            if ascending:
+                # Already in ascending order by value if step > 0, or reverse if step < 0
+                if self.step < 0:
+                    # step < 0 means uniques is reversed, already ascending by value
+                    pass
+                # else already ascending by value
+            else:
+                # Descending order by value
+                if self.step > 0:
+                    uniques = uniques[::-1]
+                    counts = counts[::-1]
+                # else step < 0, already in descending by value
+        else:
+            # Preserve order of appearance (which is the range order)
+            if self.step < 0:
+                # We reversed above for consistent internal handling, reverse back
+                uniques = uniques[::-1]
+                counts = counts[::-1]
+
+        index = uniques._data if isinstance(uniques, RangeIndex) else uniques._values
+
+        result = Series(
+            counts,
+            index=Index(index, dtype=self.dtype),
+            name="count",
+            copy=False,
+        )
+
+        if normalize:
+            result = result / len(self)
+
+        return result
+[/REPLACE]

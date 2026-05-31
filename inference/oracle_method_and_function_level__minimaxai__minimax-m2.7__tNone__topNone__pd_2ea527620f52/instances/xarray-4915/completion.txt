@@ -1,0 +1,114 @@
+
+
+Looking at the code, the main optimization opportunity is in `DataArrayRolling._bottleneck_reduce`. Currently it falls back to `self.reduce()` which uses `construct()` to build full windowed arrays, then reduces. For simple aggregations like `mean`, we can call bottleneck's optimized `move_mean` directly without materializing the windows.
+
+xarray/core/rolling.py
+[SEARCH]
+##### Method `xarray.core.rolling.DataArrayRolling._numpy_or_bottleneck_reduce`
+```python
+def _numpy_or_bottleneck_reduce(
+        self, array_agg_func, bottleneck_move_func, keep_attrs, **kwargs
+    ):
+        if "dim" in kwargs:
+            warnings.warn(
+                f"Reductions are applied along the rolling dimension(s) "
+                f"'{self.dim}'. Passing the 'dim' kwarg to reduction "
+                f"operations has no effect.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            del kwargs["dim"]
+
+        if (
+            bottleneck_move_func is not None
+            and not is_duck_dask_array(self.obj.data)
+            and len(self.dim) == 1
+        ):
+            # TODO: renable bottleneck with dask after the issues
+            # underlying https://github.com/pydata/xarray/issues/2940 are
+            # fixed.
+            return self._bottleneck_reduce(
+                bottleneck_move_func, keep_attrs=keep_attrs, **kwargs
+            )
+        else:
+            return self.reduce(array_agg_func, keep_attrs=keep_attrs, **kwargs)
+```
+[/SEARCH]
+[REPLACE]
+##### Method `xarray.core.rolling.DataArrayRolling._numpy_or_bottleneck_reduce`
+```python
+def _numpy_or_bottleneck_reduce(
+        self, array_agg_func, bottleneck_move_func, keep_attrs, **kwargs
+    ):
+        if "dim" in kwargs:
+            warnings.warn(
+                f"Reductions are applied along the rolling dimension(s) "
+                f"'{self.dim}'. Passing the 'dim' kwarg to reduction "
+                f"operations has no effect.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            del kwargs["dim"]
+
+        if (
+            bottleneck_move_func is not None
+            and not is_duck_dask_array(self.obj.data)
+            and len(self.dim) == 1
+        ):
+            # TODO: renable bottleneck with dask after the issues
+            # underlying https://github.com/pydata/xarray/issues/2940 are
+            # fixed.
+            return self._bottleneck_reduce(
+                bottleneck_move_func, keep_attrs=keep_attrs, **kwargs
+            )
+        else:
+            return self.reduce(array_agg_func, keep_attrs=keep_attrs, **kwargs)
+```
+
+##### Method `xarray.core.rolling.DataArrayRolling._bottleneck_reduce`
+```python
+def _bottleneck_reduce(self, bottleneck_move_func, keep_attrs=False, **kwargs):
+        """Reduce using bottleneck directly for efficiency.
+        
+        This bypasses construct() + reduce() to avoid materializing
+        the full windowed array in memory.
+        """
+        import bottleneck as bn
+
+        # Determine which bottleneck move function to call
+        func_name = bottleneck_move_func.__name__
+        data = self.obj.data
+        window = self.window[0]
+        min_count = self.min_periods
+
+        # Map function name to bottleneck function
+        bn_funcs = {
+            "move_mean": bn.move_mean,
+            "move_sum": bn.move_sum,
+            "move_std": bn.move_std,
+            "move_var": bn.move_var,
+            "move_min": bn.move_min,
+            "move_max": bn.move_max,
+        }
+
+        bn_func = bn_funcs.get(func_name)
+        if bn_func is None:
+            # Fall back to generic reduce for unsupported operations
+            return self.reduce(bottleneck_move_func, keep_attrs=keep_attrs, **kwargs)
+
+        # Compute the rolling operation along the last axis
+        result = bn_func(data, window, min_count=min_count)
+
+        # Apply centering offset if needed
+        if self.center[0]:
+            offset = (window - 1) // 2
+            result = result[..., offset : offset + data.shape[-1]]
+
+        # Reconstruct as DataArray with proper attributes
+        result_attrs = self.obj.attrs if keep_attrs else {}
+        result_dataarray = self.obj.__class__(
+            result, dims=self.obj.dims, coords=self.obj.coords, attrs=result_attrs
+        )
+        return result_dataarray
+```
+[/REPLACE]

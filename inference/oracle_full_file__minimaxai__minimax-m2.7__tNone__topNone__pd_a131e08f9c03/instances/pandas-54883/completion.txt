@@ -1,0 +1,28 @@
+
+
+Let me first examine the structure better to understand the optimization opportunity.
+
+Based on the code in `pandas/core/sorting.py`, the optimization should check if the MultiIndex is already sorted before performing the expensive `lexsort_indexer` operation. Let me create the optimization:
+
+pandas/core/sorting.py
+[SEARCH]
+    elif isinstance(target, ABCMultiIndex):
+        codes = [lev.codes for lev in target._get_codes_for_sorting()]
+        indexer = lexsort_indexer(
+            codes, orders=ascending, na_position=na_position, codes_given=True
+        )
+[/SEARCH]
+[REPLACE]
+    elif isinstance(target, ABCMultiIndex):
+        # Check if already sorted before doing expensive lexsort
+        if ascending is True or (isinstance(ascending, list) and all(ascending)):
+            if target.is_monotonic_increasing:
+                return None
+        elif ascending is False or (isinstance(ascending, list) and not any(ascending)):
+            if target.is_monotonic_decreasing:
+                return None
+        codes = [lev.codes for lev in target._get_codes_for_sorting()]
+        indexer = lexsort_indexer(
+            codes, orders=ascending, na_position=na_position, codes_given=True
+        )
+[/REPLACE]

@@ -1,0 +1,90 @@
+xarray/core/indexing.py
+[SEARCH]
+class VectorizedIndexer(ExplicitIndexer):
+    """Tuple for vectorized indexing.
+
+    All elements should be slice or N-dimensional np.ndarray objects with an
+    integer dtype and the same number of dimensions. Indexing follows proposed
+    rules for np.ndarray.vindex, which matches NumPy's advanced indexing rules
+    (including broadcasting) except sliced axes are always moved to the end:
+    https://github.com/numpy/numpy/pull/6256
+    """
+
+    __slots__ = ()
+
+    def __init__(self, key: tuple[slice | np.ndarray[Any, np.dtype[np.generic]], ...]):
+        if not isinstance(key, tuple):
+            raise TypeError(f"key must be a tuple: {key!r}")
+
+        new_key = []
+        ndim = None
+        for k in key:
+            if isinstance(k, slice):
+                k = as_integer_slice(k)
+            elif is_duck_array(k):
+                if not np.issubdtype(k.dtype, np.integer):
+                    raise TypeError(
+                        f"invalid indexer array, does not have integer dtype: {k!r}"
+                    )
+                if ndim is None:
+                    ndim = k.ndim  # type: ignore[union-attr]
+                elif ndim != k.ndim:  # type: ignore[union-attr]
+                    ndims = [k.ndim for k in key if isinstance(k, np.ndarray)]
+                    raise ValueError(
+                        "invalid indexer key: ndarray arguments "
+                        f"have different numbers of dimensions: {ndims}"
+                    )
+                k = k.astype(np.int64)  # type: ignore[union-attr]
+            else:
+                raise TypeError(
+                    f"unexpected indexer type for {type(self).__name__}: {k!r}"
+                )
+            new_key.append(k)
+
+        super().__init__(tuple(new_key))
+[/SEARCH]
+[REPLACE]
+class VectorizedIndexer(ExplicitIndexer):
+    """Tuple for vectorized indexing.
+
+    All elements should be slice or N-dimensional np.ndarray objects with an
+    integer dtype and the same number of dimensions. Indexing follows proposed
+    rules for np.ndarray.vindex, which matches NumPy's advanced indexing rules
+    (including broadcasting) except sliced axes are always moved to the end:
+    https://github.com/numpy/numpy/pull/6256
+    """
+
+    __slots__ = ()
+
+    def __init__(self, key: tuple[slice | np.ndarray[Any, np.dtype[np.generic]], ...]):
+        if not isinstance(key, tuple):
+            raise TypeError(f"key must be a tuple: {key!r}")
+
+        new_key = []
+        ndim = None
+        for k in key:
+            if isinstance(k, slice):
+                k = as_integer_slice(k)
+            elif is_duck_array(k):
+                if not np.issubdtype(k.dtype, np.integer):
+                    raise TypeError(
+                        f"invalid indexer array, does not have integer dtype: {k!r}"
+                    )
+                if ndim is None:
+                    ndim = k.ndim  # type: ignore[union-attr]
+                elif ndim != k.ndim:  # type: ignore[union-attr]
+                    ndims = [k.ndim for k in key if isinstance(k, np.ndarray)]
+                    raise ValueError(
+                        "invalid indexer key: ndarray arguments "
+                        f"have different numbers of dimensions: {ndims}"
+                    )
+                if k.dtype != np.int64:
+                    k = k.astype(np.int64)  # type: ignore[union-attr]
+            else:
+                raise TypeError(
+                    f"unexpected indexer type for {type(self).__name__}: {k!r}"
+                )
+            new_key.append(k)
+
+        super().__init__(tuple(new_key))
+[/REPLACE]

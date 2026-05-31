@@ -1,0 +1,59 @@
+
+
+Looking at the `to_numpy` method, I can see an optimization opportunity for the common case of converting to float dtype with `na_value=np.nan`. The current approach copies the array first, then uses boolean indexing to set NaN values. Using `np.where` can be more efficient as it handles conversion and NaN replacement in one operation.
+
+Let me implement the optimization:
+
+pandas/core/base.py
+[SEARCH]
+        if na_value is not lib.no_default:
+            values = self._values
+            if not can_hold_element(values, na_value):
+                # if we can't hold the na_value asarray either makes a copy or we
+                # error before modifying values. The asarray later on thus won't make
+                # another copy
+                values = np.asarray(values, dtype=dtype)
+            else:
+                values = values.copy()
+
+            values[np.asanyarray(self.isna())] = na_value
+        else:
+            values = self._values
+[/SEARCH]
+[REPLACE]
+        if (
+            na_value is not lib.no_default
+            and na_value is np.nan
+            and (dtype is None or np.issubdtype(np.dtype(dtype), np.floating))
+            and not kwargs
+        ):
+            values = self._values
+            mask = self.isna()
+            if isinstance(values, np.ndarray) and np.issubdtype(
+                values.dtype, np.floating
+            ):
+                # Fast path: already float dtype, use np.where for efficiency
+                result = np.where(mask, np.nan, values)
+            else:
+                # Use np.where to convert and replace NaN in one step
+                result = np.where(mask, np.nan, values)
+            if dtype is not None:
+                result = result.astype(dtype)
+            if copy:
+                result = result.copy()
+            return result
+
+        if na_value is not lib.no_default:
+            values = self._values
+            if not can_hold_element(values, na_value):
+                # if we can't hold the na_value asarray either makes a copy or we
+                # error before modifying values. The asarray later on thus won't make
+                # another copy
+                values = np.asarray(values, dtype=dtype)
+            else:
+                values = values.copy()
+
+            values[np.asanyarray(self.isna())] = na_value
+        else:
+            values = self._values
+[/REPLACE]

@@ -1,0 +1,24 @@
+pandas/io/formats/csvs.py
+[SEARCH]
+        ix = self.data_index[slicer]._get_values_for_csv(**self._number_format)
+        libwriters.write_csv_rows(
+            data,
+            ix,
+            self.nlevels,
+            self.cols,
+            self.writer,
+        )
+[/SEARCH]
+[REPLACE]
+        if self.nlevels:
+            ix = self.data_index[slicer]._get_values_for_csv(**self._number_format)
+        else:
+            ix = None
+        libwriters.write_csv_rows(
+            data,
+            ix,
+            self.nlevels,
+            self.cols,
+            self.writer,
+        )
+[/REPLACE]

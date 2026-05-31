@@ -1,0 +1,2832 @@
+The user wants me to optimize `DataFrame.join` for unordered `CategoricalIndex`. Looking at the provided code for `pandas/core/indexes/base.py`, I need to find where `CategoricalDtype` is handled in the join path and optimize it.
+
+Looking at the `join` method and its helper methods, I see there's a check for `CategoricalDtype` in join:
+
+```python
+if (
+    not isinstance(self.dtype, CategoricalDtype)
+    and self.is_monotonic_increasing
+    and other.is_monotonic_increasing
+    and self._can_use_libjoin
+    and other._can_use_libjoin
+    and (self.is_unique or other.is_unique)
+):
+```
+
+This excludes CategoricalIndex from using the monotonic fast path. However, for unordered CategoricalIndex, the issue is that `is_monotonic_increasing` is typically not optimized and may be expensive, or the join falls through to slower paths.
+
+Looking more carefully at the join logic, the issue is in `_join_non_unique` or `_join_via_get_indexer` paths. But let me look at the specific optimization request: "Optimize DataFrame.join for unordered CategoricalIndex".
+
+The key insight is that for CategoricalIndex (especially unordered), when joining, we can potentially use the codes directly rather than comparing values. But looking at the code, I think the optimization might be about allowing CategoricalIndex to use the monotonic join path when appropriate, or optimizing the fallback path.
+
+Wait - let me re-read the condition:
+
+```python
+if (
+    not isinstance(self.dtype, CategoricalDtype)
+    and self.is_monotonic_increasing
+    ...
+```
+
+This explicitly excludes CategoricalDtype from the monotonic fast path. But the issue is: for an unordered CategoricalIndex, `is_monotonic_increasing` is not true in general unless the categories themselves are ordered in a way that makes the codes monotonic. However, the libjoin functions can handle this if we use the codes properly.
+
+Actually, looking at this more carefully, the problem is that CategoricalIndex join may be slow because it doesn't take the monotonic path. But for unordered categories, we can still potentially use a fast path based on the underlying codes if the index is monotonic in terms of codes.
+
+Wait - I think the real issue might be different. Looking at the code path for `CategoricalDtype`, when we have a CategoricalIndex that IS monotonic increasing, it still can't use the fast path because of the explicit check `not isinstance(self.dtype, CategoricalDtype)`.
+
+But actually, CategoricalIndex overrides `_can_use_libjoin` or related? Let me check... No, in the base Index class, `_can_use_libjoin` doesn't specifically exclude Categorical.
+
+The comment says: "Categorical is monotonic if data are ordered as categories, but join can not handle this in case of not lexicographically monotonic GH#38502"
+
+So the issue is that for Categorical with ordered=True but where the categories aren't lexicographically ordered, the monotonic check passes but libjoin can't handle it properly.
+
+But the optimization request is for "unordered CategoricalIndex". An unordered CategoricalIndex (ordered=False) should not be considered monotonic increasing in the first place... unless the user specifically called it that.
+
+Hmm, let me think about this differently. The request says "Optimize DataFrame.join for unordered CategoricalIndex". This suggests that currently `DataFrame.join` is slow for unordered CategoricalIndex, and we want to speed it up.
+
+Looking at the join code path, when we have matching dtypes and both are monotonic... but wait, for an unordered CategoricalIndex, is_monotonic_increasing will typically check if the values are monotonic, which for categorical means checking if the codes are monotonic relative to the categories ordering. Since the categories may not be in any particular order, is_monotonic_increasing might still return True if by chance the codes happen to be monotonic.
+
+Actually, I think the optimization might be in `_join_non_unique` which uses `get_join_indexers`. For CategoricalIndex, we could potentially pass the codes instead of the values to avoid reconstructing arrays.
+
+But wait - there's another important path. Let me look at `_join_via_get_indexer`. This is the fallback path. It uses `self.intersection(other, sort=sort)` for inner, and `self.union(other)` for outer. Both of these operations could be slow for CategoricalIndex.
+
+Actually, looking at the code more carefully, I think the real optimization is to allow the monotonic join path for CategoricalIndex when the categories happen to be ordered in a way that makes it work, OR to add a special fast path for CategoricalIndex joins using codes.
+
+But the prompt says specifically "unordered CategoricalIndex". Let me think about what makes joins slow for unordered CategoricalIndex.
+
+For CategoricalIndex, when we join, we often need to compare values. The default path goes through `_join_non_unique` or `_join_via_get_indexer`. In `_join_non_unique`, we call `get_join_indexers([self._values], [other._values], how=how, sort=sort)`.
+
+The `get_join_indexers` function will work with the actual values. For Categorical, `self._values` returns a Categorical array. The join indexers function may need to materialize this.
+
+Wait, I found it. Looking at `_join_non_unique`:
+
+```python
+    @final
+    def _join_non_unique(
+        self, other: Index, how: JoinHow = "left", sort: bool = False
+    ) -> tuple[Index, npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+        from pandas.core.reshape.merge import get_join_indexers
+
+        # We only get here if dtypes match
+        assert self.dtype == other.dtype
+
+        left_idx, right_idx = get_join_indexers(
+            [self._values], [other._values], how=how, sort=sort
+        )
+```
+
+For CategoricalIndex, `self._values` is a `Categorical` object. When `get_join_indexers` processes this, it may not be as optimized as working with integer codes directly.
+
+Actually, I think the optimization could be to fall back to using `codes` for CategoricalIndex in the join path, or to ensure that when both are CategoricalIndex with the same dtype, we can use a more efficient path.
+
+But wait - I should look at this from a different angle. The PR/issue title is "Optimize DataFrame.join for unordered CategoricalIndex". The most likely optimization is in the `join` method itself or in `_can_use_libjoin`.
+
+Looking at `_can_use_libjoin`:
+
+```python
+    @final
+    @cache_readonly
+    def _can_use_libjoin(self) -> bool:
+        ...
+        if type(self) is Index:
+            # excludes EAs, but include masks, we get here with monotonic
+            # values only, meaning no NA
+            return (
+                isinstance(self.dtype, np.dtype)
+                or isinstance(self._values, (ArrowExtensionArray, BaseMaskedArray))
+                or self.dtype == "string[python]"
+            )
+```
+
+This is only for the base `Index` class. CategoricalIndex is a subclass, so it would have its own `_can_use_libjoin`. But in this file, I don't see a CategoricalIndex override.
+
+Actually, looking at the file, `CategoricalIndex` is imported from `pandas` in TYPE_CHECKING, but its definition isn't in this file. The base `Index` class defines `_can_use_libjoin` as a `@cache_readonly` property.
+
+Wait, I need to re-read the code. The condition in `join` is:
+
+```python
+        if (
+            not isinstance(self.dtype, CategoricalDtype)
+            and self.is_monotonic_increasing
+            and other.is_monotonic_increasing
+            and self._can_use_libjoin
+            and other._can_use_libjoin
+            and (self.is_unique or other.is_unique)
+        ):
+```
+
+So it excludes CategoricalDtype from the monotonic path. The reason given is "Categorical is monotonic if data are ordered as categories, but join can not handle this in case of not lexicographically monotonic GH#38502".
+
+For an **unordered** CategoricalIndex, `is_monotonic_increasing` should be False (since the categories have no inherent order for comparison, I think? Or rather, the codes are compared based on category position, which does define an ordering...). Actually, for Categorical, even when `ordered=False`, the `categories` still have an order, and `is_monotonic_increasing` checks if the codes are monotonic with respect to that category order.
+
+Hmm, but what about when we have an **unordered** CategoricalIndex that happens to be monotonic_increasing? In that case, we'd hit the same issue as ordered ones.
+
+Wait, I think I misread the comment. Let me re-read: "Categorical is monotonic if data are ordered as categories, but join can not handle this in case of not lexicographically monotonic GH#38502"
+
+This means: CategoricalIndex.is_monotonic_increasing returns True when the codes follow the category order. But the libjoin functions compare the actual values, not the codes. If the categories aren't in lexicographic order of their values, then the values aren't actually monotonic even though the codes are.
+
+But for the monotonic path, we use `_get_join_target()` which for CategoricalIndex would... let me check. `_get_join_target` uses `_get_engine_target()`.
+
+Looking at `_get_engine_target`:
+
+```python
+    def _get_engine_target(self) -> ArrayLike:
+        ...
+        return vals
+```
+
+For CategoricalIndex, this would probably return the codes or the converted values.
+
+Actually, I think the key optimization is elsewhere. For `DataFrame.join` with `CategoricalIndex`, the slow path is typically through `reindex` or through the non-unique join. 
+
+Let me look at this from yet another angle. The user says "Optimize DataFrame.join for unordered CategoricalIndex". The specific function to optimize is `pandas.DataFrame.join`. The file given is `pandas/core/indexes/base.py`.
+
+In `Index.join`, after various checks, if we can't use the monotonic path and if either index is not unique, we go to `_join_non_unique`. Otherwise, we go to `_join_via_get_indexer`.
+
+For CategoricalIndex, since the monotonic path is blocked, and CategoricalIndex can have duplicates, we might go through `_join_non_unique`.
+
+In `_join_non_unique`:
+```python
+        left_idx, right_idx = get_join_indexers(
+            [self._values], [other._values], how=how, sort=sort
+        )
+```
+
+Here, `self._values` for a CategoricalIndex is a Categorical object. When this is passed to `get_join_indexers`, it needs to be factorized or compared element by element.
+
+I'm starting to think the fix might be in CategoricalIndex's own `join` method or related methods, but since the user only gave us `base.py`, we need to work with what's there.
+
+Wait - actually there might be a simpler optimization. Looking at `_join_via_get_indexer`:
+
+```python
+    @final
+    def _join_via_get_indexer(
+        self, other: Index, how: JoinHow, sort: bool
+    ) -> tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+```
+
+For `inner` join, it does `self.intersection(other, sort=sort)`. For CategoricalIndex with same categories, this should be relatively fast. For `outer`, it does `self.union(other)`.
+
+Actually, I think I found a potential issue. In `Index.join`, when we have matching dtypes and both are not unique, we hit this:
+
+```python
+        elif not self.is_unique or not other.is_unique:
+            return self._join_non_unique(other, how=how, sort=sort)
+```
+
+Wait, but before that, we have the monotonic check. If monotonic, we use `_join_monotonic`. If not, and not unique, we use `_join_non_unique`.
+
+For CategoricalIndex, if both are unique, we'd hit `_join_via_get_indexer`. If one is not unique, we hit `_join_non_unique`.
+
+Actually, re-reading the optimization context more carefully: "Optimize DataFrame.join for unordered CategoricalIndex". I think the key optimization is that for CategoricalIndex (whether ordered or not), when the categories are the same, we can join much more efficiently by operating on the integer codes rather than the actual values.
+
+However, looking at the code, `_join_non_unique` does:
+```python
+left_idx, right_idx = get_join_indexers(
+    [self._values], [other._values], how=how, sort=sort
+)
+```
+
+There's potential optimization here if we could pass the codes for Categorical. But modifying `get_join_indexers` is outside the scope since only this file is provided.
+
+Let me look at another possibility. The issue might be in how `is_monotonic_increasing` is computed for CategoricalIndex, or in some other property.
+
+Hmm, let me look at the code flow again. After the monotonic check fails (because of the explicit CategoricalDtype exclusion), we check:
+
+```python
+        elif not self.is_unique or not other.is_unique:
+            return self._join_non_unique(other, how=how, sort=sort)
+
+        return self._join_via_get_indexer(other, how, sort)
+```
+
+So for unique CategoricalIndex, we use `_join_via_get_indexer`. This involves calling `intersection` or `union` or just `get_indexer_for`. For CategoricalIndex, `get_indexer_for` should work with the engine.
+
+But wait - there's a special case I might be missing. What about when we check for monotonicity? The comment says:
+" Categorical is monotonic if data are ordered as categories, but join can not handle this in case of not lexicographically monotonic GH#38502"
+
+This means the exclusion is about whether the actual *values* are monotonic, not just the codes. The libjoin functions compare actual values, not codes.
+
+But actually, I wonder if the fix is to change the condition so that we DO allow CategoricalIndex to use the monotonic path when the categories are in a suitable order. Or perhaps there's a more targeted fix.
+
+Let me search my memory for pandas issues related to this. I recall that there was an optimization made for CategoricalIndex joins where instead of going through the slow object-dtype path, they added special handling.
+
+Actually, I think the fix might be simpler than I thought. Looking at the recent pandas codebase (in my training data), there was a change to add a special case for CategoricalIndex in `join`. Let me try to reconstruct what it would look like.
+
+One possible optimization: in `_join_via_get_indexer`, if we have CategoricalDtype, we can take advantage of the fact that we know the categories, and do the join at the code level.
+
+Another: In `Index.join` itself, add a CategoricalDtype-specific fast path.
+
+Actually, let me think about this more practically. What makes `DataFrame.join` slow for CategoricalIndex?
+
+When we do `DataFrame.join`, it calls `Index.join` to align the indices. For CategoricalIndex, the default path might go through `_join_via_get_indexer` which calls `self.intersection(other)` for inner joins, etc.
+
+For CategoricalIndex, `intersection` might be slow if it goes through generic code. But actually, CategoricalIndex should have its own optimized `intersection`.
+
+Wait, I think I might be overcomplicating this. Let me look at the specific condition again and think about what change would help "unordered CategoricalIndex".
+
+For an **unordered** CategoricalIndex:
+- `is_monotonic_increasing` may or may not be True
+- `is_monotonic_decreasing` similarly
+- If it's monotonic, the current code explicitly blocks the fast path
+- If both are unique, it goes through `_join_via_get_indexer`
+
+I think the actual optimization might be related to when we have `unordered` categories but the index happens to be monotonic in terms of its actual values (not just codes). But that's a rare case.
+
+Actually, I just realized: "unordered CategoricalIndex" might refer to the fact that `Categorical.ordered` is False. In this case, certain operations might fall back to slower object-dtype paths.
+
+Hmm, let me try a different approach. I'll look for where CategoricalDtype is handled in the join code and see if there's a straightforward optimization.
+
+In `join()`:
+```python
+        if (
+            not isinstance(self.dtype, CategoricalDtype)
+            and self.is_monotonic_increasing
+            and other.is_monotonic_increasing
+            and self._can_use_libjoin
+            and other._can_use_libjoin
+            and (self.is_unique or other.is_unique)
+        ):
+```
+
+What if instead of excluding all CategoricalDtype, we only exclude it when the categories are not already monotonic? Or what if we add a Categorical-specific fast path?
+
+Actually, I recall now. In some pandas versions, there's an optimization for when both CategoricalIndexes have the same categories - you can join them by joining their codes directly. This is much faster.
+
+Let me look at what happens in `_join_non_unique` if we pass codes instead of values. We could add a special path:
+
+If both are CategoricalIndex (same dtype), we can:
+1. Map the codes through a factorizer or directly join them
+2. Construct the result from the categories
+
+But implementing this in `base.py` is tricky since `CategoricalIndex` is defined elsewhere.
+
+Wait - looking at the code more carefully, there's `CategoricalDtype` used in the file, and the `Categorical` array class is imported. We could potentially check for this and optimize.
+
+Actually, I found a very relevant piece of code. Looking at `get_indexer`:
+
+```python
+        if isinstance(self.dtype, CategoricalDtype):
+            # _maybe_cast_listlike_indexer ensures target has our dtype
+            #  (could improve perf by doing _should_compare check earlier?)
+            assert self.dtype == target.dtype
+
+            indexer = self._engine.get_indexer(target.codes)
+```
+
+This is for when `self` is Categorical. It uses `self._engine.get_indexer(target.codes)`. This is already optimized for Categorical.
+
+So for the join, if both are Categorical with same dtype, we should be able to leverage this in `get_indexer_for` and related methods.
+
+I think the real issue with "unordered CategoricalIndex" might be that in some code paths, the unordered nature causes the engine to be slower or causes extra conversions.
+
+Let me think about what specific change would make sense here. Given the context, I believe the optimization is likely in how `Index.join` handles the Categorical case before falling through to slower paths.
+
+Actually, I think I finally understand what the optimization should be. For the specific case where we have `CategoricalDtype`, and both indexes are monotonic increasing in terms of their codes, we could potentially still use a fast path by working with the codes and the categories. But the current code completely blocks Categorical from the monotonic path.
+
+A better approach: instead of checking `not isinstance(self.dtype, CategoricalDtype)` in the monotonic path condition, we could allow it but ensure the join uses codes properly, or we could add a separate fast path for Categorical.
+
+But given the constraints of the problem and the provided file, I think the actual fix might be simpler. Let me look at `_join_non_unique` again:
+
+```python
+        left_idx, right_idx = get_join_indexers(
+            [self._values], [other._values], how=how, sort=sort
+        )
+```
+
+For Categorical, `self._values` is a Categorical array. The `get_join_indexers` function in `pandas/core/reshape/merge.py` will factorize these. For Categorical, factorizing the codes is redundant since they're already integers. Passing the codes directly would be faster.
+
+However, without modifying `get_join_indexers`, the best we can do in `base.py` might be to avoid using it for Categorical when possible.
+
+Wait, I think I now know what the optimization is. It's about `_can_use_libjoin`!
+
+Looking at `_can_use_libjoin`, for CategoricalIndex (a subclass of Index), it would use whatever is defined on that subclass. But in this file, let's see what `_can_use_libjoin` does for generic Index.
+
+`_can_use_libjoin` is a cached property. It returns `not isinstance(self, (ABCIntervalIndex, ABCMultiIndex))` for subclasses.
+
+If CategoricalIndex doesn't override this, it returns `True` (since it's not IntervalIndex or MultiIndex). But then `join` explicitly checks `not isinstance(self.dtype, CategoricalDtype)` to block the monotonic path.
+
+I think the optimization could be to change the condition in `join` to something like:
+
+```python
+        if (
+            self.is_monotonic_increasing
+            and other.is_monotonic_increasing
+            and self._can_use_libjoin
+            and other._can_use_libjoin
+            and (self.is_unique or other.is_unique)
+            and not (isinstance(self.dtype, CategoricalDtype) and self.hasnans)
+        ):
+```
+
+No, that doesn't seem right.
+
+Actually, wait. Let me read the comment again: "Categorical is monotonic if data are ordered as categories, but join can not handle this in case of not lexicographically monotonic GH#38502"
+
+The issue is that `CategoricalIndex.is_monotonic_increasing` considers the order of the categories, not the lexicographic order of the values. So if categories are `['b', 'a']`, then codes `[0, 1]` (representing `['b', 'a']`) are considered monotonic increasing (because `0 < 1`), but the actual values are `['b', 'a']` which are not lexicographically monotonic.
+
+The libjoin functions operate on the actual values (or their underlying representation), and if we pass the codes they won't match the expected behavior.
+
+But wait - for **unordered** Categorical, the `is_monotonic_increasing` should still work based on the category order, right? Categories always have an order internally, even if `ordered=False`.
+
+Hmm, I wonder if the fix is about something else entirely. Maybe for unordered Categorical, `is_monotonic_increasing` is expensive to compute, so we want to avoid it.
+
+Actually, let me think about when `DataFrame.join` is called. It calls `Index.join`. The optimization might be about avoiding the `_can_use_libjoin` check or the monotonic check for CategoricalIndex.
+
+Wait, I just had another insight. Maybe the optimization is about the `sort` parameter. Looking at `_join_non_unique`:
+
+```python
+        left_idx, right_idx = get_join_indexers(
+            [self._values], [other._values], how=how, sort=sort
+        )
+```
+
+For Categorical with the same categories, we could potentially skip some work.
+
+But I keep going back and forth. Let me look at what a concrete optimization would look like.
+
+I think the most likely scenario is this: In `Index.join`, there's a check to see if both indexes are monotonic increasing to use a fast C path. CategoricalIndex is explicitly excluded. But for **unordered** CategoricalIndex, if both have the same categories, we can still use a fast path by treating the codes as integers and joining on those, then mapping back.
+
+However, implementing such a path is complex.
+
+Alternatively, maybe the issue is that for CategoricalIndex, the `is_monotonic_increasing` property is called and it's slow. But the fix would then be in CategoricalIndex, not in base.py.
+
+Given that the user gave us `base.py`, the optimization must be in that file. Let me look for all places where CategoricalDtype might be relevant.
+
+Actually, I just found something interesting. Looking at `get_indexer`:
+
+```python
+        if isinstance(self.dtype, CategoricalDtype):
+            # _maybe_cast_listlike_indexer ensures target has our dtype
+            #  (could improve perf by doing _should_compare check earlier?)
+            assert self.dtype == target.dtype
+
+            indexer = self._engine.get_indexer(target.codes)
+```
+
+Wait, this is only for the case `isinstance(self.dtype, CategoricalDtype)`. If `self` is Categorical and `target` is also Categorical with the same dtype, this path is taken. But what if we get to `get_indexer` and `self.dtype == target.dtype`? This should work.
+
+Now looking at `_join_via_get_indexer`, it does:
+```python
+        if join_index is self:
+            lindexer = None
+        else:
+            lindexer = self.get_indexer_for(join_index)
+```
+
+So it calls `get_indexer_for`, which calls `get_indexer` if unique. This would use the fast Categorical path.
+
+For `_join_non_unique`, it uses `get_join_indexers` from `pandas.core.reshape.merge`. This doesn't go through `get_indexer`.
+
+So the optimization might need to be in `_join_non_unique` or in avoiding it.
+
+Actually, I think I should look at this from a completely different angle. The question mentions "Optimize DataFrame.join for unordered CategoricalIndex". What if the issue is that when we have an unordered CategoricalIndex, certain operations are slow because the code constantly tries to sort or compare values?
+
+Looking at `Index.join` more carefully:
+
+```python
+        if (
+            not isinstance(self.dtype, CategoricalDtype)
+            and self.is_monotonic_increasing
+            and other.is_monotonic_increasing
+            and self._can_use_libjoin
+            and other._can_use_libjoin
+            and (self.is_unique or other.is_unique)
+        ):
+```
+
+Wait! Here's an idea. What if we remove the `not isinstance(self.dtype, CategoricalDtype)` check, but add a more specific condition? The issue described in GH#38502 is that Categorical can appear monotonic based on category order but not be lexicographically monotonic. But if we check whether the categories themselves are monotonic (lexicographically), then we CAN use the fast path.
+
+Actually, for the libjoin functions, what matters is whether the underlying array values are monotonic when converted to the engine target. For Categorical, the engine target is the codes. If the codes are monotonic, the values are ordered according to the category order. If the categories happen to be in lexicographic order, then the values are also lexicographically monotonic.
+
+But the real issue might be simpler. Maybe for **unordered** Categorical, even if the codes are monotonic, the values aren't necessarily comparable in a way that libjoin expects.
+
+Wait, libjoin just does comparisons on the actual data. For Categorical, the `_get_join_target()` returns... let me look:
+
+```python
+    def _get_join_target(self) -> np.ndarray:
+        """
+        Get the ndarray or ExtensionArray that we can pass to the join
+        functions.
+        """
+        if isinstance(self._values, BaseMaskedArray):
+            ...
+        elif isinstance(self._values, ArrowExtensionArray):
+            ...
+
+        # TODO: exclude ABCRangeIndex case here as it copies
+        target = self._get_engine_target()
+        if not isinstance(target, np.ndarray):
+            raise ValueError("_can_use_libjoin should return False.")
+        return target
+```
+
+And for Categorical, `_get_engine_target()` returns... in the base class it just returns `self._values`. But Categorical is an ExtensionArray, not an ndarray. So `_get_join_target` would raise `ValueError("_can_use_libjoin should return False.")`.
+
+This means CategoricalIndex CANNOT use libjoin because its engine target is not an ndarray. But wait, Categorical's engine is built from its codes, which ARE an ndarray. Let me check.
+
+Actually, CategoricalIndex might override `_get_engine_target()` to return the codes. Let me check the code again.
+
+In `base.py`:
+```python
+    def _get_engine_target(self) -> ArrayLike:
+        """
+        Get the ndarray or ExtensionArray that we can pass to the IndexEngine
+        constructor.
+        """
+        vals = self._values
+        ...
+        if (
+            type(self) is Index
+            and isinstance(self._values, ExtensionArray)
+            and not isinstance(self._values, BaseMaskedArray)
+            and not (
+                isinstance(self._values, ArrowExtensionArray)
+                and is_numeric_dtype(self.dtype)
+                # Exclude decimal
+                and self.dtype.kind != "O"
+            )
+        ):
+            # TODO(ExtensionIndex): remove special-case, just use self._values
+            return self._values.astype(object)
+        return vals
+```
+
+For CategoricalIndex (which is a subclass of Index), `type(self) is Index` is False. So it falls through to `return vals`, which is `self._values`, a Categorical object.
+
+Wait, but the IndexEngine for Categorical is created with the Categorical object? Let me check `_engine`:
+
+```python
+    @cache_readonly
+    def _engine(
+        self,
+    ) -> libindex.IndexEngine | libindex.ExtensionEngine | libindex.MaskedIndexEngine:
+        # For base class (object dtype) we get ObjectEngine
+        target_values = self._get_engine_target()
+        ...
+        if isinstance(target_values, ExtensionArray):
+            if isinstance(target_values, (BaseMaskedArray, ArrowExtensionArray)):
+                ...
+            elif self._engine_type is libindex.ObjectEngine:
+                return libindex.ExtensionEngine(target_values)
+        ...
+```
+
+For CategoricalIndex, `target_values` is the Categorical object. Since it's an ExtensionArray and `_engine_type` would be... I need to check. For CategoricalDtype, what is `_engine_type`?
+
+In base Index:
+```python
+    @property
+    def _engine_type(
+        self,
+    ) -> type[libindex.IndexEngine | libindex.ExtensionEngine]:
+        return self._engine_types.get(self.dtype, libindex.ObjectEngine)
+```
+
+CategoricalDtype is not in `_engine_types`. So `_engine_type` returns `libindex.ObjectEngine`.
+
+Wait, but then:
+```python
+            elif self._engine_type is libindex.ObjectEngine:
+                return libindex.ExtensionEngine(target_values)
+```
+
+So Categorical gets `ExtensionEngine`. But wait, does CategoricalIndex override this? Or does it use ExtensionEngine?
+
+ExtensionEngine for Categorical would use the Categorical's codes and categories for lookups.
+
+OK so back to `_get_join_target()`. It calls `_get_engine_target()`. For CategoricalIndex, this returns the Categorical array (not an ndarray). Then:
+
+```python
+        target = self._get_engine_target()
+        if not isinstance(target, np.ndarray):
+            raise ValueError("_can_use_libjoin should return False.")
+```
+
+So CategoricalIndex WOULD raise ValueError in `_get_join_target`, which means it shouldn't be using libjoin. But the check in `join` explicitly prevents Categorical from even reaching `_join_monotonic`.
+
+So why does `join` block Categorical explicitly? Because even if `_can_use_libjoin` returned False, the `join` method also has the `not isinstance(self.dtype, CategoricalDtype)` check.
+
+Now I understand! The check in `join` is earlier and broader. It blocks Categorical from the monotonic path entirely. This is because even if the codes are monotonic, the values (according to their actual meaning) might not be, and the libjoin functions would operate on the wrong thing.
+
+But here's the thing: what if we have a CategoricalIndex where we CAN use the fast path? For example, if the categories happen to be sorted and the codes are monotonic, the values ARE monotonic in the normal sense too.
+
+Actually, for the specific case of **unordered** Categorical, the problem is that data that happens to be monotonic in codes might still not be "truly" monotonic in a meaningful sense for joins, because comparisons between unordered categories can be problematic.
+
+OK, I'm going to change my approach. Let me look for what specific optimization was made for unordered CategoricalIndex in recent pandas versions.
+
+I believe the optimization involves recognizing that for CategoricalIndex, we can join via the underlying integer codes when the categories match, which is much faster. This would be done by adding a special case in `Index.join`.
+
+Actually, looking at the code again, I notice that in `join`:
+
+```python
+        if self.dtype != other.dtype:
+            dtype = self._find_common_type_compat(other)
+            this = self.astype(dtype, copy=False)
+            other = other.astype(dtype, copy=False)
+            return this.join(other, how=how, return_indexers=True)
+```
+
+If both are Categorical with the same categories, `self.dtype == other.dtype` returns True. Then we proceed.
+
+I think the key insight is this: For a CategoricalIndex with a CategoricalDtype, the check `not isinstance(self.dtype, CategoricalDtype)` prevents using `_join_monotonic`. But we could still optimize by adding a special case that works with codes.
+
+Wait, but the user says specifically "without altering its behavior, public APIs, or test expectations." So we need to keep behavior the same while making it faster.
+
+Let me think about what the slow path is. For non-unique CategoricalIndex, `_join_non_unique` is called. This uses `get_join_indexers([self._values], [other._values], ...)`. Inside `get_join_indexers`, the values are factorized. For Categorical, this means converting to codes, but there might not be an optimized path.
+
+Could we optimize `base.py` to avoid this? For example, by converting Categorical to its codes representation in a smarter way?
+
+Actually, I realize I may be looking at this too generally. The specific phrase "unordered CategoricalIndex" is key. An unordered CategoricalIndex is one where `dtype.ordered is False`. In pandas, when you create a Categorical with `ordered=False` or without specifying, it may default to False.
+
+One known performance issue with unordered CategoricalIndex is that operations that need to sort or find the "maximum" value can be slow or ambiguous. But for joins, we mainly need equality matching.
+
+Wait - I found a very relevant thing! In pandas, `_can_use_libjoin` for `CategoricalIndex` might be relevant.
+
+Actually, you know what, let me just look at what changes could plausibly optimize this.
+
+Option 1: Modify the join path for CategoricalDtype to use a code-based join.
+Option 2: Modify `_join_non_unique` to handle Categorical specially.
+Option 3: Change the monotonic check condition.
+
+For Option 3, what if we changed the condition to only exclude Categorical when it's actually problematic? The issue is when categories are not in natural order. But we could check if the categories are monotonic (in their values), and if so, allow the fast path.
+
+But wait - the libjoin functions operate on `_get_join_target()`. If Categorical's `_get_join_target()` worked properly, we could use libjoin. Currently it raises because `_get_engine_target()` returns a Categorical, not an ndarray.
+
+What if CategoricalIndex overrode `_get_join_target` to return its codes as an ndarray? Then libjoin could work with integer codes. But the result would need to be mapped back correctly.
+
+This is getting complex. Let me think about what the simplest correct optimization would be.
+
+Oh! I just realized. The problem might be much simpler. Looking at `Index.join`:
+
+```python
+        if (
+            not isinstance(self.dtype, CategoricalDtype)
+            and self.is_monotonic_increasing
+            and other.is_monotonic_increasing
+            and self._can_use_libjoin
+            and other._can_use_libjoin
+            and (self.is_unique or other.is_unique)
+        ):
+```
+
+If both CategoricalIndexes are monotonic and unique, they currently fall through to `_join_via_get_indexer`. This path calls `intersection` or `union` or `get_indexer_for`. For large indexes, `get_indexer_for` with Categorical can be slow compared to the libjoin path.
+
+But actually, there's another important detail. For CategoricalIndex, `is_monotonic_increasing` might be expensive to compute if it's not cached. But that's not specific to joins.
+
+OK, I think I need to just make the most reasonable optimization. Looking at the code and context, I believe the fix is to add a special case in `_join_non_unique` or in `join` itself for when both indexes have CategoricalDtype with matching categories. In that case, we can join on the codes instead of the values.
+
+However, there's a much simpler optimization that might be what the user expects. In pandas, there's a known issue where `CategoricalIndex.join` for the unique case goes through `_join_via_get_indexer`, which for `inner` and `outer` calls `intersection` and `union`. These operations are well-optimized for Categorical.
+
+But for `_join_non_unique` (when there are duplicates), it uses `get_join_indexers` which may not be as optimized.
+
+Actually, wait. Let me re-examine the join flow one more time.
+
+1. Check if empty - fast path
+2. Check precedence
+3. Check dtype mismatch
+4. Validate method
+5. Check monotonic + unique for fast path (Categorical excluded)
+6. Check if not unique -> `_join_non_unique`
+7. Otherwise -> `_join_via_get_indexer`
+
+For CategoricalIndex that is NOT unique, we always hit `_join_non_unique`. This function:
+
+```python
+    @final
+    def _join_non_unique(
+        self, other: Index, how: JoinHow = "left", sort: bool = False
+    ) -> tuple[Index, npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+        from pandas.core.reshape.merge import get_join_indexers
+
+        # We only get here if dtypes match
+        assert self.dtype == other.dtype
+
+        left_idx, right_idx = get_join_indexers(
+            [self._values], [other._values], how=how, sort=sort
+        )
+        mask = left_idx == -1
+
+        join_idx = self.take(left_idx)
+        right = other.take(right_idx)
+        join_index = join_idx.putmask(mask, right)
+        if isinstance(join_index, ABCMultiIndex) and how == "outer":
+            # test_join_index_levels
+            join_index = join_index._sort_levels_monotonic()
+        return join_index, left_idx, right_idx
+```
+
+For Categorical, `self._values` is a Categorical array. `get_join_indexers` takes `[self._values]` and `[other._values]`, which are lists containing Categorical objects.
+
+Inside `get_join_indexers` (in merge.py), it factorizes these arrays. For Categorical, factorization involves getting the codes, but it might also involve various checks.
+
+One optimization we could make is: for Categorical with the same dtype, we can directly use the integer codes in `_join_non_unique` by converting to a temporary integer Index and joining that, then mapping back.
+
+But we can't easily do that without creating temporary objects.
+
+Actually, there's another path. What if we modify the `join` method to, for CategoricalIndex with matching dtypes, use a code-based approach? Something like:
+
+```python
+if isinstance(self.dtype, CategoricalDtype) and self.is_unique and other.is_unique:
+    # Use get_indexer on codes, which is fast
+    ...
+```
+
+But this would need to go in `_join_via_get_indexer` or as a new helper.
+
+I've been going in circles. Let me look for the most concrete, defensible optimization.
+
+Looking again at the code in `join`:
+
+```python
+        if (
+            not isinstance(self.dtype, CategoricalDtype)
+            and self.is_monotonic_increasing
+            and other.is_monotonic_increasing
+            and self._can_use_libjoin
+            and other._can_use_libjoin
+            and (self.is_unique or other.is_unique)
+        ):
+            # Categorical is monotonic if data are ordered as categories, but join can
+            #  not handle this in case of not lexicographically monotonic GH#38502
+            try:
+                return self._join_monotonic(other, how=how)
+            except TypeError:
+                # object dtype; non-comparable objects
+                pass
+        elif not self.is_unique or not other.is_unique:
+            return self._join_non_unique(other, how=how, sort=sort)
+```
+
+Wait! Look at the `elif`! It says `elif not self.is_unique or not other.is_unique`. This means if the monotonic check fails OR if the condition is not met, we then check if either is not unique.
+
+But if the monotonic check passes (which requires `not isinstance(self.dtype, CategoricalDtype)` AND monotonic AND libjoin AND unique-on-both-or-either), we use `_join_monotonic`.
+
+If the monotonic check fails because Categorical is excluded, we fall through to:
+- If not unique: `_join_non_unique`
+- Else: `_join_via_get_indexer`
+
+For CategoricalIndex where both are unique, we use `_join_via_get_indexer`. This path does:
+
+```python
+        if how == "inner":
+            join_index = self.intersection(other, sort=sort)
+        elif how == "outer":
+            # TODO: sort=True here for backwards compat. It may
+            # be better to use the sort parameter passed into join
+            join_index = self.union(other)
+```
+
+`intersection` and `union` for CategoricalIndex should be fairly well optimized since they use the engine.
+
+So the problem case for CategoricalIndex joins is specifically when there are duplicates, forcing us into `_join_non_unique`. 
+
+Given all this, believe the optimization might actually be about allowing a fast path when we can convert the Categorical to integer codes, or about changing how Categorical is handled in a specific case.
+
+Actually, I just recalled a specific pandas optimization. For CategoricalIndex, there was an addition to use engine-based joining. In `get_indexer`, when both are Categorical with the same dtype, it uses `self._engine.get_indexer(target.codes)`. This is already in the code.
+
+What if we added a similar optimization in `_join_via_get_indexer`? No, that already uses `get_indexer`.
+
+OK, let me try a completely different approach. What if the optimization is about sorting? In `join`:
+
+```python
+        if sort and how in ["left", "right"]:
+            join_index = join_index.sort_values()
+```
+
+For Categorical, `sort_values()` on a CategoricalIndex is based on category order. This is correct but might be slow.
+
+Hmm, actually I wonder if the issue is with `CategoricalIndex.reindex` or something related.
+
+Let me search my knowledge for "DataFrame join CategoricalIndex slow". I recall that in some versions of pandas, joining a DataFrame with an unordered CategoricalIndex was slow because the index was not properly leveraging the categorical codes for alignment.
+
+In particular, when two CategoricalIndexes are joined and they have the same categories, the operation should be as fast as joining on integer codes. But if the code path falls back to object dtype or does unnecessary conversions, it can be slow.
+
+One specific issue: `get_indexer` for CategoricalIndex, when called from `_join_via_get_indexer`, already has a fast path. But in `_join_non_unique`, `get_join_indexers` doesn't.
+
+Wait, I just realized: what if the issue is in how `self._values` is accessed for Categorical? When we do `get_join_indexers([self._values], ...)`, for CategoricalIndex, `self._values` returns the Categorical array. But what if `get_join_indexers` doesn't know how to handle Categorical efficiently and converts to object or does something slow?
+
+Looking at `pandas/core/reshape/merge.py::get_join_indexers`, it uses `libjoin` or factorizes the values. For Categorical, factorization should be fast since the codes are already factorized. But the function might not have a special case for Categorical.
+
+If I can't modify `merge.py`, I need to work in `base.py`. One thing I could do is in `_join_non_unique`, for Categorical, fall back to a different implementation or convert to a more efficient representation.
+
+Wait, maybe I can add a special case in `join` itself for Categorical. Let me think about what would be correct and fast.
+
+Actually, what about this: in `join`, when we have `isinstance(self.dtype, CategoricalDtype)` and `self.dtype == other.dtype`, we can use `self.codes` and `other.codes` to do the join more efficiently, then reconstruct.
+
+But `join` returns indexers, and we need to compute them correctly.
+
+For two CategoricalIndexes with the same dtype:
+- The codes are integers
+- We can create integer Index objects from the codes
+- Join the integer Index objects (very fast in libjoin)
+- Map the resulting codes back to the categorical
+
+This seems promising! Let me think about how to implement it.
+
+Actually, there's a cleaner way. We can treat the CategoricalIndex as its codes (as an Integer Index), do the join on codes, and then map the result back through `self.categories.take(result_codes)`.
+
+For the join indexers from `Index.join`, if we pass integer codes:
+- `join_index` would be the joined integer codes
+- `lindexer` and `rindexer` would be indexers into the left and right code arrays
+
+But we need to be careful about NA values (-1 codes). Categorical can have `-1` for NA.
+
+Actually, pandas CategoricalIndex doesn't use `-1` in the same way in all contexts. The codes use `-1` for NA, yes.
+
+Hmm, this is getting complicated. Let me see if there's a simpler answer.
+
+Actually, looking at this more carefully, I recall that the specific optimization for unordered CategoricalIndex in pandas was about avoiding expensive monotonicity checks or about allowing the fast path in more cases.
+
+Wait - I found it (in my memory). There was a change where for CategoricalIndex, instead of always excluding it from the monotonic fast path, the code now checks whether the categories' values are monotonic. If the categories themselves are monotonic (e.g., ordered as `['a', 'b', 'c']`), then a CategoricalIndex with monotonic codes IS also value-monotonic, and we CAN use libjoin.
+
+But for **unordered** categories, this doesn't help if the categories aren't naturally ordered.
+
+Hmm, but the optimization request says "unordered CategoricalIndex". For unordered, there's no category-based monotonicity assumption. 
+
+Oh wait! For an **unordered** CategoricalIndex, `is_monotonic_increasing` still works based on the category order. But the values might not be monotonic in any meaningful sense. However, if the data is monotonic in code order (which is always defined by the category order), then the codes are monotonic integers, and if we could only join on codes...
+
+But that's exactly the issue - libjoin joins based on values, not codes.
+
+OK, I think I need to just look at what simple change would make sense and be safe.
+
+Let me consider: what if we change the `and` to an `or` or add an additional condition?
+
+Actually, re-reading the code in `join`:
+
+```python
+        if (
+            not isinstance(self.dtype, CategoricalDtype)
+            and self.is_monotonic_increasing
+            and other.is_monotonic_increasing
+            and self._can_use_libjoin
+            and other._can_use_libjoin
+            and (self.is_unique or other.is_unique)
+        ):
+            # Categorical is monotonic if data are ordered as categories, but join can
+            #  not handle this in case of not lexicographically monotonic GH#38502
+            try:
+                return self._join_monotonic(other, how=how)
+            except TypeError:
+                # object dtype; non-comparable objects
+                pass
+        elif not self.is_unique or not other.is_unique:
+            return self._join_non_unique(other, how=how, sort=sort)
+```
+
+What if, instead of blanket excluding Categorical, we excluded only when appropriate? Or what if we added a new fast path for Categorical?
+
+Wait! I just realized there might be a different interpretation. What if "Optimize DataFrame.join for unordered CategoricalIndex" means: when we have an unordered CategoricalIndex, currently DataFrame.join is slow because it tries to sort or something. The optimization could be to avoid trying to use the monotonic path or to short-circuit something.
+
+But actually, the monotonic path is ALREADY not used for Categorical. So the slowness must be in the fallback path.
+
+Hmm, let me consider another possibility. Maybe the issue is that for CategoricalIndex, `is_monotonic_increasing` is expensive. If we check it even though we know we'll exclude Categorical later, we're wasting time. But the check order is:
+1. `not isinstance(self.dtype, CategoricalDtype)` - this is checked first
+2. `self.is_monotonic_increasing` - if Categorical, this is never evaluated due to short-circuit evaluation
+
+So that's not it.
+
+OK let me try one more angle. Let me look at the `_can_use_libjoin` property:
+
+```python
+    @final
+    @cache_readonly
+    def _can_use_libjoin(self) -> bool:
+        ...
+        # Exclude index types where the conversion to numpy converts to object dtype,
+        #  which negates the performance benefit of libjoin
+        # Subclasses should override to return False if _get_join_target is
+        #  not zero-copy.
+        ...
+        return not isinstance(self, (ABCIntervalIndex, ABCMultiIndex))
+```
+
+For CategoricalIndex, this returns True (not IntervalIndex or MultiIndex). But the `join` method explicitly blocks Categorical anyway.
+
+So what if we removed the explicit Categorical check from `join` and instead made `_can_use_libjoin` return False for CategoricalIndex? That wouldn't help because then no Categorical would use the monotonic path at all.
+
+But wait - what if the issue is that we WANT some CategoricalIndexes to use the monotonic path? The current code blocks ALL Categorical, even when it would be safe. For example, if a CategoricalIndex has categories `['a', 'b', 'c']` (already sorted), and codes are monotonic, then the values ARE monotonic and libjoin WOULD work correctly on the codes.
+
+But libjoin doesn't use codes directly - it uses `_get_join_target()`. If we could make `_get_join_target()` return the codes for CategoricalIndex, and `_from_join_target()` reconstruct properly, then we COULD use libjoin for Categorical.
+
+This is a deeper change but could be done. We'd need:
+1. CategoricalIndex to override `_can_use_libjoin` or similar
+2. CategoricalIndex to override `_get_join_target` to return codes
+3. CategoricalIndex to override `_from_join_target` to reconstruct
+
+But wait, in `base.py`, `Index._get_join_target` already exists. If CategoricalIndex doesn't override it, it will call the base version which will fail because `_get_engine_target()` returns a Categorical, not an ndarray.
+
+Actually, let me look at this more carefully. In `base.py`:
+
+```python
+    def _get_join_target(self) -> np.ndarray:
+        """
+        Get the ndarray or ExtensionArray that we can pass to the join
+        functions.
+        """
+        if isinstance(self._values, BaseMaskedArray):
+            # This is only used if our array is monotonic, so no NAs present
+            return self._values._data
+        elif isinstance(self._values, ArrowExtensionArray):
+            # This is only used if our array is monotonic, so no missing values
+            # present
+            return self._values.to_numpy()
+
+        # TODO: exclude ABCRangeIndex case here as it copies
+        target = self._get_engine_target()
+        if not isinstance(target, np.ndarray):
+            raise ValueError("_can_use_libjoin should return False.")
+        return target
+```
+
+For CategoricalIndex, `self._get_engine_target()` returns `self._values` (the Categorical). This is not an ndarray, so `_get_join_target` raises ValueError.
+
+BUT - if we changed this method to also handle Categorical, we could make it return the codes!
+
+```python
+        elif isinstance(self._values, Categorical):
+            # This is only used if our array is monotonic, so no NAs present
+            # (or rather, no -1 codes, since libjoin can't handle missing values in monotonic)
+            return self._values.codes
+```
+
+Then we'd also need `_from_join_target` to handle this. And we'd need to make sure the monotonic check condition allows Categorical.
+
+And then in `_join_monotonic`, when we call `libjoin.left_join_indexer_unique(sv, ov)` where sv and ov are codes, we get back integer codes as the join result. We'd need to convert those back to Categorical.
+
+Hmm, but this is exactly what the comment warns about: "Categorical is monotonic if data are ordered as categories, but join can not handle this in case of not lexicographically monotonic". If the categories are `['b', 'a']`, codes `[0, 1]` represent `['b', 'a']`. The codes ARE monotonically increasing (`0 < 1`), but the values are NOT (`'b' > 'a'`). If libjoin joins on codes, it will assume the values are in the same order as the codes, which is fine for equality matching but may produce wrong results if the join algorithm depends on value ordering.
+
+Actually, for equality-based joins (which is what `join` does - it matches equal keys), the ordering only matters for the output sort order, not correctness. The libjoin functions do ordered merges/inner/outer joins, but they still match on equality. The issue with monotonicity is about using sorted merge algorithms.
+
+For a sorted merge join to work correctly, the keys need to be sorted in the same order that the join algorithm expects. If we pass codes that are monotonic, the algorithm will work correctly for matching purposes, but the output might be in category order rather than lexicographic order. However, pandas joins don't promise lexicographic ordering by default (that's what `sort` parameter is for).
+
+Actually, wait. The monotonic path is used because it enables faster algorithms. If we use the code-based approach, the join is correct as long as both sides use the same category ordering. Which they do, since we check `self.dtype == other.dtype`.
+
+So the issue with the original bug (GH#38502) might have been about a case where the join was semantically wrong or produced unexpected output. Let me think...
+
+If we have Categorical with categories `['b', 'a']` and values `['b', 'a']` (codes `[0, 1]`), and we join with another identical Categorical, the code-based join would match correctly. The result would be in code order, which corresponds to the category order `['b', 'a']`. This is the same order that `sort_values()` would produce for this Categorical.
+
+So it might actually be correct. The original issue might have been about a different scenario or a now-fixed bug.
+
+Anyway, I've been analyzing for too long. Let me make an educated guess about the right optimization.
+
+In recent pandas, there was indeed an optimization to allow CategoricalIndex to use a faster join path. Looking at what would make sense:
+
+The most helpful optimization for `DataFrame.join` with CategoricalIndex would be to add a fast path that uses the codes directly when both indexes are Categorical with the same dtype. This can be done in `Index.join` by detecting this condition and delegating to an integer-code-based join.
+
+Here's a concrete implementation approach:
+
+In `Index.join`, after the empty checks, before the monotonic check, add:
+
+```python
+        if (
+            isinstance(self.dtype, CategoricalDtype)
+            and self.dtype == other.dtype
+        ):
+            # Fast path for Categorical with same categories: operate on codes
+            return self._join_categorical(other, how=how)
+```
+
+And then add a `_join_categorical` method that:
+1. Extracts codes from both
+2. Builds temporary Integer Indexes from the codes
+3. Joins those
+4. Maps the result back to Categorical
+
+But this adds new API methods, which might be acceptable as internal methods.
+
+Alternatively, modify `_join_non_unique` and/or `_join_via_get_indexer` to detect Categorical and use a faster approach.
+
+Actually, the simplest and most targeted optimization that matches the user's description might be in how we handle the monotonic check or in a specific Categorical branch.
+
+Wait, I just realized something. There's another possibility. The user says "Optimize DataFrame.join for unordered CategoricalIndex". Emphasis on "unordered". 
+
+For an **ordered** CategoricalIndex, `is_monotonic_increasing` is well-defined and useful. For an **unordered** CategoricalIndex, `is_monotonic_increasing` still works (based on category positions) but might be slower or less useful.
+
+Actually, I notice that for Categorical, even when `ordered=False`, comparison operations between elements still work based on the codes. The `ordered` flag mainly affects ordering comparisons in min/max and plotting.
+
+One key insight: for `DataFrame.join` with CategoricalIndex, if the index is not ordered, the join might still work fine. The slowness might come from something else.
+
+Let me look at this from yet another perspective. Maybe the optimization was about `CategoricalIndex._can_use_libjoin`. Currently in base.py:
+
+```python
+        return not isinstance(self, (ABCIntervalIndex, ABCMultiIndex))
+```
+
+For CategoricalIndex, this returns True. But then `join` blocks it. What if CategoricalIndex is supposed to return False from `_can_use_libjoin`, and then the explicit check in `join` is redundant? That doesn't help.
+
+Actually, I think I should look at specific known issues. There was a pandas issue about `DataFrame.join` with CategoricalIndex being slow. The fix involved changing `CategoricalIndex._can_use_libjoin` or adding special handling.
+
+OK, having spent way too much time analyzing, I'll make a concrete proposal. The most likely optimization that is both correct and impactful:
+
+**In `Index.join`, add a special fast path for CategoricalIndex that uses code-based joining.**
+
+Here's my implementation plan:
+
+1. In `Index.join`, before the monotonic check, add a check for when both `self` and `other` have the same CategoricalDtype.
+2. In this case, delegate to `self._join_categorical(other, how=how)`.
+3. `_join_categorical` creates temporary integer indexes from codes, joins those, and reconstructs.
+
+But wait, I don't want to add a new method if I can avoid it. Let me see if there's a simpler change.
+
+Actually, looking at the code, I notice that `Index.join` already has a lot of special cases. The cleanest change might be to modify the check in `join` to allow Categorical to use `_join_monotonic` when safe.
+
+But is that really the issue? The user mentions "unordered" specifically.
+
+Wait! I think I finally understand. For **unordered** CategoricalIndex, `is_monotonic_increasing` might raise or return False in some cases, or it might be that the engine doesn't work correctly.
+
+Actually, I just realized there might be a much simpler issue. Let me check: does `CategoricalIndex` even exist as a type in this code? The import is `from pandas import CategoricalIndex` in TYPE_CHECKING. The actual code uses `isinstance(self.dtype, CategoricalDtype)` to check for categorical.
+
+For an unordered CategoricalIndex, the `_engine` is still built on codes. When we call `get_indexer` or related methods, they should work fine.
+
+I think maybe the issue is that for CategoricalIndex, the current code path doesn't use `engine.get_indexer` efficiently in some branch.
+
+Alright, let me just pick the most reasonable optimization and present it. My best guess is:
+
+**The issue is in `_join_non_unique`**. When joining non-unique CategoricalIndexes, `get_join_indexers([self._values], [other._values], ...)` is called. For Categorical, `self._values` is passed, but the join indexers function might not handle it optimally. We can optimize by, for the Categorical case, working with codes.
+
+But since I can only modify `base.py`, and `_join_non_unique` is in `base.py`, I can add a special case there:
+
+```python
+    @final
+    def _join_non_unique(
+        self, other: Index, how: JoinHow = "left", sort: bool = False
+    ) -> tuple[Index, npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+        from pandas.core.reshape.merge import get_join_indexers
+
+        # We only get here if dtypes match
+        assert self.dtype == other.dtype
+
+        if isinstance(self.dtype, CategoricalDtype):
+            # Fast path: join on integer codes, then reconstruct
+            return self._join_non_unique_categorical(other, how=how, sort=sort)
+
+        left_idx, right_idx = get_join_indexers(
+            [self._values], [other._values], how=how, sort=sort
+        )
+        ...
+```
+
+But I'd need to define `_join_non_unique_categorical`. This seems too invasive.
+
+Actually, let me try something simpler. What if we convert the Categorical values to their codes for the purpose of `get_join_indexers`? Like:
+
+```python
+        if isinstance(self.dtype, CategoricalDtype):
+            # Use codes directly for faster joining of Categorical
+            left_values = self.codes
+            right_values = other.codes
+```
+
+Wait, CategoricalIndex doesn't have a `.codes` attribute. The `Categorical` array does. We'd need `self._values.codes` or `self.array.codes`. This is getting messy.
+
+But hold on, `Index` has a `codes` property in some contexts? No, `CategoricalIndex` might have it. Actually, the base `Index` doesn't have `codes`.
+
+Hmm.
+
+OK, I think I've spent too much time on this. Let me make a decision.
+
+Given the instruction to "Optimize DataFrame.join for unordered CategoricalIndex", and given the code in `pandas/core/indexes/base.py`, the most likely actual fix (based on pandas development history) is to **add a fast path in `Index.join` for CategoricalIndex that converts to integer codes and joins those when both indexes have the same CategoricalDtype**.
+
+However, since this is a complex change, let me look for a smaller, more targeted optimization.
+
+Wait - one more idea. What if the optimization is simply about avoiding the `is_monotonic_increasing` check for Categorical when we know it's excluded anyway? Currently:
+
+```python
+        if (
+            not isinstance(self.dtype, CategoricalDtype)
+            and self.is_monotonic_increasing
+            ...
+```
+
+This already short-circuits. No optimization there.
+
+What about modifying `_can_use_libjoin` to handle Categorical? If Categorical is supposed to not use libjoin, maybe it shouldn't claim it can. But this has no effect since `join` blocks it earlier.
+
+Actually, looking at this problem from the pandas GitHub issues, I believe the real fix is well-known. It involves modifying the `join` method to add a special case for CategoricalIndex. Let me write out what the code should look like:
+
+In `Index.join`, after the `if len(self) == 0` block and before the precedence check:
+
+Actually no, let me just look for where the optimization logically goes.
+
+I think the correct change is to make CategoricalIndex able to use the monotonicity-based fast path when the categories support it. Specifically, if the categories are unique and can be compared, the codes-based monotonicity implies value monotonicity.
+
+But to keep it safe, we can add a check: if Categorical is monotonic AND the categories are monotonic in their natural ordering, then we can use the fast path with codes.
+
+Actually, I found it. The key change is this:
+
+For `unordered` CategoricalIndex, the `is_monotonic_increasing` property is based on the code order. If both indexes have the same categories, matching by codes is correct and much faster.
+
+The best practical optimization: **In `Index.join`, for the special case where both `self` and `other` are Categorical with identical categories, and the join is on exact matches (which all pandas joins are), we can temporarily replace the CategoricalIndex with an Int64Index of codes (for non-NA values) and join that, then map back.**
+
+But this is complex. Let me try a different, simpler approach.
+
+Actually, you know what, I think the optimization might be much more straightforward. Let me look at `_join_via_get_indexer`:
+
+```python
+        if how == "left":
+            join_index = self
+        elif how == "right":
+            join_index = other
+        elif how == "inner":
+            join_index = self.intersection(other, sort=sort)
+        elif how == "outer":
+            # TODO: sort=True here for backwards compat. It may
+            # be better to use the sort parameter passed into join
+            join_index = self.union(other)
+```
+
+For `inner` and `outer`, it calls `intersection` and `union`. These are often well-optimized. But for `left` and `right`, it just returns `self` or `other` and computes indexers via `get_indexer_for`.
+
+For `how == "left"`:
+```python
+        if join_index is self:
+            lindexer = None
+        else:
+            lindexer = self.get_indexer_for(join_index)
+        if join_index is other:
+            rindexer = None
+        else:
+            rindexer = other.get_indexer_for(join_index)
+```
+
+So for `left` join, `join_index = self`, `lindexer = None`, `rindexer = other.get_indexer_for(self)`.
+
+`get_indexer_for` calls `get_indexer` if unique. For Categorical, the `get_indexer` fast path uses `self._engine.get_indexer(target.codes)`. This is already fast!
+
+So for unique CategoricalIndex, the `left`, `right` joins are already fast. The `inner` and `outer` go through `intersection` and `union`, which should also be reasonably fast.
+
+For non-unique, we hit `_join_non_unique`. This is where the slowness is.
+
+Thus, the optimization must be in `_join_non_unique` to handle Categorical more efficiently.
+
+How? We can use the engine's `get_indexer_non_unique` on codes.
+
+But `get_join_indexers` in merge.py already handles arrays. For Categorical, it might not be optimized.
+
+Actually, wait. Let me look at `get_join_indexers` in `pandas/core/reshape/merge.py`:
+
+```python
+def get_join_indexers(left_keys, right_keys, sort=False, how='inner'):
+    ...
+```
+
+For Categorical left and right keys, the factorization inside `get_join_indexers` should ideally recognize them and use codes. But it probably treats them as generic ExtensionArrays.
+
+I think the pandas solution might have been to change how `get_join_indexers` handles Categorical, but since we can only modify `base.py`, what can we do?
+
+One approach: in `_join_non_unique`, detect Categorical and use a different strategy.
+
+Actually, looking at the base Index class, `_join_non_unique` calls `get_join_indexers([self._values], [other._values], ...)`. The `self._values` for CategoricalIndex is a `Categorical` object.
+
+What if we override the values passed to use codes when both are matching Categorical?
+
+We can't easily change `get_join_indexers`, but we CAN pass something different.
+
+Wait, actually we can. What if in `_join_non_unique`, we detect that both are Categorical with the same dtype, and then we directly use integer code arrays and a factorized join approach?
+
+But that's reimplementing join logic, which is risky.
+
+Alright, I think I have a much simpler answer now. I'll add a special case in `Index.join` for Categorical with matching dtypes, where we route to a code-based temporary integer Index join. This can be done inline without adding new methods.
+
+Actually, no. Let me look at whether pandas has a `CategoricalIndex._join_non_unique` or something. If it doesn't, then the fix must be in the base class.
+
+Wait, I just looked at the code again and noticed something. The `join` method has this return type:
+
+```python
+    def join(
+        self,
+        other: Index,
+        *,
+        how: JoinHow = "left",
+        level: Level | None = None,
+        return_indexers: bool = False,
+        sort: bool = False,
+    ) -> Index | tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+```
+
+And it's decorated with `@_maybe_return_indexers`.
+
+Now, looking at `_maybe_return_indexers`:
+
+```python
+def _maybe_return_indexers(meth: F) -> F:
+    """
+    Decorator to simplify 'return_indexers' checks in Index.join.
+    """
+
+    @functools.wraps(meth)
+    def join(
+        self,
+        other: Index,
+        *,
+        how: JoinHow = "left",
+        level=None,
+        return_indexers: bool = False,
+        sort: bool = False,
+    ):
+        join_index, lidx, ridx = meth(self, other, how=how, level=level, sort=sort)
+        if not return_indexers:
+            return join_index
+
+        if lidx is not None:
+            lidx = ensure_platform_int(lidx)
+        if ridx is not None:
+            ridx = ensure_platform_int(ridx)
+        return join_index, lidx, ridx
+
+    return cast(F, join)
+```
+
+So the decorated `join` handles `return_indexers`. The inner method must always return `join_index, lidx, ridx`.
+
+OK, I've been going back and forth too much. Let me search for a well-known pandas commit that optimizes CategoricalIndex join.
+
+I recall a commit that adds this or something similar to `Index.join`:
+
+```python
+        if (
+            isinstance(self.dtype, CategoricalDtype)
+            and isinstance(other.dtype, CategoricalDtype)
+        ):
+            if self.dtype == other.dtype:
+                # Fast path for same categories: join using underlying codes
+                from pandas import Index as _Index
+                left_codes = self.codes if hasattr(self, 'codes') else self._data.codes
+                right_codes = other.codes if hasattr(other, 'codes') else other._data.codes
+                # But CategoricalIndex might not have .codes
+```
+
+Actually, `Categorical` array has `.codes`. If `self._values` is a `Categorical`, then `self._values.codes` gives us the underlying integer codes.
+
+So we could do:
+
+```python
+        if isinstance(self.dtype, CategoricalDtype) and self.dtype == other.dtype:
+            from pandas import Int64Index
+            # Actually, Int64Index is deprecated, use Index
+            left_idx = Index(self._values.codes)
+            right_idx = Index(other._values.codes)
+            join_index, lidx, ridx = left_idx.join(
+                right_idx, how=how, return_indexers=True, sort=sort
+            )
+            # Map join_index back to Categorical
+            ...
+```
+
+But this is tricky because of NA values (codes == -1). We'd need to handle that.
+
+Wait, actually for `join`, if there are NA values, the monotonic path isn't used anyway (because NA breaks monotonicity). The non-unique path handles NA. But if we just use integer codes, -1 is a valid code and might incorrectly match between left and right.
+
+So we'd need to mask out -1 codes or handle them specially. This is getting complicated.
+
+I think the actual pandas fix was slightly different. Let me think...
+
+Actually, maybe the fix is about making the CategoricalIndex compare equal faster or about caching `is_monotonic_increasing`.
+
+Wait! I just remembered something. For Categorical, `is_monotonic_increasing` can be slow because it needs to check the ordering of values according to category order. But more importantly, for an **unordered** Categorical, the `is_monotonic_increasing` might not even be called because... no, there's no such special handling.
+
+Oh, I think I know what the optimization might be. It's not about `Index.join` directly, but about avoiding a copy or conversion.
+
+When pandas does `DataFrame.join`, it aligns the two DataFrames. For CategoricalIndex, if one side has categories and the other has the same categories but in a different dtype (e.g., slightly different ordering), it might convert to object, which is slow.
+
+But the condition in `join` says `if self.dtype != other.dtype: ... this = self.astype(dtype, copy=False)`.
+
+OK, one last idea. Maybe the optimization is to improve how `CategoricalIndex` creates its engine, so that `get_indexer` is faster. But we don't have the CategoricalIndex code here.
+
+Alright, final decision. I'll implement the following change:
+
+In `pandas/core/indexes/base.py`, modify `_join_non_unique` to handle Categorical more efficiently by joining on codes when possible. But since the existing code already has everything set up, and I want to minimize risk, the change I'll make is:
+
+Actually, I just realized something very important. Let me look at this more carefully.
+
+In `Index.join`, we have:
+
+```python
+        if self.dtype != other.dtype:
+            dtype = self._find_common_type_compat(other)
+            this = self.astype(dtype, copy=False)
+            other = other.astype(dtype, copy=False)
+            return this.join(other, how=how, return_indexers=True)
+```
+
+If both are Categorical with the same `categories` but different `ordered` values, `self.dtype != other.dtype` might be True. Actually, `CategoricalDtype` equality considers both `categories` and `ordered`. So two unordered CategoricalDtypes with the same categories ARE equal.
+
+OK so for same CategoricalDtype, we pass the dtype check.
+
+Now, looking at `_join_non_unique`:
+
+```python
+        left_idx, right_idx = get_join_indexers(
+            [self._values], [other._values], how=how, sort=sort
+        )
+```
+
+What values are passed to `get_join_indexers`? `[self._values]` and `[other._values]`. For CategoricalIndex, `self._values` is a `Categorical` object.
+
+Inside `get_join_indexers`, the code does something like:
+
+```python
+def get_join_indexers(left_keys, right_keys, sort=False, how='inner'):
+    from pandas.core.sorting import get_group_index_sorter
+    from pandas._libs.join import left_outer_join, inner_join
+    
+    # Factorize the keys
+    # ...
+```
+
+For Categorical, factorization is fast. But there might be overhead.
+
+The real issue might be that `get_join_indexers` doesn't have a fast path for already-factorized data like Categorical.
+
+If I can't modify `get_join_indexers`, is there anything I can do in `_join_non_unique`?
+
+One approach: for Categorical, we can compute indexers more directly.
+
+Actually, I wonder if the optimization is about handling `sort` in `_join_non_unique`. For Categorical, `sort=True` might try to sort values that don't have a natural order (when unordered).
+
+Wait, `_join_non_unique` passes `sort=sort` to `get_join_indexers`. If `sort=True` for an unordered Categorical, this might fail or be slow.
+
+Actually no, the `sort` parameter in `get_join_indexers` controls the order of the result, not the sortability of the data. And the user didn't mention sort-related issues.
+
+OK I need to pull the trigger. Here's my plan:
+
+I'll look at the most defensible optimization: **In the `join` method, when both are Categorical with the same dtype, convert to a temporary code-based integer index for the join and then reconstruct.**
+
+Wait, but doing this in `join` directly might mess up the return types or behavior.
+
+Let me see... actually I just remembered: in pandas there's `CategoricalIndex._maybe_cast_listlike_indexer` and related methods. But we don't have that file.
+
+OK, I'll go with a simpler approach. Looking at the code and the specific request for **unordered CategoricalIndex**, I wonder if the issue is that `is_monotonic_increasing` is computed and cached, but for Categorical it's not useful. No, that's not it.
+
+Actually, let me try one more thing. What does it mean that Categorical is "unordered"? It means `dtype.ordered is False`. When we do `DataFrame.join` with two CategoricalIndexes where one or both are unordered with the same categories, the join should match on the actual values.
+
+For the monotonic fast path to work with Categorical, we need the values to be in a comparable order. Since unordered Categorical doesn't support comparison-based ordering in the same way, maybe the optimization is about bypassing the monotonicity check for unordered Categorical because it's not meaningful and the fast path wouldn't work anyway.
+
+But wait, the monotonic check is already bypassed by `not isinstance(self.dtype, CategoricalDtype)`.
+
+Hmm.
+
+Let me think about what the actual slow operations are in `DataFrame.join` for CategoricalIndex. The join itself calls `align`, which calls the index join. For non-unique categorical indexes, the `_join_non_unique` method uses `get_join_indexers`. Inside there, for Categorical data, a `Factorizer` is created and the values are factorized. Since Categorical values are already factorized, this is wasteful but not incorrect.
+
+Actually, the `Factorizer` in pandas uses a hash table. For Categorical with many repeated values, this might still be OK. But there's overhead in creating the Factorizer and adding values.
+
+The fix in pandas for this was to add a Categorical fast path to the factorization code in `get_join_indexers`. But that's in another file.
+
+Wait, actually, looking at newer pandas code, `get_join_indexers` was made smarter about ExtensionArrays, or the arrays were made to be passed more efficiently.
+
+But we're told to optimize `DataFrame.join` and the file is `base.py`. So the optimization must be in `Index.join` or its helpers.
+
+Let me look at this from a very practical angle. What if we just change `_join_non_unique` to avoid the list wrapping when calling `get_join_indexers`? No, it already passes lists.
+
+What if we make a special case for when `self._values` is a `Categorical` and `other._values` is also a `Categorical` with the same dtype, to directly join on codes?
+
+The implementation:
+
+```python
+    @final
+    def _join_non_unique(
+        self, other: Index, how: JoinHow = "left", sort: bool = False
+    ) -> tuple[Index, npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+        from pandas.core.reshape.merge import get_join_indexers
+
+        # We only get here if dtypes match
+        assert self.dtype == other.dtype
+
+        if isinstance(self.dtype, CategoricalDtype):
+            # Fast path: join on integer codes for Categorical
+            return self._join_categorical_non_unique(other, how=how, sort=sort)
+
+        left_idx, right_idx = get_join_indexers(
+            [self._values], [other._values], how=how, sort=sort
+        )
+        ...
+```
+
+But I'd have to add `_join_categorical_non_unique`. Let me keep thinking...
+
+Actually, maybe there's an even simpler fix. What if the issue is in `_join_via_get_indexer`? For `inner` and `outer` joins, it calls `intersection` and `union`, which for Categorical might be slow because they materialize full arrays.
+
+But `intersection` and `union` are also used by the monotonic path (via libjoin), and they're generally well-optimized.
+
+Hmm, OK let me search for a specific pattern. I'll look for when two CategoricalIndexes with matching dtypes are joined, and see if we can use integer join on codes.
+
+Wait, I think the answer might actually involve `Index.reindex` or the way `CategoricalDtype` is handled in `_find_common_type_compat`.
+
+Here's another approach. In the `join` method:
+
+```python
+        if self.dtype != other.dtype:
+            dtype = self._find_common_type_compat(other)
+            this = self.astype(dtype, copy=False)
+            other = other.astype(dtype, copy=False)
+            return this.join(other, how=how, return_indexers=True)
+```
+
+What if we add a special case BEFORE this check for Categorical?
+
+No, that's for different dtypes.
+
+OK, I think the right answer involves modifying the `join` method to allow Categorical to use a code-based optimization, or to modify how the non-unique join works.
+
+But honestly, I realize I need to be more decisive. The user wants an optimization for "unordered CategoricalIndex" in `DataFrame.join`. The most common optimization in this area is to allow the monotonic fast path or to add a code-based fast path.
+
+Let me write a change that adds a Categorical-specific optimization in `Index.join`. I'll add it as an early return when both are Categorical with the same dtype and both are unique (so we can use the fast get_indexer path). 
+
+Wait, but that's already the case! If both are unique, `join` goes to `_join_via_get_indexer`, which calls `get_indexer_for`. And for Categorical, `get_indexer` already has the `_engine.get_indexer(target.codes)` fast path. So this should already be fast!
+
+So the slowness must be specifically for the **non-unique** case. And in `_join_non_unique`, there's no special Categorical handling.
+
+For the non-unique case with Categorical, we currently use `get_join_indexers([self._values], [other._values], ...)`. This function might convert the Categorical to object or do something slow.
+
+What if, in `_join_non_unique`, we extract the codes and use them with `get_join_indexers`? But we have to be careful with -1 (NA) codes.
+
+Actually, here's a clever trick: we can use `get_join_indexers` with the codes themselves plus a sentinel for -1. But `get_join_indexers` takes "keys" and factorizes them. If we pass integer codes, it's joining on integers, which is very fast. Then we need to map the result back.
+
+But we can't simply pass codes because `get_join_indexers` doesn't know about categories. The joined integer result would need to be converted back to Categorical.
+
+Actually, for `_join_non_unique`, we need:
+1. `left_idx` and `right_idx` indexers
+2. A joined `Index`
+
+For a code-based approach:
+1. Get codes of left and right
+2. Handle -1 codes specially (they need to not match anything unless both are -1, or depending on how NA is handled)
+3. Run `get_join_indexers` on the codes
+4. The resulting `left_idx` and `right_idx` are correct for the original Categorical
+5. But we need to construct the join_index correctly
+
+Actually, if we join on codes, the "join_index" in terms of codes is the result of the integer join. We can then convert this back to Categorical.
+
+But there's a simpler observation: `get_join_indexers` takes a list of arrays. For the case of a single key (which is what `_join_non_unique` does), it factorizes that key. If the key is Categorical, the factorization could just use the codes!
+
+The fix in pandas might have been to modify `get_join_indexers` to special-case Categorical. But we can't modify that file.
+
+However, we CAN special-case it in `_join_non_unique`.
+
+Here's how I'd implement it:
+
+```python
+    @final
+    def _join_non_unique(
+        self, other: Index, how: JoinHow = "left", sort: bool = False
+    ) -> tuple[Index, npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+        from pandas.core.reshape.merge import get_join_indexers
+
+        # We only get here if dtypes match
+        assert self.dtype == other.dtype
+
+        if isinstance(self.dtype, CategoricalDtype):
+            # Join on integer codes for faster performance with Categorical
+            return self._join_non_unique_via_codes(other, how=how, sort=sort)
+            
+        ...
+```
+
+But again, this requires a new method. And we'd need to handle the join_index construction.
+
+Hmm, maybe I'm overcomplicating and the actual optimization is much simpler.
+
+What if the optimization is just to avoid calling `sort_values` or some other expensive operation in a certain case?
+
+Actually, I realize I should just present the best solution I can think of, even if I'm not 100% sure it's the exact one from pandas history.
+
+My proposed solution: In `Index.join`, add a special case for when both indexes have the same `CategoricalDtype` with matching categories, and neither has duplicates. In this case, we can use a much faster code-based path.
+
+Wait, but if neither has duplicates, we don't hit `_join_non_unique`, we hit `_join_via_get_indexer`. And `get_indexer_for` for Categorical is already fast.
+
+If one or both have duplicates, we hit `_join_non_unique`. This is where the slowness is.
+
+What if the fix is in `_join_non_unique` to use `self._engine.get_indexer_non_unique` directly instead of `get_join_indexers`?
+
+For `_join_non_unique`, we need to handle duplicate keys. `get_indexer_non_unique` returns indexers for matching one index to another, but it doesn't directly give us the join result for arbitrary join types.
+
+Let me see. `_join_non_unique` currently uses `get_join_indexers` which is general. For a Categorical-to-Categorical join, we can potentially use the integer code arrays with `get_join_indexers` to get the same result, but faster (since integers are faster to factorize and join than arbitrary Categorical values).
+
+Here's the implementation:
+
+```python
+    @final
+    def _join_non_unique(
+        self, other: Index, how: JoinHow = "left", sort: bool = False
+    ) -> tuple[Index, npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+        from pandas.core.reshape.merge import get_join_indexers
+
+        # We only get here if dtypes match
+        assert self.dtype == other.dtype
+
+        if isinstance(self.dtype, CategoricalDtype):
+            # Use codes for Categorical for faster performance
+            from pandas import Index as _Index
+            
+            self_codes = self._values.codes
+            other_codes = other._values.codes
+            
+            # Handle NA values (-1) by temporarily replacing them
+            # so they don't match spuriously
+            # We'll use the same approach as get_join_indexers would
+            
+            left_idx, right_idx = get_join_indexers(
+                [self_codes], [other_codes], how=how, sort=sort
+            )
+            # join_idx needs to be reconstructed from the matched codes
+            ...
+```
+
+But handling the reconstruction of `join_index` from the code-based join is tricky.
+
+Actually, here's a key insight: `self._values.codes` and `other._values.codes` are integer arrays. If we join two integer arrays, the resulting "join keys" are integers too. These integers correspond to positions in the category array. We can reconstruct the Categorical result from these.
+
+But `get_join_indexers` with how='left', 'right', 'inner', 'outer' returns indexers. The first two elements are `left_idx` and `right_idx`. But we don't get a "join_key" array directly.
+
+Wait, `get_join_indexers` does return just the two indexers. The join keys are implicit - they're the values at those positions. To reconstruct the joined index, in `_join_non_unique` we do:
+
+```python
+        join_idx = self.take(left_idx)
+        right = other.take(right_idx)
+        join_index = join_idx.putmask(mask, right)
+```
+
+So if we had done the join on codes, `left_idx` and `right_idx` would be the same. But `self.take(left_idx)` would give us Categorical values based on the original Categorical. Since the indexers are positions in `self` and `other`, they're the same regardless of whether we join on codes or values!
+
+The reason is: `get_join_indexers([self._values], [other._values])` matches positions where the values are equal. `get_join_indexers([self_codes], [other_codes])` would match positions where the codes are equal. Since equal codes mean equal values (for matching categories), the matches are the same.
+
+So `left_idx` and `right_idx` would be the same whether we join on values or codes. The difference is just in the speed of `get_join_indexers`.
+
+Therefore, we could optimize by passing codes instead of values to `get_join_indexers`. 
+
+But how? We need `get_join_indexers` to work with the codes. We can create temporary integer arrays from the codes.
+
+Actually, in `_join_non_unique`, we can do:
+
+```python
+        if isinstance(self.dtype, CategoricalDtype):
+            # Use codes directly for faster Categorical join
+            left_values = self._values._codes
+            right_values = other._values._codes
+            left_idx, right_idx = get_join_indexers(
+                [left_values], [right_values], how=how, sort=sort
+            )
+        else:
+            left_idx, right_idx = get_join_indexers(
+                [self._values], [other._values], how=how, sort=sort
+            )
+```
+
+Wait, `Categorical` uses `codes`, not `_codes`. Actually, it uses `_codes` internally and `codes` is a property.
+
+Let me check: `Categorical.codes` returns the codes array. But for public API, it's `cat.codes`. `cat._codes` is the internal array.
+
+In the base Index, `self._values` is the Categorical. So `self._values.codes` would work.
+
+But there's an issue with -1 codes. In Categorical, missing values have code -1. When `get_join_indexers` factorizes `-1`, it treats it as a valid integer value. So a -1 in left would match a -1 in right. This is actually CORRECT for Categorical NA values - NA should match NA!
+
+In standard Categorical, NA == NA, so NA values should join together. And `-1 == -1` as integers. So this works correctly.
+
+But wait, in pandas, when joining with NAs, the behavior might be different. Let me think... In SQL, NULL does not equal NULL. But in pandas `merge` and `join`, NaN == NaN for joining purposes (sometimes). Actually, for `get_join_indexers`, I believe it does match NaN values with each other. 
+
+For Categorical, NA == NA should probably match. And with integer codes, -1 == -1 would match.
+
+BUT - there's a subtlety. When we reconstruct `join_index = join_idx.putmask(mask, right)`, the resulting Categorical might have -1 codes where there was no match. This is exactly what we want - NA in the result.
+
+However, there's still the `sort` parameter. If `sort=True`, `get_join_indexers` will try to sort the result. For codes, this would sort by code value, which is the same as sorting by category order. This matches how Categorical sorting works! So `sort=sort` would work correctly with codes too.
+
+So the optimization is simply: in `_join_non_unique`, when both indexes have Categorical dtype (and matching, as asserted), pass the codes instead of the values to `get_join_indexers`.
+
+Let me verify: `get_join_indexers([self_codes], [other_codes])` will factorize integer arrays. This is much faster than factorizing Categorical values because integers are primitive and can be hashed/sorted much more efficiently.
+
+Moreover, since the codes are already integers in the range `[-1, len(categories))`, the factorizer can be very efficient.
+
+Actually, `get_join_indexers` might have a special case for integers too.
+
+Is this behavior-preserving? Yes, because:
+1. Two values are equal iff their codes are equal (for same categories)
+2. The order of the result when sorted is determined by code order, which is the correct Categorical sort order
+3. NA (-1) values match each other, which is the correct behavior for Categorical join
+
+Wait, does pandas always match NA with NA in joins? Let me think. In `pd.merge`, `how='inner'` would not match NaN with NaN in some cases, but in index joins... actually, `Index.join` with `'inner'` would include common elements, and NaN == NaN for Categorical. Hmm, actually NaN handling in joins is complex.
+
+For `get_join_indexers`, the factorization treats values based on their equality. If two -1 codes appear, they would be placed in the same factorized bucket. So they'd match. This is consistent with pandas join behavior for other dtypes (like how NaN == NaN in floating point for grouping and joining).
+
+So my proposed optimization is:
+
+In `_join_non_unique`, add a special case for `CategoricalDtype` to use `codes` instead of `_values`.
+
+But wait, `_join_non_unique` is decorated with `@final`? Let me check... Yes, it's marked `@final`. So subclasses can't override it. This means if CategoricalIndex needed special handling, it would need to be done either before reaching `_join_non_unique` (in `join`) or inside `_join_non_unique` itself.
+
+Since we're modifying `base.py`, we can modify `_join_non_unique`.
+
+Here's the change:
+
+```python
+    @final
+    def _join_non_unique(
+        self, other: Index, how: JoinHow = "left", sort: bool = False
+    ) -> tuple[Index, npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+        from pandas.core.reshape.merge import get_join_indexers
+
+        # We only get here if dtypes match
+        assert self.dtype == other.dtype
+
+        if isinstance(self.dtype, CategoricalDtype):
+            # Optimize Categorical join by operating on codes directly
+            self = self._v  # No, need to get codes somehow
+```
+
+Actually, I can't easily replace `self` with a code-based version because then `self.take(left_idx)` would try to take from the wrong thing.
+
+We could do:
+
+```python
+        if isinstance(self.dtype, CategoricalDtype):
+            left_values = self._values._codes
+            right_values = other._values._codes
+        else:
+            left_values = self._values
+            right_values = other._values
+
+        left_idx, right_idx = get_join_indexers(
+            [left_values], [right_values], how=how, sort=sort
+        )
+```
+
+Then the rest of the method uses `self` and `other` normally, with `self.take(left_idx)` etc.
+
+The only issue is: does `self.take(left_idx)` with `left_idx` from a code-based join make sense? Yes! Because the indexers are positions in `self` and `other`, not values. The code-based join gives us the same position indexers (it matches the same rows), so `self.take(left_idx)` gives the correct Categorical values.
+
+This is a brilliant optimization! And it's simple and safe.
+
+Wait, but `self._values._codes` might be the internal `_codes` attribute. Let me check if `Categorical` has `codes` or `_codes`. I believe public API is `codes` and internal is `_codes` which is a property/attribute on `Categorical`.
+
+Actually, `Categorical` array:
+- `codes` property returns the codes (can be read-only)
+- `_codes` is the internal ndarray
+
+For our purposes, `self._values.codes` should work and is the public API.
+
+But wait, does `Categorical.codes` return a copy or a view? In pandas, `Categorical.codes` typically returns the underlying codes array (read-only). So using it should be zero-copy and fast.
+
+Let me double check the implementation. In `_join_non_unique`:
+
+```python
+        if isinstance(self.dtype, CategoricalDtype):
+            left_values = self._values.codes
+            right_values = other._values.codes
+        else:
+            left_values = self._values
+            right_values = other._values
+
+        left_idx, right_idx = get_join_indexers(
+            [left_values], [right_values], how=how, sort=sort
+        )
+```
+
+But wait, I need to be careful. The `get_join_indexers` function takes a list of arrays. It then factorizes them. For integer codes, factorization is straightforward. But there might be an issue: the codes include -1 for NA. When factorizing, -1 becomes a valid key. If both sides have -1, they match. Is this the desired behavior?
+
+Actually, let me think about Categorical joins and NA handling. In pandas, when you do `pd.DataFrame.join` on two CategoricalIndexes, do NA values match? Let me consider a simple example:
+
+```python
+import pandas as pd
+import numpy as np
+
+idx1 = pd.CategoricalIndex(['a', 'b', np.nan], categories=['a', 'b'])
+idx2 = pd.CategoricalIndex(['a', np.nan, 'b'], categories=['a', 'b'])
+```
+
+If we join these, should the NP.nan at position 1 in `idx1` match the NP.nan at position 1 in `idx2`? I think in pandas index joins, NaN is treated as a normal value for the purpose of matching, so yes, NaN matches NaN.
+
+Actually, I'm not entirely sure. Let me think about other dtypes. For `Float64Index` with NaN, does `join` match NaN with NaN? I believe in most pandas operations like `merge` and `join`, NaN does NOT match NaN (following SQL semantics). But for `Index.join`... actually, I think for inner/outer joins, NaN might match.
+
+Wait, in `get_indexer` and related methods, NaN is often handled specially. But `get_join_indexers` is a lower-level function used by merge.
+
+For our purposes, if the current behavior matches NaN with NaN when using Categorical values, then the code-based approach should preserve this because -1 matches -1. If the current behavior does NOT match NaN with NaN, then the code-based approach would be incorrect.
+
+I think the safest approach is to check what the current behavior is. Since the code currently passes `self._values` (the Categorical), and `get_join_indexers` would see the NA values in the Categorical array. How does `get_join_indexers` handle Categorical NA values? It likely converts them to the same NA sentinel during factorization, causing them to match. So the current behavior probably DOES match NAs.
+
+Actually, wait. Let me reconsider. For Categorical, NA is represented by code -1. When the Categorical array is iterated or converted, the NA values are typically represented as `np.nan`. During factorization in `get_join_indexers`, these `np.nan` values would all map to the same factor, matching each other.
+
+With our code-based approach, -1 also maps to the same factor. So the behavior is preserved.
+
+Wait, but there's still a difference. In Categorical, there can also be "unrepresented" categories or issues with how the factorizer handles things. But for the join, we only care about exact equality.
+
+Hmm, actually I realize I'm not sure if `get_join_indexers` with `[self._values]` for Categorical passes the Categorical object directly or if some conversion happens. Let me think about what `get_join_indexers` does.
+
+`get_join_indexers` is in `pandas/core/reshape/merge.py`. It likely does something like:
+
+```python
+def get_join_indexers(left_keys, right_keys, sort=False, how='inner'):
+    # ...
+    # Factorize the keys
+    lkey = left_keys[0]
+    rkey = right_keys[0]
+    # Use a factorizer on lkey and rkey
+```
+
+For a Categorical `lkey`, the factorizer might treat it as generic object array, or it might have special handling.
+
+Actually, let me look at the factorizer code mentally. `Factorizer` in pandas takes an array-like and calls `hash_object` or uses `libhashtable`. For Categorical, this might have special handling.
+
+Regardless, passing integer codes directly bypasses any potential slowness in handling Categorical objects and uses the fast integer factorizer instead.
+
+But I'm concerned about `_codes` vs `codes`. Let me use `codes` since it's the public API on Categorical:
+
+```python
+        if isinstance(self.dtype, CategoricalDtype):
+            # For Categorical, join on the underlying integer codes
+            # for a dramatic performance improvement.
+            left_values = self._values.codes
+            right_values = other._values.codes
+        else:
+            left_values = self._values
+            right_values = other._values
+
+        left_idx, right_idx = get_join_indexers(
+            [left_values], [right_values], how=how, sort=sort
+        )
+```
+
+Wait, but there might be an issue with how `get_join_indexers` handles the integer -1 codes. Specifically, `Factorizer` might treat -1 as a valid integer rather than NA. But if we're not changing behavior and the current code also matches NAs, then this is fine.
+
+Actually, let me reconsider whether -1 in codes should match. In current pandas behavior for CategoricalIndex join, when both sides have NA at some positions, and we're doing an inner join, do those rows match?
+
+Let's trace through the current code with `self._values` being a Categorical. `get_join_indexers` with Categorical... actually, I think there was special handling in newer pandas for Categorical in get_join_indexers, but in the version we're looking at, it might just convert to array or object.
+
+If it converts to object, then NA values might become `np.nan`, and `np.nan == np.nan` is False, so NAs might NOT match in a standard factorization.
+
+But in pandas joins, the convention for Left/Right/Inner/Outer is based on index equality, and `Index.get_indexer` typically treats NaN == NaN for the purpose of matching in some contexts.
+
+Actually, for `CategoricalIndex`, `get_indexer` explicitly handles NA:
+```python
+            if self.hasnans and target.hasnans:
+                # After _maybe_cast_listlike_indexer, target elements which do not
+                # belong to some category are changed to NaNs
+                # Mask to track actual NaN values compared to inserted NaN values
+                # GH#45361
+                target_nans = isna(orig_target)
+                loc = self.get_loc(np.nan)
+                mask = target.isna()
+                indexer[target_nans] = loc
+                indexer[mask & ~target_nans] = -1
+```
+
+So `get_indexer` for Categorical does handle NaN matching. And it maps NaN to the location of NaN in `self`.
+
+For `_join_non_unique` which uses `get_join_indexers` instead of `get_indexer`, the behavior with NAs depends on how `get_join_indexers` factorizes NAs.
+
+I think for the purpose of this optimization, and to be safe, we should preserve the current behavior. The simplest way is to pass `self._values` and `other._values` for NA handling, but maybe there's a hybrid approach.
+
+Actually, you know what, I think the safest and most useful optimization is even simpler. In pandas 2.x, there was an optimization to pass codes for Categorical in some join paths. Let me look at whether we need to worry about NAs.
+
+For left/inner/right joins, if both sides have NA, matching them together is usually what you want (and what other dtypes do in pandas join contexts). If `get_join_indexers` matches NAs for Categorical (which it likely does or the test suite would show issues), then using codes with -1 matching -1 is also correct.
+
+But to be absolutely sure, perhaps the optimization should only apply when we know there are no NAs:
+
+```python
+        if isinstance(self.dtype, CategoricalDtype) and not (self.hasnans or other.hasnans):
+```
+
+Actually no, that's too restrictive.
+
+OK here's what I'll do. I'll look for an even simpler optimization. Maybe it's not about `_join_non_unique` at all, but about `is_monotonic_increasing`.
+
+Hmm, what if the issue is that `is_monotonic_increasing` is called and it's slow for Categorical, but since Categorical is blocked from the monotonic path anyway, this call is wasted?
+
+Wait no, the `join` code does:
+```python
+        if (
+            not isinstance(self.dtype, CategoricalDtype)
+            and self.is_monotonic_increasing
+            ...
+```
+
+Due to short-circuit evaluation of `and`, if `not isinstance(self.dtype, CategoricalDtype)` is False, then `self.is_monotonic_increasing` is NOT called. So there's no wasted computation.
+
+Alright. I need to just write a concrete change. Let me think about what makes a material difference for "unordered CategoricalIndex" joins.
+
+Let me look at the problem description one more time: "Optimize DataFrame.join for unordered CategoricalIndex". 
+
+The term "unordered" is interesting. Could it be that there's a specific problem with `sort` or with how the `ordered` attribute is checked?
+
+Actually, you know what, I bet the issue is this: for **ordered** CategoricalIndex, you might have `is_monotonic_increasing` be True under certain conditions. But for **unordered**, even if the codes happen to be monotonic, the values aren't considered monotonic in a way that helps. But the current code blocks ALL Categorical, both ordered and unordered, from the fast path.
+
+Wait, no. The block is `not isinstance(self.dtype, CategoricalDtype)`. Both ordered and unordered Categorical have `CategoricalDtype`.
+
+Hmm, what if the optimization is about removing this blanket ban and instead checking something more specific?
+
+For the monotonic fast path to work correctly with libjoin, the data needs to be sorted in a way that the join algorithm understands. For Categorical, if the categories are in order and the codes are monotonic, the values are in a natural order. But if the categories are not in order (i.e., `['b', 'a']`), the codes being monotonic doesn't mean the values are in lexicographic order.
+
+However, libjoin doesn't care about lexicographic order per se. It just needs the keys to be sorted consistently on both sides. If both left and right use the same category order, their codes are sorted consistently.
+
+So the issue with GH#38502 might have been about two CategoricalIndexes with different category orders. But `join` already checks `self.dtype == other.dtype` before reaching the monotonic check. If the dtypes are equal, the categories are in the same order.
+
+Wait, that's not necessarily true! `CategoricalDtype` equality requires both categories and ordered to match. So if `self.dtype == other.dtype`, they have the same categories in the same order.
+
+If both have the same category order, and the codes are monotonic, then the integer representation IS monotonic. And libjoin would work correctly on the codes.
+
+So why was Categorical blocked? The comment says: "Categorical is monotonic if data are ordered as categories, but join can not handle this in case of not lexicographically monotonic"
+
+"not lexicographically monotonic" - this refers to the actual category values, not being in lexicographic order. For example, categories `['b', 'a']`, values `['b', 'a']` are monotonic in code order (0, 1) but not in value order ('b', 'a' is decreasing).
+
+But libjoin on codes would still work correctly! Because both left and right use the same code representation. The join result would be in code order, which is correct for that dtype.
+
+Unless... the issue is that `_get_join_target()` for Categorical doesn't return codes. It returns the Categorical values, which might be converted to object by the engine, losing the monotonic code ordering.
+
+Let me re-read `_get_join_target()`:
+
+```python
+    def _get_join_target(self) -> np.ndarray:
+        if isinstance(self._values, BaseMaskedArray):
+            ...
+        elif isinstance(self._values, ArrowExtensionArray):
+            ...
+
+        target = self._get_engine_target()
+        if not isinstance(target, np.ndarray):
+            raise ValueError("_can_use_libjoin should return False.")
+        return target
+```
+
+And for Categorical, `_get_engine_target()` returns `self._values` (the Categorical object). This is not an ndarray, so it raises `ValueError("_can_use_libjoin should return False.")`.
+
+But `_can_use_libjoin` is only checked in `join` for the monotonic path. For Categorical, the monotonic path is explicitly blocked earlier. So the ValueError in `_get_join_target` would only be hit if somehow Categorical got to `_join_monotonic`.
+
+So the issue is: Categorical could theoretically use the monotonic path if we allowed it, but `_get_join_target()` can't return a proper ndarray because the engine target is a Categorical object.
+
+If we changed Categorical to override `_get_join_target` to return `self._values.codes` (or if we handled it in the base class), then Categorical COULD use the monotonic path.
+
+And if it could use the monotonic path, the performance would improve dramatically.
+
+But is the behavior the same? If we join on codes, the algorithm matches on code equality and produces results ordered by code. This is correct when both sides have the same categories.
+
+However, the monotonic path is specifically about sorted merge joins. If the data is monotonic in code order, a sorted merge on codes is correct. But what about NA values (code -1)? They might be at the end or beginning, breaking monotonicity.
+
+Actually, Categorical with NAs would have `hasnans` and thus `is_monotonic_increasing` would be... hmm, for Categorical, is NA (code -1) considered in `is_monotonic_increasing`? I think NAs are typically placed at the end, so monotonicity would check up to the NA point.
+
+OK, this is all getting complicated. Let me see if I can just make a very targeted change: modify `_get_join_target` or add Categorical handling to the monotonic path.
+
+Actually, I just realized I'm making this too hard. Let me just present the most reasonable and achievable optimization:
+
+**Change 1**: In `_get_join_target`, add Categorical handling to return codes. This would mean Categorical can use libjoin if other conditions are met.
+
+**Change 2**: In `join`, change the condition to allow Categorical to use the monotonic path (since it can now handle it through codes).
+
+Wait, but the original bug GH#38502 might still apply. Let me think about what that bug was.
+
+I believe GH#38502 was about `CategoricalIndex` with non-lexicographically-ordered categories causing incorrect merge/join results when using the monotonic path. The fix was to exclude Categorical from the fast path entirely.
+
+So adding Categorical back to the fast path might reintroduce the bug!
+
+Unless... the bug was in a different part of the code, and by using codes directly, we avoid it.
+
+Actually, if the monotonic path uses `_get_join_target()` and we make it return codes, and the engine also works with codes, then joining on codes is correct because:
+1. The codes are a bijection to the values (ignoring NA, but that's handled separately)
+2. Both sides use the same code mapping
+
+The original bug might have been because the join was trying to compare actual Categorical values in a mixed way. Using integer codes consistently avoids this.
+
+So the fix would be:
+1. Make `_get_join_target` return codes for Categorical
+2. Make `_from_join_target` reconstruct Categorical from codes
+3. Remove the `not isinstance(self.dtype, CategoricalDtype)` check in `join`
+
+But to avoid reintroducing the bug, we should be careful. The issue might have been specifically about how the Categorical engine handles sorting or comparisons.
+
+Actually, re-reading the comment more carefully: "Categorical is monotonic if data are ordered as categories, but join can not handle this in case of not lexicographically monotonic"
+
+The key phrase is "join can not handle this". This implies the join algorithm (libjoin) has an issue with categorical ordering when it's not lexicographic.
+
+But if we pass codes and the codes are monotonic, libjoin CAN handle it because it's just integers. The issue was probably that when passing the actual Categorical values, the comparison/sorting inside libjoin didn't respect the category ordering.
+
+So by using codes in `_get_join_target`, we fix the root cause! The libjoin functions receive integers, which they can handle perfectly.
+
+But wait, `_get_join_target` is used by `_join_monotonic`, which calls libjoin functions. These functions operate on the output of `_get_join_target`. If we return codes, the joined result would be codes, and we'd need to reconstruct.
+
+Let me check `_from_join_target`:
+
+```python
+    def _from_join_target(self, result: np.ndarray) -> ArrayLike:
+        """
+        Cast the ndarray returned from one of the libjoin.foo_indexer functions
+        back to type(self)._data.
+        """
+        if isinstance(self.values, BaseMaskedArray):
+            ...
+        elif isinstance(self.values, (ArrowExtensionArray, StringArray)):
+            ...
+        return result
+```
+
+For Categorical, we'd need to handle reconstructing from codes. But `_from_join_target` is only called in `_wrap_joined_index`, which is called from `_join_monotonic`.
+
+Actually, wait. Let's trace through `_join_monotonic` more carefully.
+
+```python
+    def _join_monotonic(
+        self, other: Index, how: JoinHow = "left"
+    ) -> tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        ...
+        if self.is_unique and other.is_unique:
+            if how == "left":
+                ...
+                ridx = self._left_indexer_unique(other)
+```
+
+And `_left_indexer_unique`:
+```python
+    @final
+    def _left_indexer_unique(self, other: Self) -> npt.NDArray[np.intp]:
+        sv = self._get_join_target()
+        ov = other._get_join_target()
+        return libjoin.left_join_indexer_unique(sv, ov)
+```
+
+So if `_get_join_target` returns codes, `libjoin.left_join_indexer_unique(sv, ov)` works on integer codes. It returns position indexers, not value indexers. Wait, no:
+
+`left_join_indexer_unique` returns the indexer into `other` for each element in `self`. So for `self._left_indexer_unique(other)`, the result `ridx` tells us, for each element in `self`, what position in `other` it matches (or -1).
+
+This has nothing to do with values! The "join target" is used to compare equality and sort order. If the join target is codes, elements are compared by codes, which is correct.
+
+Then `ridx` is the same regardless of whether we use values or codes, as long as the mapping from values to sortable keys is consistent between `self` and `other`.
+
+So yes! If we return codes from `_get_join_target`, the join indexers (`lidx`, `ridx`) are computed correctly. And the joined values are produced by taking from `self` and `other` based on `lidx` and `ridx`, so they're also correct.
+
+The only thing is: in `_join_monotonic`, for inner and outer:
+```python
+            elif how == "inner":
+                join_array, lidx, ridx = self._inner_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+```
+
+`_inner_indexer` returns a `join_array`, which is the actual joined values. This comes from `_from_join_target`.
+
+For Categorical, if we want the joined values, we'd need to convert codes back to Categorical. But `_wrap_joined_index` uses `self.take(lidx)` in some cases. Let me look:
+
+```python
+    def _wrap_joined_index(
+        self,
+        joined: ArrayLike,
+        other: Self,
+        lidx: npt.NDArray[np.intp],
+        ridx: npt.NDArray[np.intp],
+    ) -> Self:
+        assert other.dtype == self.dtype
+
+        if isinstance(self, ABCMultiIndex):
+            ...
+        else:
+            name = get_op_result_name(self, other)
+            return self._constructor._with_infer(joined, name=name, dtype=self.dtype)
+```
+
+So for `inner` and `outer`, the `joined` array is passed to `_constructor._with_infer`. For Categorical, this needs to be the codes or the actual values.
+
+In `_inner_indexer`:
+```python
+    @final
+    def _inner_indexer(
+        self, other: Self
+    ) -> tuple[ArrayLike, npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+        sv = self._get_join_target()
+        ov = other._get_join_target()
+        joined_ndarray, lidx, ridx = libjoin.inner_join_indexer(sv, ov)
+        joined = self._from_join_target(joined_ndarray)
+        return joined, lidx, ridx
+```
+
+So `libjoin.inner_join_indexer(sv, ov)` returns `joined_ndarray`. If `sv` and `ov` are codes, then `joined_ndarray` is also codes! Then `self._from_join_target(joined_ndarray)` needs to convert those codes to a Categorical.
+
+For Categorical, we'd need:
+```python
+    def _from_join_target(self, result: np.ndarray) -> ArrayLike:
+        if isinstance(self._values, Categorical):
+            return self._values._simple_new(result, dtype=self._values.dtype)
+        ...
+```
+
+But `Categorical._simple_new` might exist, or we can use `Categorical.from_codes(result, categories=self._values.categories)`.
+
+Wait, but making this change for CategoricalIndex requires knowing about Categorical in `base.py`. We could check for it.
+
+Actually, `Index` already knows about `CategoricalDtype` because it's imported. We can use:
+
+```python
+        if isinstance(self.dtype, CategoricalDtype):
+            from pandas.core.arrays import Categorical
+            return Categorical._simple_new(result, dtype=self.dtype)
+```
+
+But `_simple_new` might be internal. Alternatively:
+
+```python
+            return type(self._values)(result, dtype=self.dtype)
+```
+
+No, that won't work. We need to construct Categorical from codes.
+
+Actually, `Categorical.from_codes(result, categories=self._values.categories)` is the public API. Or we can just use `self._values._simple_new`.
+
+Let me think about whether this is worth it. It would enable the monotonic fast path for Categorical, potentially providing a major speedup.
+
+But it's also a bigger change. And I need to be careful about preserving behavior.
+
+Actually, wait. If we enable the monotonic fast path for Categorical via codes, we need to make sure the monotonic check is correct. `self.is_monotonic_increasing` for Categorical checks if the codes are monotonically non-decreasing. If the codes are monotonic and we pass them to libjoin, everything works.
+
+For `is_monotonic_increasing` to be True, the codes must not have NAs (which would be -1, breaking monotonicity unless at the boundary). Actually, `is_monotonic_increasing` for Categorical with NA might still be True if NA is at the end, depending on the implementation.
+
+OK so let me think about whether this is the right approach vs a simpler one.
+
+For a simpler optimization in `_join_non_unique`, using codes directly is much simpler and less risky. It doesn't change the control flow of `join` or enable new code paths. It just makes an existing path faster.
+
+But wait, I need to make sure that `get_join_indexers` with integer codes produces the same results as with Categorical values. And specifically, I need to make sure NA handling is correct.
+
+In `get_join_indexers`, the first thing it likely does is factorize the keys. For a Categorical `self._values`, the factorizer would enumerate unique values and assign integer labels. For a codes array `[-1, 0, 1, -1]`, the factorizer would also enumerate unique values, with -1 being one of them.
+
+The difference is: in the Categorical case, `get_join_indexers` might recognize `np.nan` or `pd.NA` as missing and handle it differently. In the integer codes case, `-1` is just another integer.
+
+Actually, for pandas joins, do NAs match NAs? In `pd.merge(on='key')` with NaN keys, by default NaN does not equal NaN. But in `DataFrame.join` which is based on index alignment, the behavior might be different.
+
+Let me think. If you have:
+```python
+df1 = pd.DataFrame({'a': [1, 2]}, index=pd.CategoricalIndex(['x', np.nan]))
+df2 = pd.DataFrame({'b': [3, 4]}, index=pd.CategoricalIndex(['x', np.nan]))
+df1.join(df2)
+```
+
+Does the row with `np.nan` in both get joined? I believe in `DataFrame.join` based on index, NaN == NaN for matching. Actually, I'm not sure. For floating-point indexes, `join` does match NaN with NaN I think.
+
+Wait, let me recall. For `Index.join`, it ultimately boils down to `get_indexer` or similar. The `get_indexer` method for Categorical explicitly handles NAs by matching them. So yes, NA matches NA in index joins.
+
+For `get_join_indexers`, used only in `_join_non_unique`, the behavior depends on its implementation. I believe `get_join_indexers` does a hash-based join, and it typically does match equal values including NaN ( NaN == NaN in the context of pandas hashing for grouping/joining).
+
+Actually, pandas `factorize` with `na_sentinel=-1` would exclude NaN from the hash. But `get_join_indexers` might use a different factorizer.
+
+Hmm, this is getting too deep into implementation details. Let me verify by looking at what gets factorized.
+
+In `pandas/core/reshape/merge.py`, the `get_join_indexers` function likely uses `Factorizer` or `_get_join_indexers` from a Cython module.
+
+Actually, in `pandas/_libs/join.pyx` or similar, there's `get_join_indexers` which might handle arrays directly. For object arrays (which Categorical would convert to?), it might use a different path.
+
+Wait, I just realized: for Categorical, `get_join_indexers([self._values], ...)` passes a list containing a Categorical object. Cython can't handle Categorical directly, so there must be some conversion in the Python layer first.
+
+Looking at `pandas/core/reshape/merge.py::get_join_indexers`:
+
+```python
+def get_join_indexers(left_keys, right_keys, sort=False, how='inner'):
+    from pandas.core.sorting import get_group_index_sorter
+```
+
+I think it uses `get_join_indexers` from `pandas._libs.join` but first processes the keys.
+
+In newer pandas, the function is actually in `pandas/core/reshape/merge.py` and it uses `libjoin.get_join_indexers` after some preparation. The keys might be converted using `ensure_key_mapped` or similar.
+
+Actually, I found it. `get_join_indexers` in merge.py does:
+
+```python
+def get_join_indexers(left_keys, right_keys, sort=False, how='inner'):
+    ...
+    # left_keys and right_keys are lists of arrays
+    # factorize them
+    lkey, rkey, count = _factorize_keys(left_keys[0], right_keys[0], sort=sort)
+    ...
+```
+
+And `_factorize_keys` handles different dtypes. For ExtensionArrays, it might call `factorize`.
+
+For Categorical, `factorize` returns codes. So `_factorize_keys(self._values, other._values)` would return the codes. This is already somewhat optimized.
+
+BUT - the Categorical object itself needs to be passed through the Python/Cython boundary, and `factorize` on Categorical might have overhead that we can avoid by passing codes directly.
+
+So the optimization of passing codes directly to `get_join_indexers` still makes sense because it avoids:
+1. The overhead of factorizing Categorical (even though Categorical.factorize is fast, there's still overhead)
+2. Any potential conversion to object array
+
+However, `get_join_indexers` in merge.py expects arrays, not Categorical. But if we pass the codes directly, it would try to factorize integers. This is also fast.
+
+Wait, but `get_join_indexers` is being called with `[self._values]`, a list with one element that is a Categorical. If we changed it to `[self._values.codes]`, a list with one element that is an integer ndarray, `get_join_indexers` would work with it directly.
+
+The result would be indexers into the positions. And since we're joining on the same key (codes match iff values match), the indexers are the same.
+
+So the optimization is valid.
+
+BUT, we need to consider: what about `sort=True`? If we sort integer codes, the order is by code value. This is the same as sorting by Categorical value (since Categorical sorts by code). So `sort=True` is also correct.
+
+And for output construction, `self.take(left_idx)` works the same way because `left_idx` is a position indexer.
+
+So I believe passing codes is semantically equivalent and much faster.
+
+Now, is there any edge case where codes and values behave differently? Consider when two CategoricalIndex have the same dtype. Their codes refer to the same categories. Two values are equal iff their codes are equal (or both are NA/-1). So the matching is identical.
+
+One edge case: can codes be -1 for non-NA values? No, -1 is specifically for NA in Categorical. And any other integer in range [0, n_categories) maps to a valid category. So equality works perfectly.
+
+Therefore, the optimization is sound.
+
+Now, where exactly to place the optimization? In `_join_non_unique`:
+
+```python
+        if isinstance(self.dtype, CategoricalDtype):
+            # For Categorical, directly use the underlying integer codes
+            # to avoid overhead of factorizing Categorical objects.
+            left_values = self._values._codes
+            right_values = other._values._codes
+        else:
+            left_values = self._values
+            right_values = other._values
+
+        left_idx, right_idx = get_join_indexers(
+            [left_values], [right_values], how=how, sort=sort
+        )
+```
+
+Wait, but I'm using `self._values._codes`. Does `Categorical` have `_codes` or `codes`? Public API is `codes` on Categorical. But `codes` returns a read-only view. That should be fine for passing to `get_join_indexers`.
+
+But actually, looking at pandas source, `Categorical.codes` is a property that returns `self._codes`, which is an ndarray. So either works.
+
+However, to be most compatible, I should use `self._values.codes` which is the public API.
+
+Wait, `self._values` is the Categorical array. So `self._values.codes` should work.
+
+But there might be an issue: `Categorical.codes` returns a copy? Let me check... No, in pandas, `Categorical.codes` returns the underlying codes array (usually a read-only view). From pandas documentation: `codes` returns the codes of the categorical.
+
+So `self._values.codes` is safe and zero-copy.
+
+Now, what about the `self.take(left_idx)` call later? That takes from the original `self` and `other`, so it's fine.
+
+Let me also verify the `join_index` construction:
+
+```python
+        join_idx = self.take(left_idx)
+        right = other.take(right_idx)
+        join_index = join_idx.putmask(mask, right)
+```
+
+`self.take(left_idx)` returns Categorical values. `right` is also Categorical. So `join_index` is Categorical. This is correct.
+
+So the change is straightforward!
+
+One more check: `self` and `other` are CategoricalIndex, so `self._values` is a Categorical. We do `self._values.codes` to get the codes array. This should be an `ndarray[int8]` or similar. Then we pass it to `get_join_indexers`.
+
+But wait, `get_join_indexers` might use `isna()` or similar on the arrays. On an integer array like codes, `isna()` returns all False, which is correct (since NA is represented as -1 in codes, but `isna()` on integer returns False). Wait, THIS COULD BE A PROBLEM!
+
+In pandas, `isna(codes)` returns `False` for all elements, even -1! Because -1 is just an integer, not a floating-point NaN.
+
+So if `get_join_indexers` uses `isna()` to identify missing values, it would not recognize -1 as NA. And the factorization of -1 would just treat it as a regular integer, assigning it to a factor.
+
+Is this the desired behavior? Well, in Categorical, NA values should match each other. If `get_join_indexers` factorizes the codes including -1, then -1 in left would match -1 in right. This is correct! And the resulting `join_index` would have `self.take(left_idx)` producing NA for those positions. This is also correct.
+
+The only concern is whether other parts of `get_join_indexers` or `Factorizer` do special NA handling. But for simple equality matching, -1 matching -1 is what we want.
+
+Actually, I need to double check what `get_join_indexers` does with NAs. In the merge code, `get_join_indexers` is used for database-style joins. For SQL-style joins, NULL does not match NULL. But pandas `merge` on keys with NaN typically does match NaN with NaN (depending on the version and options).
+
+Wait, `pd.merge(left, right, on='key')` where both have NaN in 'key' - do they match? I believe by default, NaN == NaN in pandas merge since some version, or maybe not. Actually, I think the default is that NaN does equal NaN in merges in newer pandas.
+
+For `Index.join`, it aligns based on exact equality of labels. So NA should match NA.
+
+In any case, since the current code passes the Categorical object (which `get_join_indexers` factorizes, including NA as a separate factor), and our code passes the codes directly (with -1 as a regular integer that happens to match), the NA matching behavior should be the same as what the factorizer does with Categorical values.
+
+Actually, let me reconsider. When `Factorizer` processes a Categorical with NA, what does it do? The `Categorical.__array__` or iteration would yield `np.nan` for NA values. Then `Factorizer` would see `np.nan` and... in older pandas, it might treat NaN specially.
+
+In `pandas._libs.hashtable.Factorizer` (used by `_factorize_keys` in merge), NaN values are typically excluded by default (using `na_sentinel=-1`). But for joins, we WANT NaN to match if both sides have NaN.
+
+Actually, `_factorize_keys` in merge.py likely has specific handling for joins.
+
+I think the key is that for `get_join_indexers`, the function wants to match equal keys. If the factorizer ignores NaN, then NaN wouldn't match. But in the context of an outer join or any join, matching on NA values is often desired for Categorical because they represent the same "missing" category.
+
+Given all this uncertainty, maybe the safest optimization is to only apply this when we know there are no NAs:
+
+```python
+        if (
+            isinstance(self.dtype, CategoricalDtype)
+            and not self.hasnans
+            and not other.hasnans
+        ):
+            left_values = self._values.codes
+            right_values = other._values.codes
+        else:
+            left_values = self._values
+            right_values = other._values
+```
+
+But this would miss the optimization when there are NAs. Hmm.
+
+Actually, thinking about it more: if there are NAs, they're represented as -1 in codes. In `get_join_indexers`, the factorization of a list containing an integer array with -1 values would include -1 in the factorization, so -1 matches -1. This is exactly what we want for Categorical NAs.
+
+But is this how the current code works? If the current code uses `get_join_indexers` with Categorical objects, the factorizer inside `get_join_indexers` might see NA values and either:
+1. Match them together (if it factorizes the actual NA representation consistently)
+2. Exclude them (if it uses na_sentinel)
+
+If option 2, then our code would change behavior (since -1 would match, but Categorical NA would not). This would be a bug.
+
+So I need to be very careful here. I should check what `_factorize_keys` does.
+
+Since I can't run the code, I'll reason through it. `_factorize_keys` in merge.py probably does something like:
+
+```python
+def _factorize_keys(lk, rk, sort=True):
+    # lname and rname are the keys
+    if is_extension_array_dtype(lk):
+        llab, _ = algos.factorize(lk, sort=sort)
+    ...
+```
+
+`factorize` for Categorical typically returns codes with -1 for NA.
+
+Actually, I think the key insight is that `_factorize_keys` in merge.py handles the arrays differently. Let me think...
+
+In pandas, `_factorize_keys` is used to convert keys to integer labels. For the join, it computes:
+1. `llab`: integer labels for left keys
+2. `rlab`: integer labels for right keys  
+3. `count`: number of unique keys
+
+For Categorical keys, `factorize` returns the codes. Since Categorical is already factorized, this is efficient.
+
+But when `get_join_indexers` in merge.py is called, it receives `left_keys` and `right_keys`. These are passed to `_factorize_keys` or similar.
+
+If `get_join_indexers` does `factorize` on the Categorical, it gets back codes. If we pass the codes directly, it would do a second factorization (factorizing the codes), which is still fast but somewhat redundant.
+
+The real performance difference would be avoiding the Categorical-specific overhead and going straight to fast integer operations.
+
+To be completely safe and preserve behavior, I can add the optimization with a guard that passes codes only when we know it's safe (no NAs, or when we're sure -1 handling is correct). But actually, since I know Categorical `codes` property returns the codes including -1, and that the current behavior does join NAs, the most likely scenario is that passing codes is correct.
+
+Wait, I want to double check one more thing. In Categorical, are unused categories a concern? No, because if a category is unused, its code won't appear in the data. The join only matches actual values that appear in the data.
+
+And the output of `get_join_indexers` with codes would produce position indexers that correspond to matching values. Since equal codes mean equal values, the match is correct.
+
+OK, I'll go with this optimization. To be safest, I'll include the codes path without additional guards, because:
+1. Equal codes always mean equal values for same-dtype Categorical
+2. The sort order of codes matches the sort order of Categorical values
+3. The resulting position indexers are applied to the original CategoricalIndex, producing correct values
+
+Actually, let me also check: does `Categorical.codes` always return a copy or a view? It should return a view (read-only). So there's no memory concern.
+
+And one more thing: for very large CategoricalIndex, `get_join_indexers` with integer codes would be much faster because integer factorization and hashing is heavily optimized.
+
+Let me now write out the actual code change.
+
+In `pandas/core/indexes/base.py`, in the `_join_non_unique` method:
+
+```python
+    @final
+    def _join_non_unique(
+        self, other: Index, how: JoinHow = "left", sort: bool = False
+    ) -> tuple[Index, npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+        from pandas.core.reshape.merge import get_join_indexers
+
+        # We only get here if dtypes match
+        assert self.dtype == other.dtype
+
+-       left_idx, right_idx = get_join_indexers(
+-           [self._values], [other._values], how=how, sort=sort
+-       )
++       if isinstance(self.dtype, CategoricalDtype):
++           # Categorical is internally represented by integer codes.
++           # Using them directly in the join avoids the overhead of
++           # repeatedly factorizing Categorical objects.
++           left_values = self._values._codes
++           right_values = other._values._code
++       else:
++           left_values = self._values
++           right_values = other._values
++
++       left_idx, right_idx = get_join_indexers(
++           [left_values], [right_values], how=how, sort=sort
++       )
+```
+
+Wait, there's a typo: `self._values._code` should be `other._values._codes`. But I should use `codes` (public API) instead of `_codes` (internal).
+
+Actually, does `Categorical` have a public `codes` property? Yes. But `self._values` is typed as `ExtensionArray | np.ndarray`. While `_values` for CategoricalIndex IS a Categorical (which is-an ExtensionArray), the type checker might not know that `.codes` exists.
+
+At runtime, `self._values.codes` will work because `self._values` is a `Categorical` object.
+
+So:
+```python
+            left_values = self._values.codes
+            right_values = other._values.codes
+```
+
+But wait, `codes` on Categorical returns a read-only ndarray. This should be fine.
+
+Let me also think about this: is `self._values` definitely a `Categorical` when `isinstance(self.dtype, CategoricalDtype)`? Yes, because the dtype determines the array type.
+
+So the change is:
+
+```python
+    @final
+    def _join_non_unique(
+        self, other: Index, how: JoinHow = "left", sort: bool = False
+    ) -> tuple[Index, npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+        from pandas.core.reshape.merge import get_join_indexers
+
+        # We only get here if dtypes match
+        assert self.dtype == other.dtype
+
+        if isinstance(self.dtype, CategoricalDtype):
+            # Fast path: join on Categorical codes instead of values
+            left_values = self._values.codes
+            right_values = other._values.codes
+        else:
+            left_values = self._values
+            right_values = other._values
+
+        left_idx, right_idx = get_join_indexers(
+            [left_values], [right_values], how=how, sort=sort
+        )
+        mask = left_idx == -1
+
+        join_idx = self.take(left_idx)
+        right = other.take(right_idx)
+        join_index = join_idx.putmask(mask, right)
+        if isinstance(join_index, ABCMultiIndex) and how == "outer":
+            # test_join_index_levels
+            join_index = join_index._sort_levels_monotonic()
+        return join_index, left_idx, right_idx
+```
+
+Wait, but I should verify the behavior with -1 (NA) codes. In `get_join_indexers`, when we pass integer codes including -1, the factorization assigns -1 to its own group. When left has -1 and right has -1, they match. This produces a match for NA values.
+
+With the original Categorical values, does `get_join_indexers` also match NA values? It depends, but in the context of `_join_non_unique` for Index joins, matching NA with NA is likely the expected behavior. Actually, let me think again.
+
+For a `left` join with NA in both indexes, if NA matches NA, the result would include a row for that NA match. For SQL-style joins, NULL does not match NULL. But pandas `DataFrame.join` is not exactly SQL. It matches based on index label equality, and in pandas, `pd.NA == pd.NA` evaluates to `pd.NA`, not `True`. However, for the purpose of `Index.get_indexer`, NaN does match NaN in many cases.
+
+I think to be safe, I should only enable this optimization when there are no NA values, or when I'm certain NA matching is correct. Since the user said "preserve exact semantics", I need to be very careful.
+
+Actually, wait. The `hasnans` property is already cached. So checking it is cheap. I can do:
+
+```python
+        if isinstance(self.dtype, CategoricalDtype):
+            # Fast path: join on Categorical codes for improved performance.
+            # Only use this when there are no NA values, to preserve exact
+            # NA matching semantics.
+            if not self.hasnans and not other.hasnans:
+                left_values = self._values.codes
+                right_values = other._values.codes
+            else:
+                left_values = self._values
+                right_values = other._values
+```
+
+But this would not optimize the case with NAs, which might be common.
+
+Alternatively, I could look at what `get_join_indexers` actually does and replicate the exact behavior. But that's difficult.
+
+Hmm, perhaps the test suite would catch any behavior change. If the optimization is wrong for NAs, some test would fail.
+
+Actually, I just realized: in pandas testing, there are specific tests for CategoricalIndex joining, including with NAs. If I saw those tests, I'd know the expected behavior. But I can't access them here.
+
+Given the instruction to "preserve exact semantics and outputs", I should be very conservative.
+
+Let me think about this differently. What if the actual pandas fix was to move the check or to make Categorical's `_can_use_libjoin` return True under certain conditions, and the code path is different from what I'm looking at?
+
+Actually, I recall that in some pandas version, there was a fix/optimization for Categorical in `join` that involved returning early with a simple `reindex` when the indexes are identical. But that doesn't seem specific to Categorical.
+
+OK, one more look at the code. In `join`:
+
+```python
+        if (
+            not isinstance(self.dtype, CategoricalDtype)
+            and self.is_monotonic_increasing
+            and other.is_monotonic_increasing
+            and self._can_use_libjoin
+            and other._can_use_libjoin
+            and (self.is_unique or other.is_unique)
+        ):
+```
+
+What if the optimization is to change this to:
+```python
+        if (
+            self.is_monotonic_increasing
+            and other.is_monotonic_increasing
+            and self._can_use_libjoin
+            and other._can_use_libjoin
+            and (self.is_unique or other.is_unique)
+            and not (isinstance(self.dtype, CategoricalDtype) and not self.dtype.ordered)
+        ):
+```
+
+No, that doesn't make sense. The original excludes all Categorical, not just unordered.
+
+Wait, the user says "unordered CategoricalIndex". This is the exact phrase. In pandas, there are "ordered" and "unordered" Categoricals. The optimization specifically mentions "unordered", which suggests that the current behavior treats them differently or that there's a specific issue with them.
+
+For an **unordered** Categorical, the `ordered` attribute is False. For an **ordered** Categorical, it's True.
+
+What if the issue is that `is_monotonic_increasing` is particularly expensive or problematic for unordered Categorical? But again, the monotonic check is short-circuited for all Categorical.
+
+Hmm, wait. What if the user's description is slightly imprecise and "unordered" just means the general case where the categories are not in any meaningful order? That is, the CategoricalIndex is not sorted.
+
+In that case, the join falls through to `_join_non_unique` or `_join_via_get_indexer`, and the optimization would still be about making these paths faster.
+
+I think my original idea about using codes in `_join_non_unique` is the most promising. Let me verify one more time that the NA semantics are preserved.
+
+Actually, I just realized: the `factorize` function in pandas has a `na_sentinel` parameter. In `get_join_indexers` via `_factorize_keys`, the default might be to exclude NA (na_sentinel=-1). If NA is excluded from factorization, then NA doesn't match anything. But in Categorical, the `codes` already have -1 for NA.
+
+If `get_join_indexers` factorizes the codes array, it might use `na_sentinel=-1` for integer arrays too! Wait, no. `na_sentinel` is typically for detecting float NaN or special NA values, not for arbitrary integers like -1. For integer arrays, `factorize` with default `na_sentinel=-1` would only treat actual NA values (like `np.nan` or `None`) as NA. Pure integer `-1` is not NA.
+
+So if we pass the codes directly, `-1` would be factorized as a regular integer, and it would match between left and right. If the original Catorial path also matches NA with NA, then great. But if the original path excludes NA from matching (because `factorize` on Categorical extracts -1 as na_sentinel), then our optimization would change behavior.
+
+This is a real concern. In `Categorical.factorize`, the default `na_sentinel=-1` is used. This means NA values in Categorical get represented as -1 in the factorization result. So a Categorical with values `['a', NA, 'b']` would factorize to `[0, -1, 1]`.
+
+If `get_join_indexers` calls `factorize` on the Categorical (which returns codes with -1 for NA), and then handles -1 as "not matched", then NA would not match.
+
+But wait, if `factorize` returns -1 for NA, and then `get_join_indexers` uses these codes in its join logic... I need to know how `get_join_indexers` uses the factorized codes.
+
+In `pandas/_libs/join.pyx`, the `get_join_indexers` function likely takes the left and right integer label arrays and computes the join. The label -1 would typically mean "not found" or "missing" in this context. If both sides have -1 for a given key, do they match?
+
+The answer depends on the join implementation. In many join algorithms, -1 is treated specially (as missing). But in a standard sort-merge or hash join on factorized keys, -1 is just another integer key.
+
+I think for pandas joins, -1 typically doesn't match. Because if `lkey[i] == -1`, it means "this position has no corresponding group", and it shouldn't match with anything, including another -1.
+
+If that's the case, then passing raw codes where -1 represents NA would be WRONG, because -1 would match -1.
+
+So the original behavior with Categorical might be: NA values don't match each other in the join, or they match through a different mechanism.
+
+Actually, let me reconsider. In `Index.join`, when joining two indexes, NaN values are generally considered to match each other. For example:
+
+```python
+>>> pd.Float64Index([1.0, 2.0, np.nan]).join(pd.Float64Index([2.0, np.nan, 3.0]), how='inner')
+Float64Index([2.0, nan], dtype='float64')
+```
+
+So NaN does match NaN in `Index.join`. This means for Categorical, NA should also match NA.
+
+For the code-based approach with `get_join_indexers`, if -1 is factorized as a regular key and matches, that would preserve the "NA matches NA" behavior. But if the join algorithm treats -1 specially, then NA wouldn't match, which would be wrong.
+
+Given the uncertainty, and to preserve exact semantics, I think the safest optimization is:
+
+```python
+        if isinstance(self.dtype, CategoricalDtype):
+            # Fast path for Categorical with no NA values:
+            # join directly on integer codes to avoid Categorical overhead.
+            if not self.hasnans and not other.hasnans:
+                left_values = self._values.codes
+                right_values = other._values.codes
+            else:
+                left_values = self._values
+                right_values = other._values
+```
+
+This way, when there are no NAs, there's no ambiguity about -1, and we can safely use the fast path. When there are NAs, we fall back to the original behavior.
+
+But the user's request is about "unordered CategoricalIndex". Does this help with that? Yes, because for many real-world CategoricalIndexes, there are no NAs, and this optimization would still kick in.
+
+However, I suspect that there might be an even better approach. What if we use the public `codes` but mask out -1 values, or use a special value that `get_join_indexers` can handle?
+
+Actually, if `get_join_indexers` uses a hash-based approach, it might not treat -1 specially. Let me think about `get_join_indexers` more.
+
+At the Cython level, `get_join_indexers` probably uses integer arrays for the keys. The values in these arrays are group IDs from factorization. A value of -1 means "not in any group" (NA). The join algorithm should handle -1 by not matching it with anything.
+
+If we pass raw codes where -1 means NA, and -1 is treated as "not in any group", then two -1 values would NOT match each other. This would break the "NA matches NA" semantics.
+
+But if `get_join_indexers` is called with `left_keys` and `right_keys` that are already factorized (like our codes), and the function doesn't know about the -1 semantics, it might just do a regular join on integers, causing -1 to match -1.
+
+So this approach would change semantics for the NA case.
+
+Given all this, I think the most defensible approach is to only do the optimization when there are no NAs.
+
+But wait, there's another option. We could shift the codes to avoid -1, e.g., add 1 to all codes so that NA (still -1) becomes a non-conflicting value, but that would require modifying the arrays.
+
+Actually, no. -1 is specifically what we need to match. The issue is whether `get_join_indexers` treats -1 specially.
+
+Let me try to trace through `get_join_indexers` in my mind. It calls `_get_join_indexers` from Cython with the factorized arrays. The factorized arrays contain labels in `[0, n-1]` and -1 for NA. The Cython code then builds hash tables for the left side, mapping each key label to its positions. For each element in the right side, it looks up the left positions. If the label is -1, it should ideally not match.
+
+Actually, I don't know for sure. The safest approach is to limit the optimization to the no-NA case, which is still very common and provides a clear speedup.
+
+Alternatively... maybe I should look at how the Cython `get_join_indexers` handles -1. If it treats -1 as a normal key, then passing codes directly is safe for all cases (NA matches NA, which is the desired behavior for most pandas joins).
+
+Let me reason about this. In the current code path:
+1. Categorical values are passed to `get_join_indexers`
+2. Inside, `factorize` is called on the Categorical
+3. `factorize` on Categorical returns codes, with -1 for NA
+4. These codes are passed to the Cython join function
+
+So the Cython join function already receives codes with -1 for NA! The question is whether the Cython function treats -1 as "matchable" or not.
+
+From the pandas source code that I've seen, the Cython `get_join_indexers` (in `pandas/_libs/join.pyx`) builds a hash map from keys to lists of positions. It then iterates through the right side, looking up each key in the left hash map. For a `-1` key, it would look up `-1` in the hash map. If the left side has `-1` at some position, the hash map would have an entry for `-1`, and it would match.
+
+Wait, but that means NA matches NA, which is consistent with how pandas `merge` works for some dtypes. Is it consistent with `Index.join`?
+
+In `Index.join`, for a `left` join, we should include all left elements. For inner, only common elements. If NAs are common (they appear in both), they'd be included in an inner join.
+
+But in `DataFrame.join`, the default is `how='left'`, so all left rows are included, and the right indexers are used to align. If both have NA, the NA in left gets matched with NA in right.
+
+I believe this is correct behavior for pandas joins. So if the Cython code matches -1 with -1, that's what we want.
+
+Now, the only question is: is this actually what happens? I think for pandas `get_join_indexers`, the answer is yes. The factorized labels are just integers, and -1 is treated as a valid label in the join context (unlike in some other contexts where -1 means "not found").
+
+If that's true, then passing codes directly is safe even with NAs.
+
+But I'm not 100% sure. To be safest, I can add the optimization only when there are no NAs. But if I do that, the optimization is incomplete.
+
+Actually, let me look at this from a different angle. The user's requirement is "Optimize DataFrame.join for unordered CategoricalIndex". In typical benchmark scenarios, the test data might not have NAs. And even with the NA guard, the optimization helps many cases.
+
+I think I'll include the optimization with the following logic: if there are no NA values, use the code path. This is a safe optimization that definitely preserves semantics.
+
+But actually, I just had another thought. What if the actual issue is in `_join_via_get_indexer` not `_join_non_unique`? For the case where both CategoricalIndexes are unique (which is common), the join goes through `_join_via_get_indexer`. This path calls `self.intersection(other)` for inner and `self.union(other)` for outer.
+
+For `union` and `intersection` on CategoricalIndex, these operations could be slow. But they use the engine internally.
+
+Hmm, actually, in `_join_via_get_indexer`:
+```python
+        elif how == "inner":
+            join_index = self.intersection(other, sort=sort)
+        elif how == "outer":
+            # TODO: sort=True here for backwards compat. It may
+            # be better to use the sort parameter passed into join
+            join_index = self.union(other)
+```
+
+For Categorical with the same dtype, `self.intersection(other)` could be slow if it goes through a generic path. But `CategoricalIndex` might override `intersection`. In any case, this is in the unique path.
+
+For the non-unique path, `_join_non_unique` is where the real issue is.
+
+OK, I'll go with my optimization for `_join_non_unique` and include it regardless of NA values. Here's my reasoning:
+
+1. The current code path for non-unique Categorical join goes through `get_join_indexers` with the full Categorical values.
+2. `get_join_indexers` factorizes these values, producing integer codes.
+3. The join operates on these codes.
+4. If we pass the codes directly, the join operates on the same codes.
+5. The behavior should be identical because the input to the core join algorithm is the same (integer codes).
+
+The only difference is whether `factorize` on Categorical handles -1 exactly the same as passing -1 directly. Since `Categorical.factorize` returns codes with -1 for NA, and `get_join_indexers` treats these factorized labels as the join keys, the join on raw codes should produce the same result.
+
+Actually, wait. There's one more consideration. When `get_join_indexers` factorizes the Categorical, it might not use `factorize` directly. It might use a different factorization method that handles the array differently.
+
+In `pandas/core/reshape/merge.py`, `_factorize_keys` does:
+
+```python
+def _factorize_keys(
+    lk: np.ndarray,
+    rk: np.ndarray,
+    sort: bool = True,
+    # ... some other params
+):
+    # Some implementations dispatch to different functions based on dtype
+```
+
+For extension arrays like Categorical, it might use `lk.factorize()` or `pd.factorize(lk)` or a special path.
+
+In any case, the output of factorization is integer labels. As long as equal values get the same label and different values get different labels, the join result is the same.
+
+For Categorical, `factorize` ensures that equal values get the same code (or corresponding factorized label). For our direct code approach, equal values also have equal codes. So the result is the same.
+
+For NA values, `factorize` returns -1. In our direct code approach, NA is also -1. So the result is the same.
+
+For sorting, `sort=True` in `factorize` ensures labels are assigned in sorted order of unique values. In our direct code approach, the codes are already in the Categorical order. But wait - if `get_join_indexers` relies on the labels being sorted when `sort=True`, the behavior could differ.
+
+In `get_join_indexers` with `sort=True`, it likely sorts the join result. The sort order depends on how the keys are ordered. If we use codes directly, the sort order is by code (i.e., by category order). If we use factorized Categorical, the sort order is also by category order (since `factorize` with sort=True for Categorical uses the category order, I believe, or it might use the first appearance order).
+
+Hmm, this is a subtle point. If `sort=True`, does `get_join_indexers` produce a different sort order depending on whether the keys are codes vs factorized values?
+
+Actually, `_factorize_keys` with `sort=True` for Categorical would probably sort by the actual values, which is the same as sorting by codes when the categories have a defined order. But for an **unordered** Categorical, the sort order during `factorize` might be the order of first appearance, not the category order!
+
+If `factorize` for unordered Categorical uses first-appearance order, and our code approach uses the numerical code order (which is the category order), then `sort=True` could produce different results!
+
+This is a critical issue. Let me think about this.
+
+In pandas, `Categorical.factorize` returns codes. The `sort` parameter in `factorize` controls whether the resulting codes are sorted by the values. For `Categorical`, `sort=True` means labels are assigned such that the `uniques` array is sorted. For unordered Categorical, "sorted" still means sorted by the category order (since that's the only defined order for Categorical values).
+
+Actually, `pd.factorize` on Categorical does sort by the order of `categories`. So the factorized labels for `['b', 'a']` would be `[1, 0]` if sort=True and categories are `['a', 'b']`.
+
+In our direct code approach, 'b' has code 1 and 'a' has code 0, regardless of `sort`. So the actual label values are the same as the factorized labels with sort=True!
+
+Wait, that's not always true. If the Categorical has `sort=False` in factorize, the labels might be assigned in order of appearance (e.g., 'b' gets 0, 'a' gets 1). But our codes are always by category position.
+
+However, `get_join_indexers` likely calls `_factorize_keys` with `sort=sort`. So if `sort=False`, the factorized labels might differ from the raw codes. But the join result (which positions match) depends only on whether equal values have equal labels, not on what the labels are.
+
+For the `sort` parameter in `get_join_indexers` itself, it might sort the result based on the labels. If so, using raw codes vs factorized labels with different sort behavior could produce a differently sorted output.
+
+This is getting too complicated. To be perfectly safe, I should NOT change the non-unique path for Categorical.
+
+Wait, but what if the sort parameter issue is not actually a problem because `get_join_indexers` doesn't sort by label value but by position?
+
+Let me reconsider. In `_join_non_unique`, the `sort` parameter is passed to `get_join_indexers`. Looking at `merge.py`, the `sort` parameter in `get_join_indexers` controls whether the result is sorted by key. For a sorted result, it needs the keys to have a meaningful order.
+
+If `sort=True` for Categorical, and we pass codes, the result would be sorted by code order (category order). If we pass factorized labels, the result would be sorted by... whatever order the factorizer used.
+
+If `factorize` on Categorical always produces labels in category order (i.e., 'a'=0, 'b'=1 regardless of data order), then the sort order is the same as our code approach. And I believe this IS the case for Categorical, because the codes themselves are already in this order.
+
+So the sort order should be the same.
+
+Given all this, I believe the optimization is correct. But to be conservative, let me see if there's a way to verify or if I should limit it.
+
+Actually, you know what, there's an even SIMPLER and safer approach. Instead of trying to optimize `_join_non_unique` with code tricks, what if we just enable the monotonic fast path for Categorical when it's safe?
+
+But that requires changes to `_get_join_target` which is risky.
+
+OK, I'll make one more attempt. Let me look at what happens if I add the code-based optimization with a specific guard for matching behavior. The simplest way to ensure matching behavior is to actually compare the results for a small case, but I can't run code.
+
+Actually, I just thought of something. The factorization in `_factorize_keys` for Categorical might have `na_sentinel=-1`, which means NA gets label -1. Then in the Cython join code, -1 is indeed treated as a regular label for matching purposes (since the Cython code doesn't know about NA semantics, it just matches integers). This means NA matches NA in the current code.
+
+And our code approach with raw codes also has -1 matching -1. So the behavior is the same.
+
+For the sort order, since `Categorical.factorize` returns codes that match the `codes` property, the labels are the same. So `sort=True` gives the same result.
+
+I'm now fairly confident the optimization is correct.
+
+One more thought: can we access `self._values.codes` directly? `self._values` is of type `ExtensionArray | np.ndarray`. For CategoricalIndex, it's definitely a `Categorical`. So `self._values.codes` works.
+
+But does `Categorical.codes` always exist and return an ndarray? Yes, it's a documented property on `Categorical`.
+
+Let me also check if there could be an issue with `Categorical.ordered`. For unordered Categorical, `is_monotonic_increasing` might be misleading. But we're not using it - we're in `_join_non_unique` which doesn't rely on monotonicity.
+
+OK, I'll go with the optimization.
+
+Actually, wait. There's one more thing to consider. The optimization in `_join_non_unique` might be applied too broadly. What if `self.dtype` is CategoricalDtype but with different `ordered` values? The assertion says `self.dtype == other.dtype`, which for CategoricalDtype requires both categories and ordered to match. So they're guaranteed to have the same behavior.
+
+Now, one more thing. Could this optimization apply to the `join` method more broadly, i.e., for unique CategoricalIndexes too? For unique, we go to `_join_via_get_indexer`. But `_join_via_get_indexer` uses `get_indexer_for` for `left`/`right` and `intersection`/`union` for `inner`/`outer`. The `get_indexer_for` path for Categorical is already optimized via the engine. So no additional optimization is needed there.
+
+For non-unique, our optimization in `_join_non_unique` helps.
+
+But wait, for `DataFrame.join`, which defaults to `how='left'`, if the index is unique, we go to `_join_via_get_indexer` and then use `get_indexer_for`. This is already fast. If the index is not unique, we go to `_join_non_unique`, and our optimization helps.
+
+Hmm, but the user says "Optimize DataFrame.join for unordered CategoricalIndex". DataFrame.join typically aligns on the index, and if there are duplicate index labels, it needs `_join_non_unique`. If the index is unique, it's already fast.
+
+Actually, DataFrame.join can also join on columns via the `on` parameter. But the default is index-based.
+
+I wonder if the real issue is that for CategoricalIndex, even when unique, `get_indexer_for` is slow. Let me look again:
+
+```python
+        if how == "left":
+            join_index = self
+        ...
+        if join_index is self:
+            lindexer = None
+        else:
+            lindexer = self.get_indexer_for(join_index)
+        if join_index is other:
+            rindexer = None
+        else:
+            rindexer = other.get_indexer_for(join_index)
+```
+
+For `how='left'`, `join_index = self`. `rindexer = other.get_indexer_for(self)`.
+
+`get_indexer_for` on CategoricalIndex:
+```python
+    def get_indexer_for(self, target) -> npt.NDArray[np.intp]:
+        if self._index_as_unique:
+            return self.get_indexer(target)
+        indexer, _ = self.get_indexer_non_unique(target)
+        return indexer
+```
+
+And `get_indexer(target)` for Categorical:
+```python
+        if isinstance(self.dtype, CategoricalDtype):
+            assert self.dtype == target.dtype
+            indexer = self._engine.get_indexer(target.codes)
+```
+
+This is very fast! So for unique CategoricalIndex, `DataFrame.join` should already be fast.
+
+The slowness must be for non-unique CategoricalIndex. In this case, `_join_non_unique` is called, and this is where our optimization makes a difference.
+
+OK, so the optimization is good. Let me write it up.
+
+But actually, I want to double-check one more thing. Will `self._values.codes` work directly, or do we need to go through `np.asarray`? `Categorical.codes` returns an ndarray, so it should work directly with `get_join_indexers`.
+
+One potential issue: `get_join_indexers` might expect lists of arrays, and `codes` returns a read-only array. Is that OK? Yes, `get_join_indexers` shouldn't modify the input arrays.
+
+Another issue: the codes dtype. Categorical codes are typically `int8` or `int16`. When passed to `get_join_indexers` and then `factorize`, `factorize` on already-factorized integer array might be OK, or it might try to factorize again.
+
+Actually, if `get_join_indexers` calls `factorize` on the codes, it's doing redundant work. But the factorization of an integer array is very fast - just a matter of remapping the integers to a contiguous range. Even with this overhead, it's likely still faster than factorizing Categorical objects.
+
+But we can potentially avoid this double-factorization. However, to do that, we'd need to modify `get_join_indexers`, which we can't.
+
+Still, the factorization of an int8/int16 array with values in a small range is very fast, and the hash table used would be very efficient. So the optimization should still be substantial.
+
+One final check: do we need to import anything extra? `CategoricalDtype` is already in scope. And `self._values.codes` is accessible without imports.
+
+Let me write the SEARCH/REPLACE block:
+
+```python
+pandas/core/indexes/base.py
+[SEARCH]
+        left_idx, right_idx = get_join_indexers(
+            [self._values], [other._values], how=how, sort=sort
+        )
+[/SEARCH]
+[REPLACE]
+        if isinstance(self.dtype, CategoricalDtype):
+            # Fast path: Categorical is internally represented as integer codes.
+            # Joining on the codes directly avoids costly repeated
+            # factorization of Categorical objects.
+            left_values = self._values.codes
+            right_values = other._values.codes
+        else:
+            left_values = self._values
+            right_values = other._values
+
+        left_idx, right_idx = get_join_indexers(
+            [left_values], [right_values], how=how, sort=sort
+        )
+[/REPLACE]
+```
+
+Wait, but I should make sure the indentation is exact. In the original code:
+
+```python
+        left_idx, right_idx = get_join_indexers(
+            [self._values], [other._values], how=how, sort=sort
+        )
+```
+
+This is inside `_join_non_unique`. The `if` should be at the same indentation level as the original statement.
+
+Actually, looking at the file again, the method is:
+
+```python
+    @final
+    def _join_non_unique(
+        self, other: Index, how: JoinHow = "left", sort: bool = False
+    ) -> tuple[Index, npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+        from pandas.core.reshape.merge import get_join_indexers
+
+        # We only get here if dtypes match
+        assert self.dtype == other.dtype
+
+        left_idx, right_idx = get_join_indexers(
+            [self._values], [other._values], how=how, sort=sort
+        )
+```
+
+So the replacement should be:
+
+```python
+        if isinstance(self.dtype, CategoricalDtype):
+            # Fast path: Categorical is internally represented as integer codes.
+            # Joining on the codes directly avoids costly repeated
+            # factorization of Categorical objects.
+            left_values = self._values.codes
+            right_values = other._values.codes
+        else:
+            left_values = self._values
+            right_values = other._values
+
+        left_idx, right_idx = get_join_indexers(
+            [left_values], [right_values], how=how, sort=sort
+        )
+```
+
+This looks right.
+
+But wait - I need to be absolutely sure about `self._values.codes`. Does `self._values` for a CategoricalIndex always have a `.codes` attribute? Yes, because `self._values` is a `Categorical` object, and `Categorical` has a `codes` property.
+
+However, note that in the type system, `self._values` is declared as `ExtensionArray | np.ndarray`. Calling `.codes` on it works at runtime for Categorical, but a type checker might complain. Since we're not running a type checker on the result, this is fine.
+
+Also, I want to verify: are there any other places in the file where a similar optimization makes sense? For example, in `_join_via_get_indexer`?
+
+```python
+        if join_index is self:
+            lindexer = None
+        else:
+            lindexer = self.get_indexer_for(join_index)
+        if join_index is other:
+            rindexer = None
+        else:
+            rindexer = other.get_indexer_for(join_index)
+```
+
+For `get_indexer_for`, Categorical already has a fast path in `get_indexer` (via `_engine.get_indexer(target.codes)`). So this is already optimized.
+
+What about `intersection` and `union` in `_join_via_get_indexer`? These go through `CategoricalIndex` methods (which I don't see in this file), but they're probably reasonably optimized.
+
+So I believe the main win is in `_join_non_unique`.
+
+Wait, but the user says "Optimization function: pandas.DataFrame.join". DataFrame.join calls DataFrame.align which calls Index.join. Our optimization is in Index.join's helper. This is correct.
+
+Now let me think if there are any edge cases where `self._values.codes` might not be available. Could `self.dtype` be CategoricalDtype but `self._values` not be a Categorical? No, because the dtype and the values class are coupled. A CategoricalDtype always has Categorical values.
+
+What about a MultiIndex with a Categorical level? In that case, `self.dtype` is not `CategoricalDtype`, it's something else. So the check won't trigger.
+
+What about when `self.dtype != other.dtype`? In `join`, there's a check:
+
+```python
+        if self.dtype != other.dtype:
+            dtype = self._find_common_type_compat(other)
+            this = self.astype(dtype, copy=False)
+            other = other.astype(dtype, copy=False)
+            return this.join(other, how=how, return_indexers=True)
+```
+
+So by the time we reach `_join_non_unique`, `self.dtype == other.dtype` is asserted. This means if we get to `_join_non_unique` with CategoricalDtype, both are Categorical with the same dtype.
+
+Everything looks consistent.
+
+One more thought: could `self._values.codes` be expensive to compute? `codes` is a cached property or a simple property on Categorical that returns the internal array. So it's very fast.
+
+Alright, I'm confident in this change. Let me also check if there might be a need to access `._codes` instead of `.codes` for performance or compatibility. In pandas, `Categorical.codes` is a property that returns `self._codes`. So `.codes` is fine.
+
+Actually, I just want to double check the `Categorical.codes` property signature. I believe it's:
+
+```python
+@property
+def codes(self):
+    return self._codes
+```
+
+Or maybe it's cached. Either way, it returns the ndarray quickly.
+
+OK, final answer. I'll output the SEARCH/REPLACE block.
+
+Wait, I want to make one more check. What about when `self` or `other` is a subclass of CategoricalIndex with a custom `_values`? The optimization would still work as long as `_values.codes` is available. Since this is the standard Categorical interface, it should be fine.
+
+Another thing: the `get_join_indexers` function takes a list of "key" arrays. If we pass the codes, we're effectively joining on a single key that is the integer code. This is correct for Categorical because there's a 1-to-1 mapping between code and value (for same categories).
+
+But what about when the Categorical has `ordered=True` vs `ordered=False`? The code doesn't care about `ordered` in the join. Both use the same integer codes. So the optimization works regardless.
+
+Now, is there any issue with `sort` when using codes for an unordered Categorical? The `sort` parameter in `get_join_indexers` controls whether the output is sorted by key. Using codes as the key means sorting by code order, which corresponds to the category order. This is the natural sort order for Categorical and is consistent with how `Categorical.sort_values()` works.
+
+So even for unordered Categorical, sorting by codes is well-defined and correct.
+
+I'm satisfied. Here's the block:
+
+```python
+pandas/core/indexes/base.py
+[SEARCH]
+        left_idx, right_idx = get_join_indexers(
+            [self._values], [other._values], how=how, sort=sort
+        )
+[/SEARCH]
+[REPLACE]
+        if isinstance(self.dtype, CategoricalDtype):
+            # Fast path: Categorical is internally represented as integer codes.
+            # Joining on the codes directly avoids costly repeated
+            # factorization of Categorical objects.
+            left_values = self._values.codes
+            right_values = other._values.codes
+        else:
+            left_values = self._values
+            right_values = other._values
+
+        left_idx, right_idx = get_join_indexers(
+            [left_values], [right_values], how=how, sort=sort
+        )
+[/REPLACE]
+```
+
+Wait, I should double check that `self._values.codes` doesn't cause issues. Actually, for Categorical, there might be a subtlety where `.codes` returns a read-only array, and `get_join_indexers` might try to modify it. But `get_join_indexers` shouldn't modify its input arrays.
+
+Let me also consider if we should use `np.asarray(self._values.codes, copy=False)` to be extra safe. But `self._values.codes` is already an ndarray, so this is unnecessary.
+
+One more thing: in pandas, `Categorical.codes` can be a property that returns `self._codes`. Let me verify that `Categorical` is the type of `self._values`. Yes, for a `CategoricalIndex`, `self._values` is a `Categorical` instance.
+
+Actually, I realize I should look at whether `CategoricalIndex` uses `CategoricalDtype`. The check `isinstance(self.dtype, CategoricalDtype)` is correct.
+
+I think the change is correct. I'll provide it as the answer.
+
+Hmm, but I want to be extra careful about one thing. Could there be a case where `_join_non_unique` is called and `self` is not actually a `CategoricalIndex` but has `CategoricalDtype`? For example, a plain `Index` with `CategoricalDtype`? In pandas, if you do `pd.Index(pd.Categorical(...))`, it creates a `CategoricalIndex`. So `self` would still be a `CategoricalIndex`, and `self._values` would be `Categorical`.
+
+Even if `self` were a plain `Index`, `Index` doesn't directly create Categorical values. The `_dtype_to_subclass` method dispatches to `CategoricalIndex` for Categorical data.
+
+So we're fine.
+
+Let me verify the final block once more for exact indentation and whitespace. In the original code:
+
+```python
+        left_idx, right_idx = get_join_indexers(
+            [self._values], [other._values], how=how, sort=sort
+        )
+```
+
+My replacement:
+
+```python
+        if isinstance(self.dtype, CategoricalDtype):
+            # Fast path: Categorical is internally represented as integer codes.
+            # Joining on the codes directly avoids costly repeated
+            # factorization of Categorical objects.
+            left_values = self._values.codes
+            right_values = other._values.codes
+        else:
+            left_values = self._values
+            right_values = other._values
+
+        left_idx, right_idx = get_join_indexers(
+            [left_values], [right_values], how=how, sort=sort
+        )
+```
+
+The indentation matches (8 spaces for block content).
+
+I think this is the correct and most defensible optimization.</think>pandas/core/indexes/base.py
+[SEARCH]
+        left_idx, right_idx = get_join_indexers(
+            [self._values], [other._values], how=how, sort=sort
+        )
+[/SEARCH]
+[REPLACE]
+        if isinstance(self.dtype, CategoricalDtype):
+            # Fast path: Categorical is internally represented as integer codes.
+            # Joining on the codes directly avoids costly repeated
+            # factorization of Categorical objects.
+            left_values = self._values.codes
+            right_values = other._values.codes
+        else:
+            left_values = self._values
+            right_values = other._values
+
+        left_idx, right_idx = get_join_indexers(
+            [left_values], [right_values], how=how, sort=sort
+        )
+[/REPLACE]

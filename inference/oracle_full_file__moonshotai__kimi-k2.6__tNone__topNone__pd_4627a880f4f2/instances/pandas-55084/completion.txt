@@ -1,0 +1,109 @@
+pandas/core/indexes/api.py
+[SEARCH]
+def get_objs_combined_axis(
+    objs,
+    intersect: bool = False,
+    axis: Axis = 0,
+    sort: bool = True,
+    copy: bool = False,
+) -> Index:
+    """
+    Extract combined index: return intersection or union (depending on the
+    value of "intersect") of indexes on given axis, or None if all objects
+    lack indexes (e.g. they are numpy arrays).
+
+    Parameters
+    ----------
+    objs : list
+        Series or DataFrame objects, may be mix of the two.
+    intersect : bool, default False
+        If True, calculate the intersection between indexes. Otherwise,
+        calculate the union.
+    axis : {0 or 'index', 1 or 'outer'}, default 0
+        The axis to extract indexes from.
+    sort : bool, default True
+        Whether the result index should come out sorted or not.
+    copy : bool, default False
+        If True, return a copy of the combined index.
+
+    Returns
+    -------
+    Index
+    """
+    obs_idxes = [obj._get_axis(axis) for obj in objs]
+    return _get_combined_index(obs_idxes, intersect=intersect, sort=sort, copy=copy)
+[/SEARCH]
+[REPLACE]
+def get_objs_combined_axis(
+    objs,
+    intersect: bool = False,
+    axis: Axis = 0,
+    sort: bool = True,
+    copy: bool = False,
+) -> Index:
+    """
+    Extract combined index: return intersection or union (depending on the
+    value of "intersect") of indexes on given axis, or None if all objects
+    lack indexes (e.g. they are numpy arrays).
+
+    Parameters
+    ----------
+    objs : list
+        Series or DataFrame objects, may be mix of the two.
+    intersect : bool, default False
+        If True, calculate the intersection between indexes. Otherwise,
+        calculate the union.
+    axis : {0 or 'index', 1 or 'outer'}, default 0
+        The axis to extract indexes from.
+    sort : bool, default True
+        Whether the result index should come out sorted or not.
+    copy : bool, default False
+        If True, return a copy of the combined index.
+
+    Returns
+    -------
+    Index
+    """
+    obs_idxes = [obj._get_axis(axis) for obj in objs]
+    return _get_combined_index(obs_idxes, intersect=intersect, sort=sort, copy=copy)
+
+
+def _fast_unaligned_union(axis: Axis, objs) -> Index:
+    """
+    Fast path for unioning indexes when axis=1 (columns) with unaligned data.
+
+    When concatenating along axis=1, each object's column index must be
+    combined. When rows are already aligned (same index), we can avoid
+    the expensive full reindexing by directly computing the union of
+    column indexes.
+
+    Parameters
+    ----------
+    axis : Axis
+        The axis along which concatenation will occur (must be 1).
+    objs : list
+        Series or DataFrame objects.
+
+    Returns
+    -------
+    Index or None
+        The combined column index if the fast path applies, None otherwise.
+    """
+    if axis != 1:
+        return None
+
+    # Collect row indexes (axis 0) and column indexes (axis 1)
+    row_idxes = [obj._get_axis(0) for obj in objs]
+    col_idxes = [obj._get_axis(1) for obj in objs]
+
+    # Fast path: all row indexes must be identical (already aligned)
+    first_row = row_idxes[0]
+    for other in row_idxes[1:]:
+        if not first_row.equals(other):
+            return None
+
+    # Use union_indexes for efficient union of column indexes
+    from pandas.core.indexes.api import union_indexes
+
+    return union_indexes(col_idxes, sort=False)
+[/REPLACE]

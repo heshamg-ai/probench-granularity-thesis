@@ -1,0 +1,111 @@
+ pandas/core/arrays/string_arrow.py
+[SEARCH]
+    def _str_count(self, pat: str, flags: int = 0):
+        if flags:
+            return super()._str_count(pat, flags)
+        result = pc.count_substring_regex(self._pa_array, pat)
+        return self._convert_int_dtype(result)
+[/SEARCH]
+[REPLACE]
+    def _str_count(self, pat: str, flags: int = 0):
+        if flags:
+            return super()._str_count(pat, flags)
+        result = pc.count_substring_regex(self._pa_array, pat)
+        return self._convert_int_dtype(result)
+
+    def _str_get_dummies(self, sep: str = "|"):
+        import pyarrow as pa
+        import pyarrow.compute as pc
+
+        if not pa.types.is_string(self._pa_array.type):
+            # e.g. dictionary-backed; fallback via object path
+            return super()._str_get_dummies(sep)
+
+        # split each string on the separator
+        split_arr = pc.split_pattern(self._pa_array, pattern=sep)
+
+        # flatten to get all elements in one array, with offsets to reconstruct rows
+        flattened = pc.list_flatten(split_arr)
+        list_offsets = split_arr.offsets  # pyarrow.Array of int32
+
+        # build the sorted unique categories (excluding empty string)
+        # pyarrow dictionary_encode gives us uniques, but order isn't guaranteed sorted.
+        # We can sort the unique values and then cast.
+        # First, filter out empty strings and nulls from flattened.
+        is_empty_or_null = pc.or_(pc.equal(flattened, ""), pc.is_null(flattened))
+        non_empty = pc.filter(flattened, pc.invert(is_empty_or_null))
+
+        if len(non_empty) == 0:
+            # no categories at all
+            from pandas import DataFrame
+
+            return DataFrame(index=range(len(self)))
+
+        # dictionary encode to get uniques, then sort them
+        dict_encoded = pc.dictionary_encode(non_empty)
+        uniques = dict_encoded.dictionary
+        # sort uniques lexicographically to match existing behavior
+        sorted_uniques = pc.sort_indices(uniques, sort_keys=[("foo", "ascending")])
+        # actually sort the values
+        sorted_uniques = pc.take(uniques, sorted_uniques)
+
+        num_rows = len(self)
+        num_cats = len(sorted_uniques)
+
+        # For each category, we need to know which (row, cat) pairs exist.
+        # Build row indices for each flattened element.
+        # list_offsets[i] to list_offsets[i+1] gives the range for row i
+        # We can build this with numpy for speed.
+        import numpy as np
+
+        offsets = list_offsets.to_pylist()
+        # This gives start/end for each row. We need one entry per flattened element.
+        # repeated row indices
+        row_counts = np.diff(offsets)
+        row_indices = np.repeat(np.arange(num_rows), row_counts)
+
+        # Now we have row_indices aligned with flattened.
+        # We need to align flattened with sorted_uniques.
+        # For each element in flattened, find its index in sorted_uniques.
+        # Use dictionary_encode with sorted_uniques as dictionary, or use index_in.
+
+        # Filter out empty/null for matching purposes
+        valid_mask = ~is_empty_or_null.to_pylist()  # boolean list
+        valid_mask = np.array(valid_mask, dtype=bool)
+
+        if not valid_mask.any():
+            from pandas import DataFrame
+
+            return DataFrame(index=range(len(self)))
+
+        valid_row_indices = row_indices[valid_mask]
+        valid_flattened = flattened.filter(pc.invert(is_empty_or_null))
+
+        # Find index of each valid element in sorted_uniques
+        # pc.index_in returns the position in the value_set, or -1 if not found
+        cat_indices = pc.index_in(valid_flattened, value_set=sorted_uniques).to_pylist()
+        cat_indices = np.array(cat_indices, dtype=np.int64)
+
+        # Build the dummy matrix
+        # Use scipy.sparse or direct numpy. Since output is DataFrame of int64,
+        # we can use a dense numpy array. But for memory efficiency with many categories,
+        # we should use sparse construction then dense conversion, or just dense if small.
+        # Let's use dense for simplicity first, but optimize for the common case.
+
+        # Actually, let's use a sparse coo_matrix and then toarray() for memory efficiency
+        # with many categories, then convert to DataFrame.
+        from pandas import DataFrame
+
+        if num_cats == 0 or len(cat_indices) == 0:
+            return DataFrame(index=range(num_rows))
+
+        # Build dense 0/1 matrix
+        # Use numpy advanced indexing
+        dummy_matrix = np.zeros((num_rows, num_cats), dtype=np.int64)
+        dummy_matrix[valid_row_indices, cat_indices] = 1
+
+        # Create column names from sorted_uniques
+        columns = sorted_uniques.to_pylist()
+
+        return DataFrame(dummy_matrix, columns=columns, dtype=np.int64)
+[/REPLACE]

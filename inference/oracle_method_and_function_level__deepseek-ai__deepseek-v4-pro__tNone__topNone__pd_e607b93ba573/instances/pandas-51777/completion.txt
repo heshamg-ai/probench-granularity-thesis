@@ -1,0 +1,46 @@
+pandas/core/series.py
+[SEARCH]
+        new_index = self.index.union(other.index)
+        this = self.reindex(new_index, copy=False)
+        other = other.reindex(new_index, copy=False)
+        if this.dtype.kind == "M" and other.dtype.kind != "M":
+            other = to_datetime(other)
+
+        return this.where(notna(this), other)
+[/SEARCH]
+[REPLACE]
+        new_index = self.index.union(other.index)
+        this = self.reindex(new_index, copy=False)
+        other = other.reindex(new_index, copy=False)
+        if this.dtype.kind == "M" and other.dtype.kind != "M":
+            other = to_datetime(other)
+
+        # Fast path: if no nulls in `this`, no filling needed
+        if not this.hasnans:
+            return this
+        # Fast path: if `other` is identical after reindex, return it directly
+        if this is other:
+            return this
+        # Avoid double-reindex when indexes already match
+        if self.index.equals(other.index):
+            this = self.copy()
+            other_vals = other.reindex(this.index, copy=False)
+        else:
+            new_index = self.index.union(other.index)
+            if new_index.equals(self.index):
+                this = self.copy()
+                other_vals = other.reindex(this.index, copy=False)
+            elif new_index.equals(other.index):
+                this = self.reindex(other.index, copy=False)
+                other_vals = other
+            else:
+                this = self.reindex(new_index, copy=False)
+                other_vals = other.reindex(new_index, copy=False)
+            other = other_vals
+
+        if this.dtype.kind == "M" and other.dtype.kind != "M":
+            other = to_datetime(other)
+
+        result = this.where(notna(this), other)
+        return result
+[/REPLACE]

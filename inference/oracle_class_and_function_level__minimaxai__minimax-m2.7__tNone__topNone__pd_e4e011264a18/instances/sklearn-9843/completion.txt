@@ -1,0 +1,57 @@
+
+
+sklearn/metrics/_classification.py
+[SEARCH]
+    label_to_ind = {y: x for x, y in enumerate(labels)}
+    # convert yt, yp into index
+    y_pred = np.array([label_to_ind.get(x, n_labels + 1) for x in y_pred])
+    y_true = np.array([label_to_ind.get(x, n_labels + 1) for x in y_true])
+
+    # intersect y_pred, y_true with labels, eliminate items not in labels
+    ind = np.logical_and(y_pred < n_labels, y_true < n_labels)
+    y_pred = y_pred[ind]
+    y_true = y_true[ind]
+    # also eliminate weights of eliminated items
+    sample_weight = sample_weight[ind]
+[/SEARCH]
+[REPLACE]
+    # Optimized path for consecutive integer labels (common case)
+    if labels.dtype.kind in 'iu':  # integer types
+        sorted_labels = np.sort(labels)
+        # Check if labels are consecutive integers
+        if (sorted_labels.size > 0 and
+            sorted_labels[-1] - sorted_labels[0] == sorted_labels.size - 1):
+            min_label = sorted_labels[0]
+            offset = -min_label
+            # Fast vectorized indexing with offset
+            y_pred_idx = np.asarray(y_pred, dtype=np.intp) + offset
+            y_true_idx = np.asarray(y_true, dtype=np.intp) + offset
+            mask = ((y_pred_idx >= 0) & (y_pred_idx < n_labels) &
+                    (y_true_idx >= 0) & (y_true_idx < n_labels))
+            y_pred = y_pred_idx[mask]
+            y_true = y_true_idx[mask]
+            sample_weight = sample_weight[mask]
+        else:
+            # Fallback for non-consecutive integer labels
+            label_to_ind = {y: x for x, y in enumerate(labels)}
+            y_pred = np.array([label_to_ind.get(x, n_labels) for x in y_pred],
+                              dtype=np.intp)
+            y_true = np.array([label_to_ind.get(x, n_labels) for x in y_true],
+                              dtype=np.intp)
+            mask = (y_pred < n_labels) & (y_true < n_labels)
+            y_pred = y_pred[mask]
+            y_true = y_true[mask]
+            sample_weight = sample_weight[mask]
+    else:
+        # Original approach for non-integer labels
+        label_to_ind = {y: x for x, y in enumerate(labels)}
+        y_pred = np.array([label_to_ind.get(x, n_labels) for x in y_pred])
+        y_true = np.array([label_to_ind.get(x, n_labels) for x in y_true])
+
+        # intersect y_pred, y_true with labels, eliminate items not in labels
+        ind = np.logical_and(y_pred < n_labels, y_true < n_labels)
+        y_pred = y_pred[ind]
+        y_true = y_true[ind]
+        # also eliminate weights of eliminated items
+        sample_weight = sample_weight[ind]
+[/REPLACE]

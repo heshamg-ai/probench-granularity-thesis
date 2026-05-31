@@ -1,0 +1,66 @@
+pandas/_testing/asserters.py
+[SEARCH]
+def assert_series_equal(
+    left,
+    right,
+    check_dtype=True,
+    check_index_type="equiv",
+    check_series_type=True,
+    check_names=True,
+    check_exact=False,
+    check_datetimelike_compat=False,
+    check_categorical=True,
+    check_category_order=True,
+    check_freq=True,
+    check_flags=True,
+    rtol=1.0e-5,
+    atol=1.0e-8,
+    obj="Series",
+    *,
+    check_index=True,
+    check_like=False,
+):
+[/SEARCH]
+[REPLACE]
+def assert_series_equal(
+    left,
+    right,
+    check_dtype=True,
+    check_index_type="equiv",
+    check_series_type=True,
+    check_names=True,
+    check_exact=False,
+    check_datetimelike_compat=False,
+    check_categorical=True,
+    check_category_order=True,
+    check_freq=True,
+    check_flags=True,
+    rtol=1.0e-5,
+    atol=1.0e-8,
+    obj="Series",
+    *,
+    check_index=True,
+    check_like=False,
+):
+    from pandas import Index, MultiIndex
+[/REPLACE]
+
+pandas/_testing/asserters.py
+[SEARCH]
+    # check that we are a Series
+    _check_isinstance(left, right, Series)
+[/SEARCH]
+[REPLACE]
+    # check that we are a Series
+    _check_isinstance(left, right, Series)
+
+    # Fast path: if both indices are identical MultiIndex objects (same id),
+    # we can skip expensive index equality checks.
+    if (
+        check_index
+        and isinstance(left.index, MultiIndex)
+        and isinstance(right.index, MultiIndex)
+        and left.index is right.index
+    ):
+        check_index = False
+[/REPLACE]

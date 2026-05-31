@@ -1,0 +1,50 @@
+
+
+pandas/core/indexes/api.py
+[SEARCH]
+    def _unique_indices(inds, dtype) -> Index:
+        """
+        Concatenate indices and remove duplicates.
+
+        Parameters
+        ----------
+        inds : list of Index or list objects
+        dtype : dtype to set for the resulting Index
+
+        Returns
+        -------
+        Index
+        """
+        if all(isinstance(ind, Index) for ind in inds):
+            result = inds[0].append(inds[1:]).unique()
+            result = result.astype(dtype, copy=False)
+            if sort:
+                result = result.sort_values()
+            return result
+[/SEARCH]
+[REPLACE]
+    def _unique_indices(inds, dtype) -> Index:
+        """
+        Concatenate indices and remove duplicates.
+
+        Parameters
+        ----------
+        inds : list of Index or list objects
+        dtype : dtype to set for the resulting Index
+
+        Returns
+        -------
+        Index
+        """
+        if all(isinstance(ind, Index) for ind in inds):
+            # Use fast_unique_multiple_list on numpy arrays for better performance
+            # instead of append().unique() which creates intermediate Index objects
+            result = Index(
+                lib.fast_unique_multiple_list(
+                    [ind.to_numpy() for ind in inds],
+                    sort=sort,
+                ),
+                dtype=dtype,
+            )
+            return result
+[/REPLACE]

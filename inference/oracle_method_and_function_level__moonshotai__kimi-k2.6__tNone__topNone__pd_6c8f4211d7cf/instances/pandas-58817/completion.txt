@@ -1,0 +1,207 @@
+ pandas/core/frame.py
+[SEARCH]
+    def unstack(
+        self,
+        level: Level = -1,
+        fill_value: Hashable | None = None,
+        future_stack: bool = False,
+    ) -> DataFrame | Series:
+        """
+        Pivot a level of the (necessarily hierarchical) index labels.
+
+        Returns a DataFrame having a new level of column labels whose inner-most level
+        consists of the pivoted index labels.
+
+        If the index is not a MultiIndex, the output will be a Series
+        (the analogue of stack when the columns are not a MultiIndex).
+
+        The level involved will automatically get sorted.
+
+        Parameters
+        ----------
+        level : int, str, or list of these, default -1 (last level)
+            Level(s) of index to unstack, can pass level name.
+        fill_value : int, str or dict
+            Replace NaN with this value if the unstack produces missing values.
+
+            .. versionadded:: 2.1.2
+
+        future_stack : bool, default False
+            Use the new implementation of stack that will replace the current
+            implementation in pandas 3.0.
+
+            .. versionadded:: 2.1.2
+
+        See Also
+        --------
+        DataFrame.pivot : Pivot a table based on column values.
+        DataFrame.stack : Pivot a level of the column labels (inverse operation
+            from unstack).
+
+        Notes
+        -----
+        Reference :ref:`the user guide <reshaping.stacking>` for more examples.
+
+        Examples
+        --------
+        >>> index = pd.MultiIndex.from_tuples([('one', 'a'), ('one', 'b'),
+        ...                                    ('two', 'a'), ('two', 'b')])
+        >>> df = pd.DataFrame({'A': [1, 2, 3, 4], 'B': [5, 6, 7, 8]},
+        ...                   index=index)
+        >>> df
+               A  B
+        one a  1  5
+            b  2  6
+        two a  3  7
+            b  4  8
+
+        >>> df.unstack(level=-1)
+             A     B
+             a  b  a  b
+        one  1  2  5  6
+        two  3  4  7  8
+
+        >>> df.unstack(level=0)
+           one  two
+        A  1    3
+        B  5    7
+           a    a
+        b  2    4
+        8  6    8
+
+        >>> df = pd.DataFrame({'A': [1, 2, 3, 4], 'B': [5, 6, 7, 8]},
+        ...                   index=['a', 'b', 'c', 'd'])
+        >>> df
+           A  B
+        a  1  5
+        b  2  6
+        c  3  7
+        d  4  8
+
+        >>> df.unstack()
+        a  A    1
+           B    5
+        b  A    2
+           B    6
+        c  A    3
+           B    7
+        d  A    4
+           B    8
+        dtype: int64
+        """
+        from pandas.core.reshape.reshape import unstack
+
+        result = unstack(self, level, fill_value)
+
+        if future_stack:
+            result = self._reindex_for_unstack(result)
+
+        return result
+[/SEARCH]
+[REPLACE]
+    def unstack(
+        self,
+        level: Level = -1,
+        fill_value: Hashable | None = None,
+        future_stack: bool = False,
+    ) -> DataFrame | Series:
+        """
+        Pivot a level of the (necessarily hierarchical) index labels.
+
+        Returns a DataFrame having a new level of column labels whose inner-most level
+        consists of the pivoted index labels.
+
+        If the index is not a MultiIndex, the output will be a Series
+        (the analogue of stack when the columns are not a MultiIndex).
+
+        The level involved will automatically get sorted.
+
+        Parameters
+        ----------
+        level : int, str, or list of these, default -1 (last level)
+            Level(s) of index to unstack, can pass level name.
+        fill_value : int, str or dict
+            Replace NaN with this value if the unstack produces missing values.
+
+            .. versionadded:: 2.1.2
+
+        future_stack : bool, default False
+            Use the new implementation of stack that will replace the current
+            implementation in pandas 3.0.
+
+            .. versionadded:: 2.1.2
+
+        See Also
+        --------
+        DataFrame.pivot : Pivot a table based on column values.
+        DataFrame.stack : Pivot a level of the column labels (inverse operation
+            from unstack).
+
+        Notes
+        -----
+        Reference :ref:`the user guide <reshaping.stacking>` for more examples.
+
+        Examples
+        --------
+        >>> index = pd.MultiIndex.from_tuples([('one', 'a'), ('one', 'b'),
+        ...                                    ('two', 'a'), ('two', 'b')])
+        >>> df = pd.DataFrame({'A': [1, 2, 3, 4], 'B': [5, 6, 7, 8]},
+        ...                   index=index)
+        >>> df
+               A  B
+        one a  1  5
+            b  2  6
+        two a  3  7
+            b  4  8
+
+        >>> df.unstack(level=-1)
+             A     B
+             a  b  a  b
+        one  1  2  5  6
+        two  3  4  7  8
+
+        >>> df.unstack(level=0)
+           one  two
+        A  1    3
+        B  5    7
+           a    a
+        b  2    4
+        8  6    8
+
+        >>> df = pd.DataFrame({'A': [1, 2, 3, 4], 'B': [5, 6, 7, 8]},
+        ...                   index=['a', 'b', 'c', 'd'])
+        >>> df
+           A  B
+        a  1  5
+        b  2  6
+        c  3  7
+        d  4  8
+
+        >>> df.unstack()
+        a  A    1
+           B    5
+        b  A    2
+           B    6
+        c  A    3
+           B    7
+        d  A    4
+           B    8
+        dtype: int64
+        """
+        if future_stack and not isinstance(self.index, MultiIndex):
+            from pandas.core.reshape.reshape import stack_v3
+
+            if not isinstance(level, list):
+                level = [level]
+            level = [self.index._get_level_number(lev) for lev in level]
+            return stack_v3(self.T, level)
+
+        from pandas.core.reshape.reshape import unstack
+
+        result = unstack(self, level, fill_value)
+
+        if future_stack:
+            result = self._reindex_for_unstack(result)
+
+        return result
+[/REPLACE]

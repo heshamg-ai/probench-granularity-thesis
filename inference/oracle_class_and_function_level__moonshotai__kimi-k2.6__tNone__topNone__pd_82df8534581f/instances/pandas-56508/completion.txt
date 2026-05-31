@@ -1,0 +1,158 @@
+pandas/core/util/hashing.py
+[SEARCH]
+    # For known hash functions, we will avoid class_name_info hashing
+    #  a large range of known types, and expand through explicitly
+    #  with python tuples. Currently only IntervalDtype is like this.
+
+    if isna(val).any():
+        return _hash(), np.zeros(mask_len, dtype=np.uint64)
+    else:
+        return _hash(), None
+[/SEARCH]
+[REPLACE]
+    # For known hash functions, we will avoid class_name_info hashing
+    #  a large range of known types, and expand through explicitly
+    #  with python tuples. Currently only IntervalDtype is like this.
+
+    if type(val).__name__ == "ExtensionArray":
+        # Avoid calling isna() on EA; fastpath for common case of no NAs
+        # we'll check for NAs inside _hash_extension_array or the hash itself
+        # For masked-backed arrays, accessing isna() is cheap, but for
+        # other EAs it can be expensive (e.g. pyarrow). Use _hasna if available.
+        hasna = getattr(val, "_hasna", None)
+        if hasna is None:
+            _hasna = val.isna()
+            try:
+                hasna = _hasna.any()
+            except AttributeError:
+                hasna = bool(_hasna)
+        else:
+            hasna = hasna
+        if hasna:
+            return _hash(), np.zeros(mask_len, dtype=np.uint64)
+        else:
+            return _hash(), None
+    elif isna(val).any():
+        return _hash(), np.zeros(mask_len, dtype=np.uint64)
+    else:
+        return _hash(), None
+[/REPLACE]
+
+pandas/core/util/hashing.py
+[SEARCH]
+    # For known hash functions, we will avoid class_name_info hashing
+    #  a large range of known types, and expand through explicitly
+    #  with python tuples. Currently only IntervalDtype is like this.
+
+    if isna(val).any():
+        return _hash(), np.zeros(mask_len, dtype=np.uint64)
+    else:
+        return _hash(), None
+[/SEARCH]
+[REPLACE]
+    # For known hash functions, we will avoid class_name_info hashing
+    #  a large range of known types, and expand through explicitly
+    #  with python tuples. Currently only IntervalDtype is like this.
+
+    if isinstance(val, ABCExtensionArray):
+        # fastpath: avoid isna() call for EAs that have no NA
+        # this is particularly important for pyarrow-backed EAs where isna() is expensive
+        try:
+            hasna = val._hasna  # BaseMaskedArray, ArrowExtensionArray, etc.
+        except AttributeError:
+            hasna = None
+        if hasna is None:
+            _hasna = val.isna()
+            try:
+                hasna = _hasna.any()
+            except AttributeError:
+                hasna = bool(_hasna)
+        if hasna:
+            return _hash(), np.zeros(mask_len, dtype=np.uint64)
+        else:
+            return _hash(), None
+    elif isna(val).any():
+        return _hash(), np.zeros(mask_len, dtype=np.uint64)
+    else:
+        return _hash(), None
+[/REPLACE]
+
+pandas/core/util/hashing.py
+[SEARCH]
+    # For known hash functions, we will avoid class_name_info hashing
+    #  a large range of known types, and expand through explicitly
+    #  with python tuples. Currently only IntervalDtype is like this.
+
+    if isna(val).any():
+        return _hash(), np.zeros(mask_len, dtype=np.uint64)
+    else:
+        return _hash(), None
+[/SEARCH]
+[REPLACE]
+    # For known hash functions, we will avoid class_name_info hashing
+    #  a large range of known types, and expand through explicitly
+    #  with python tuples. Currently only IntervalDtype is like this.
+
+    if isinstance(val, ABCExtensionArray):
+        # fastpath: avoid isna() call for EAs that have no NA
+        # this is particularly important for pyarrow-backed EAs where isna() is expensive
+        try:
+            hasna = val._hasna  # BaseMaskedArray, ArrowExtensionArray, etc.
+        except AttributeError:
+            hasna = None
+        if hasna is None:
+            _hasna = val.isna()
+            try:
+                hasna = _hasna.any()
+            except AttributeError:
+                hasna = bool(_hasna)
+        if hasna:
+            return _hash(), np.zeros(mask_len, dtype=np.uint64)
+        else:
+            return _hash(), None
+    elif hasattr(val, "isna"):
+        # numpy arrays etc
+        if isna(val).any():
+            return _hash(), np.zeros(mask_len, dtype=np.uint64)
+        else:
+            return _hash(), None
+    else:
+        return _hash(), None
+[/REPLACE]
+
+pandas/core/util/hashing.py
+[SEARCH]
+    # For known hash functions, we will avoid class_name_info hashing
+    #  a large range of known types, and expand through explicitly
+    #  with python tuples. Currently only IntervalDtype is like this.
+
+    if isna(val).any():
+        return _hash(), np.zeros(mask_len, dtype=np.uint64)
+    else:
+        return _hash(), None
+[/SEARCH]
+[REPLACE]
+    # For known hash functions, we will avoid class_name_info hashing
+    #  a large range of known types, and expand through explicitly
+    #  with python tuples. Currently only IntervalDtype is like this.
+
+    if isinstance(val, ABCExtensionArray):
+        # Fastpath for extension arrays: use _hasna property if available
+        # to avoid expensive isna() calls (e.g. for pyarrow-backed types)
+        try:
+            hasna = val._hasna
+        except AttributeError:
+            _hasna = val.isna()
+            try:
+                hasna = _hasna.any()
+            except AttributeError:
+                hasna = bool(_hasna)
+        if hasna:
+            return _hash(), np.zeros(mask_len, dtype=np.uint64)
+        else:
+            return _hash(), None
+    elif isna(val).any():
+        return _hash(), np.zeros(mask_len, dtype=np.uint64)
+    else:
+        return _hash(), None
+[/REPLACE]

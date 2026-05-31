@@ -1,0 +1,2077 @@
+I'll analyze the code and optimize `LinearRegression.fit` for sparse X or sparse y data. Let me identify the key performance issues:
+
+1. In `_rescale_data`, when `y` is sparse, `safe_sparse_dot(sw_matrix, y)` will densify `y` because `sw_matrix` is a dense diagonal matrix in sparse format, but more importantly, it creates a full `dia_matrix` and then converts the result. For sparse `y`, we should preserve sparsity by scaling only the non-zero elements.
+
+2. In `_preprocess_data`, when `y` is sparse, `np.asarray(y, dtype=X.dtype)` will densify `y`, which is very memory inefficient. We need to handle sparse `y` properly.
+
+3. The call to `lsqr(X_centered, y)` when `y` is 1D sparse - `lsqr` from scipy requires dense `y`.
+
+Let me trace through the issues more carefully:
+
+1. `_preprocess_data`: `y = np.asarray(y, dtype=X.dtype)` - this densifies sparse `y`. We need to handle sparse `y` by keeping it sparse and only computing the offset differently.
+
+2. `_rescale_data`: `y = safe_sparse_dot(sw_matrix, y)` - if `y` is sparse, we want to preserve sparsity. `safe_sparse_dot` with sparse * sparse should work, but we need to ensure `y` stays sparse.
+
+3. The main `fit` method: when `y` is sparse and 1D, `lsqr(X_centered, y)` needs dense `y`, but we can use `y.toarray().ravel()` or similar.
+
+Let me look more carefully. Actually, looking at the scipy documentation, `lsqr` requires `y` to be array-like, so sparse matrices need to be converted. But the key issue is memory: if we densify too early, we lose the memory benefits of sparsity.
+
+However, `lsqr` itself needs dense `y` for the iterative algorithm. The real optimization is avoiding unnecessary densification before that point and handling the case where `y` has multiple columns more efficiently.
+
+Wait - actually the main issue is in `_preprocess_data` and `_rescale_data`. If `y` is sparse, we should:
+1. In `_preprocess_data`: Handle `y` as sparse when computing offset and centering
+2. In `_rescale_data`: Apply scaling to sparse `y` efficiently
+
+And another issue: in `fit`, when `y.ndim < 2` with sparse `y`, `y` might be a sparse matrix with shape `(n_samples, 1)` or similar. We need to handle this.
+
+Let me re-read the code more carefully. The `y` in `fit` can be:
+- 1D array (n_samples,)
+- 2D array (n_samples, n_targets)
+- Sparse matrix (n_samples, 1) or (n_samples, n_targets)
+
+For sparse `y`, `y.ndim` is 2 always (scipy sparse matrices are always 2D).
+
+Let me think about what optimizations are possible:
+
+1. **In `_rescale_data`**: When `y` is sparse, `safe_sparse_dot(sw_matrix, y)` can be optimized. Currently `sw_matrix` is a `dia_matrix`. If `y` is sparse, we can simply scale the rows of `y` by `sample_weight_sqrt` directly. This avoids creating the large `dia_matrix` and the matrix multiplication overhead.
+
+2. **In `_preprocess_data`**: When `y` is sparse, `np.asarray(y, dtype=X.dtype)` densifies it. We should keep `y` sparse. For centering with `fit_intercept=True`, we need the mean of `y`. For a sparse `y`, this can be computed efficiently.
+
+However, the problem says to optimize `LinearRegression.fit`. Let me check if I can modify helper functions too - yes, the constraints say "optimize `LinearRegression.fit` for sparse X or sparse y data", so I need to look at the full call chain.
+
+Actually, let me re-read: "Optimize LinearRegression.fit for sparse X or sparse y data". The helper functions `_preprocess_data` and `_rescale_data` are called by `fit`, so optimizing them is part of optimizing `fit`.
+
+Let me think about what specific changes make sense:
+
+1. **_rescale_data optimization**: Instead of creating a full `dia_matrix`, when `X` or `y` is sparse, we can use more efficient sparse operations. Specifically for `y` sparse, we can just scale `y.data` directly if `y` is in CSR/CSC format and the scaling is simple row scaling. Actually, the simplest approach: multiply by a diagonal matrix efficiently.
+
+For sparse matrix `y`, multiplying by diagonal matrix from left: `sp.diags(sample_weight_sqrt) @ y` can be done by scaling rows. But `safe_sparse_dot(sw_matrix, y)` should handle this.
+
+Wait, let me re-check. The issue might be that sample_weight_sqrt is dense, and for sparse y, the operation could be done more directly.
+
+Actually, a better optimization: in `_rescale_data`, instead of creating `sw_matrix` as a `dia_matrix`, we can use broadcasting or simpler operations.
+
+For `X` sparse: `X = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples)) @ X` - this is the same but done via `safe_sparse_dot`.
+
+A key observation: when `sample_weight` is uniform (all 1s or same value), we don't need to do anything. Let me check if that's already handled... no.
+
+But wait, `_check_sample_weight` by default returns `np.ones(...)`, so sample_weight is typically all ones. But the current code still creates the full diagonal matrix and does the multiplication. That's wasteful.
+
+Let me think about sparse `y` more. In the test cases and typical usage, `y` being sparse is unusual but supported. The issue is mainly memory.
+
+Here's my plan:
+
+1. **Optimize `_rescale_data`**: 
+   - Avoid creating `dia_matrix` when possible
+   - For sparse `X` or `y`, use more memory-efficient scaling
+
+2. **Optimize `_preprocess_data`**:
+   - Handle sparse `y` without densifying
+
+3. **Optimize `fit`**:
+   - Handle sparse `y` properly in the `lsqr` path
+
+Let me think more carefully about the sparse `y` case. In `_preprocess_data`:
+
+```python
+y = np.asarray(y, dtype=X.dtype)
+```
+
+This converts sparse `y` to dense. We should instead:
+```python
+if sp.issparse(y):
+    y = y.astype(X.dtype, copy=False)
+else:
+    y = np.asarray(y, dtype=X.dtype)
+```
+
+Then later for `fit_intercept=True`:
+```python
+y_offset = np.average(y, axis=0, weights=sample_weight)
+```
+This needs to work with sparse `y`. For a sparse `y` with shape `(n_samples, 1)` or `(n_samples, n_targets)`:
+- `np.average` won't work on sparse directly
+- We can use `np.asarray(y.mean(axis=0))` for sparse matrices, or compute directly
+
+Actually, `y.mean(axis=0)` for sparse `y` returns the mean. But with `sample_weight`, it's weighted average. For sparse `y` with uniform sample_weight, `y.mean(axis=0)` works. With non-uniform `sample_weight`, we need to compute the weighted sum and divide by sum of weights.
+
+For `y` sparse with `sample_weight`:
+```python
+if sp.issparse(y):
+    y_sum = np.asarray(y.multiply(sample_weight[:, np.newaxis]).sum(axis=0)).ravel()
+    y_offset = y_sum / sample_weight.sum()
+else:
+    y_offset = np.average(y, axis=0, weights=sample_weight)
+```
+
+Then `y = y - y_offset` - for sparse `y`, subtracting a scalar/vector from each element makes it denser (or we can keep it as sparse but with more non-zeros). Actually, centering a sparse matrix makes it dense in general, so we might need to densify at this point or accept that.
+
+Wait, but if we densify `y` in `_preprocess_data`, then the rest of the code works but loses memory efficiency. The key insight is: for `LinearRegression`, if `y` is sparse, do we actually need to keep it sparse?
+
+Looking at `lsqr` - it requires dense `y`. So `y` must be dense before calling `lsqr`. The only benefit of keeping `y` sparse longer is if there are multiple outputs and we process them one by one, or if we can avoid materializing the full dense `y` at once.
+
+Actually, for `y` with shape `(n_samples, n_targets)` where `n_targets > 1`, if `y` is sparse, keeping it sparse and processing column by column could save memory in some steps.
+
+But let me re-read the scipy `lsqr` documentation: it requires `y` to be 1D. So for multi-output, we're already processing column by column in the parallel loop.
+
+OK, I think the main optimization is:
+
+1. In `_rescale_data`: avoid creating the full `dia_matrix` by using simpler operations, especially when `sample_weight` is all ones.
+
+2. In `_preprocess_data`: handle sparse `y` more efficiently, particularly for computing the mean without full densification.
+
+3. In `fit`: handle the case where sparse `y` needs to be passed to `lsqr`.
+
+Actually, let me look at this from a different angle. What are the actual performance bottlenecks?
+
+For **sparse X, dense y**: The current code uses `lsqr` with a `LinearOperator` for `X_centered`. This is already fairly efficient. The main overhead might be in the `_preprocess_data` and `_rescale_data` steps.
+
+For **sparse X, sparse y**: The `y` is densified early in `_preprocess_data`. This is the main memory/performance issue.
+
+For **sparse X, multiple dense y columns**: The parallel loop dispatches each column to `lsqr`. This has overhead from the `Parallel` wrapper and process/thread management.
+
+Let me focus on concrete optimizations:
+
+### Optimization 1: `_rescale_data` - avoid `dia_matrix` creation
+
+Instead of:
+```python
+sw_matrix = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples))
+X = safe_sparse_dot(sw_matrix, X)
+```
+
+We can use:
+```python
+if sp.issparse(X):
+    X = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples)).dot(X)
+```
+
+Actually, `safe_sparse_dot` already handles this. But the issue is we're creating a full `dia_matrix` even when sample_weight is all ones.
+
+A simple optimization:
+```python
+if np.allclose(sample_weight, sample_weight[0]):
+    # Uniform weights, no rescaling needed
+    return X, y, sample_weight_sqrt
+```
+
+But this adds overhead. A better check:
+```python
+if sample_weight.ndim == 0 or np.all(sample_weight == 1.0):
+    return X, y, sample_weight_sqrt
+```
+
+Wait, but we're already past that. Let me check where `sample_weight` comes from. It's already passed in.
+
+Actually, a cleaner optimization: use `np.multiply.outer` or direct scaling instead of matrix multiplication.
+
+For `X` dense: we can do `X *= sample_weight_sqrt[:, np.newaxis]`
+For `X` sparse: we can scale rows directly
+For `y` dense: `y *= sample_weight_sqrt[:, np.newaxis]` or `y *= sample_weight_sqrt` if 1D
+For `y` sparse: scale the data directly
+
+Let me write an optimized `_rescale_data`:
+
+```python
+def _rescale_data(X, y, sample_weight):
+    n_samples = X.shape[0]
+    sample_weight = np.asarray(sample_weight)
+    if sample_weight.ndim == 0:
+        sample_weight = np.full(n_samples, sample_weight, dtype=sample_weight.dtype)
+    sample_weight_sqrt = np.sqrt(sample_weight)
+    
+    # Fast path: no rescaling needed
+    if np.all(sample_weight_sqrt == 1.0):
+        return X, y, sample_weight_sqrt
+    
+    if sp.issparse(X):
+        # Scale rows of sparse X
+        X = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples)) @ X
+    else:
+        X = X * sample_weight_sqrt[:, np.newaxis]
+    
+    if sp.issparse(y):
+        y = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples)) @ y
+    else:
+        y = y * sample_weight_sqrt[:, np.newaxis] if y.ndim > 1 else y * sample_weight_sqrt
+    
+    return X, y, sample_weight_sqrt
+```
+
+Hmm, but `y` might be 1D or 2D. And if `y` is sparse, it's always 2D.
+
+Let me be more careful. Actually, looking at the original code:
+```python
+y = safe_sparse_dot(sw_matrix, y)
+```
+
+If `y` is 1D dense, `safe_sparse_dot` will do the right thing. If `y` is 2D dense, same. If `y` is sparse, it should also work but might create a dense output or handle it as sparse-sparse.
+
+OK, I think the simplest effective optimization is to avoid creating the `dia_matrix` when we can just use direct multiplication. This saves memory (no `n_samples x n_samples` matrix, even sparse) and is faster.
+
+Actually wait - `dia_matrix` only stores the diagonal, so it's O(n_samples) memory, not O(n_samples^2). So the memory saving is not huge. But avoiding the matrix multiplication overhead and the `safe_sparse_dot` dispatch could still help.
+
+Hmm, let me think again. A `dia_matrix` with one diagonal is very compact. The issue might be more about the multiplication algorithm.
+
+For sparse `X` (CSR/CSC), left-multiplying by `dia_matrix` can be done by just scaling rows. But the generic sparse matrix multiplication might not be optimal.
+
+For dense `X`, `sw_matrix @ X` where `sw_matrix` is `dia_matrix` - this goes through sparse-dense multiplication which might not be optimal compared to broadcasting.
+
+OK so here are my concrete proposed changes:
+
+1. **`_rescale_data`**: Use direct row scaling instead of matrix multiplication for both dense and sparse arrays. Add fast path for uniform weights.
+
+2. **`_preprocess_data`**: Handle sparse `y` properly - don't densify immediately, compute weighted mean for sparse matrices.
+
+3. **`fit`**: Ensure sparse `y` works through the full pipeline.
+
+Let me also check: is `y` every actually SparseEfficiencyWarning or similar issues?
+
+Actually, wait. Let me re-examine the `fit` code. After `_preprocess_data` and `_rescale_data`, for the sparse `X` path:
+
+```python
+if y.ndim < 2:
+    self.coef_ = lsqr(X_centered, y)[0]
+else:
+    # sparse_lstsq cannot handle y with shape (M, K)
+    outs = Parallel(n_jobs=n_jobs_)(
+        delayed(lsqr)(X_centered, y[:, j].ravel())
+        for j in range(y.shape[1])
+    )
+    self.coef_ = np.vstack([out[0] for out in outs])
+```
+
+If `y` is sparse and 2D (e.g., shape `(n_samples, 1)`), then `y.ndim` is 2 (since sparse matrices are always 2D). But `y[:, j].ravel()` for a sparse matrix - this creates a dense array. And `lsqr` needs dense input anyway.
+
+But wait, if `y` was originally 1D but sparse, it would be shape `(n_samples, 1)` or similar, so `y.ndim` is 2. The check `y.ndim < 2` would be False, but we should treat it as 1D for `LinearRegression` API compatibility.
+
+Hmm, this gets complicated. Let me check: can `y` actually be passed as a sparse matrix? The `_validate_data` with `y_numeric=True, multi_output=True` - I need to check if this accepts sparse `y`.
+
+Actually, looking at sklearn's `_validate_data` or `check_X_y`, `y` is typically expected to be dense. But there might be cases where sparse `y` is passed.
+
+Let me focus on what's definitely happening in the code and what can be optimized.
+
+For **sparse X optimization**, the key issue might be in how `X_centered` is constructed and used. The `LinearOperator` approach is correct but might have overhead.
+
+For **sparse y**, even if it's not commonly passed, we can make the code more robust.
+
+Actually, let me re-read the optimization request: "Optimize LinearRegression.fit for sparse X or sparse y data". This suggests I need to handle both cases.
+
+Let me think about what the main inefficiency is for **sparse X, any y**:
+
+In `_preprocess_data`, when `X` is sparse and `fit_intercept=True`:
+```python
+X_offset, X_var = mean_variance_axis(X, axis=0, weights=sample_weight)
+```
+
+This computes mean and variance. Then later in `fit`:
+```python
+X, y, X_offset, y_offset, X_scale = _preprocess_data(...)
+X, y, sample_weight_sqrt = _rescale_data(X, y, sample_weight)
+```
+
+Then for sparse `X`:
+```python
+X_offset_scale = X_offset / X_scale
+
+def matvec(b):
+    return X.dot(b) - sample_weight_sqrt * b.dot(X_offset_scale)
+
+def rmatvec(b):
+    return X.T.dot(b) - X_offset_scale * b.dot(sample_weight_sqrt)
+
+X_centered = sparse.linalg.LinearOperator(...)
+```
+
+The `matvec` and `rmatvec` functions are called multiple times by `lsqr`. Each `matvec` does `X.dot(b)` (sparse-dense matrix-vector) which is efficient, but also does `sample_weight_sqrt * b.dot(X_offset_scale)` which involves a dot product and then element-wise multiplication.
+
+Wait, there's an issue! `sample_weight_sqrt * b.dot(X_offset_scale)` - here `b.dot(X_offset_scale)` is a scalar (if `b` is 1D and `X_offset_scale` is 1D), and then `sample_weight_sqrt * scalar` multiplies a vector by a scalar. But in the code it says:
+
+```python
+return X.dot(b) - sample_weight_sqrt * b.dot(X_offset_scale)
+```
+
+This returns a vector minus `sample_weight_sqrt * scalar`, which broadcasts to subtract a scaled vector from each... wait no, `sample_weight_sqrt` is a vector, and `b.dot(X_offset_scale)` is a scalar. So `sample_weight_sqrt * scalar` is a scaled vector. Then `X.dot(b) - scaled_vector`.
+
+But `sample_weight_sqrt` was only set if `sample_weight` was not None. If `sample_weight` was None, then in `_rescale_data`:
+```python
+sample_weight_sqrt = np.sqrt(sample_weight)
+```
+
+Actually, `_rescale_data` is always called, and `sample_weight` at that point is always an array (since `_check_sample_weight` returns an array). So `sample_weight_sqrt` is always defined.
+
+Hmm but in the `LinearRegression.fit`, `sample_weight` is passed to `_preprocess_data` and then to `_rescale_data`. After `_rescale_data`, for sparse `X`, `sample_weight_sqrt` is used in `matvec`.
+
+Wait, let me trace this more carefully. In `fit`:
+
+```python
+X, y, X_offset, y_offset, X_scale = _preprocess_data(
+    X, y, ...
+    sample_weight=sample_weight,
+)
+
+X, y, sample_weight_sqrt = _rescale_data(X, y, sample_weight)
+```
+
+And `_rescale_data` does:
+```python
+sample_weight_sqrt = np.sqrt(sample_weight)
+...
+return X, y, sample_weight_sqrt
+```
+
+So `sample_weight_sqrt` is returned and used.
+
+Now, looking at `matvec` again:
+```python
+def matvec(b):
+    return X.dot(b) - sample_weight_sqrt * b.dot(X_offset_scale)
+```
+
+Wait, `b.dot(X_offset_scale)` - if `b` has length `n_features` and `X_offset_scale` has length `n_features`, then `b.dot(X_offset_scale)` is a scalar. Then `sample_weight_sqrt * scalar` is element-wise multiplication of two vectors? No, it's scaling vector `sample_weight_sqrt` by a scalar.
+
+But then the subtraction: `X.dot(b)` has shape `(n_samples,)` and `sample_weight_sqrt * scalar` also has shape `(n_samples,)`. So it subtracts a vector from a vector. OK that makes sense.
+
+Wait, I need to re-read. The centering is: `X_centered = X - 1 * X_offset_scale^T` (where 1 is a vector of ones), and then `X_rescaled = sqrt(S) * X_centered`.
+
+So `matvec(b) = X_centered * b = sqrt(S) * (X - 1 * X_offset_scale^T) * b = sqrt(S) * X * b - sqrt(S) * 1 * X_offset_scale^T * b`.
+
+Since `sqrt(S) * 1 = sample_weight_sqrt` and `X_offset_scale = X_offset / X_scale`, we have:
+`matvec(b) = sample_weight_sqrt * X.dot(b) - sample_weight_sqrt * (X_offset_scale.T.dot(b))`... wait that's not right either.
+
+Actually, looking more carefully at the original `LinearRegression` and the centering in `_preprocess_data`:
+
+The `X` returned by `_preprocess_data` is already scaled (if normalize=True) but NOT centered if sparse. Wait:
+
+```python
+if fit_intercept:
+    if sp.issparse(X):
+        X_offset, X_var = mean_variance_axis(X, axis=0, weights=sample_weight)
+```
+
+For sparse `X`, after this, `X` is NOT modified in the centering step. The centering happens later via `LinearOperator`.
+
+Then in `_rescale_data`, `X` is multiplied by `sample_weight_sqrt`: `X = sqrt(S) * X`.
+
+So the actual centered and scaled X that we want to solve with is:
+`X_centered_actual = sqrt(S) * (X_raw - 1 * X_offset^T) * diag(1/X_scale)`
+
+And `y_centered = sqrt(S) * (y_raw - y_offset)`
+
+For `matvec(b)`, we're applying `X_centered_actual` to `b`:
+`X_centered_actual * b = sqrt(S) * X_raw * diag(1/X_scale) * b - sqrt(S) * 1 * X_offset^T * diag(1/X_scale) * b`
+
+Let `b' = diag(1/X_scale) * b` i.e. `b' = b / X_scale`.
+
+Then `matvec(b) = sqrt(S) * (X_raw * b') - sqrt(S) * 1 * (X_offset^T * b')`
+
+Hmm but in the code, after preprocess, `X` is `X_raw` (not centered for sparse), and then `X` becomes `sqrt(S) * X_raw` after rescale.
+
+Wait, I need to re-trace. After `_preprocess_data` for sparse `X`:
+- `X` is still the original sparse `X` (not centered, might be normalized)
+- `X_offset` is the mean
+- `X_scale` is the norm (or ones)
+
+After `_rescale_data`:
+- `X` becomes `sqrt(S) * X` (element-wise row scaling only if we implemented it, but actually...)
+
+Wait! Looking at `_rescale_data`:
+```python
+sw_matrix = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples))
+X = safe_sparse_dot(sw_matrix, X)
+```
+
+If `X` is sparse CSR, `safe_sparse_dot` with sparse*sparse gives sparse CSR. But the row scaling: left-multiplying by diagonal matrix scales rows. However, for sparse matrices, this might change the sparsity structure.
+
+Actually, the issue is simpler. The current code creates `sw_matrix` as `dia_matrix`, which is efficient for storage, but then `safe_sparse_dot` might convert it to a different format for multiplication.
+
+Let me check: for `dia_matrix @ csr_matrix`, scipy might do this efficiently or might convert.
+
+OK, I think the actual optimizations I should make are:
+
+1. **`_rescale_data`**: Replace `dia_matrix` approach with direct element-wise operations
+   - For dense: use broadcasting `X * sample_weight_sqrt[:, np.newaxis]`
+   - For sparse: scale rows directly using `_scale_rows` or similar efficient method
+
+2. **`_preprocess_data`**: Handle sparse `y`
+
+3. **`fit`**: For multi-output, use a more direct approach to avoid `Parallel` overhead for single-threaded case, or for small problems
+
+Actually, looking at the `Parallel` usage in `fit`:
+```python
+outs = Parallel(n_jobs=n_jobs_)(
+    delayed(lsqr)(X_centered, y[:, j].ravel())
+    for j in range(y.shape[1])
+)
+```
+
+With `n_jobs=None` (default), `Parallel` uses 1 job. For small `y.shape[1]`, the overhead of `Parallel` is significant. We can avoid this by checking `n_jobs_` and falling back to sequential execution.
+
+But wait, `sklearn` typically uses `joblib.Parallel` which has overheads. However, changing this behavior might affect tests or expected behavior.
+
+Let me look for simpler, safer optimizations.
+
+### Key realization about the `matvec`/`rmatvec`:
+
+Looking at the code again:
+```python
+def matvec(b):
+    return X.dot(b) - sample_weight_sqrt * b.dot(X_offset_scale)
+```
+
+Wait, `b.dot(X_offset_scale)` - here `X_offset_scale` is `X_offset / X_scale` which has length `n_features`. And `b` should also have length `n_features` (since `X_centered` has shape `(n_samples, n_features)`). So `b.dot(X_offset_scale)` is indeed a scalar.
+
+Then `sample_weight_sqrt * b.dot(X_offset_scale)` is a vector `sample_weight_sqrt` scaled by a scalar.
+
+So `matvec` returns: `X.dot(b) - sample_weight_sqrt * np.dot(b, X_offset_scale)`
+
+This is: `X.dot(b) - sample_weight_sqrt * (b @ X_offset_scale)`
+
+But `X` after rescaling is `sqrt(S) * X_original`, where `S = diag(sample_weight)`.
+
+Actually, let me verify. After `_preprocess_data` with sparse `X`, `X` is unchanged (not centered). After `_rescale_data`, `X = sqrt(S) * X`.
+
+So `X.dot(b) = sqrt(S) * X_original.dot(b)`.
+
+And `sample_weight_sqrt * (b @ X_offset_scale) = sqrt(S) * 1 * (b @ X_offset_scale)`.
+
+So `matvec(b) = sqrt(S) * X_original.dot(b) - sqrt(S) * 1 * (b @ X_offset_scale)`.
+
+This should equal `sqrt(S) * (X_original - 1 * X_offset^T * diag(1/X_scale)).dot(b)... wait no.
+
+Hmm, actually the centering is: `X_centered = (X_original - 1 @ X_offset.T) * diag(1 / X_scale)`.
+
+So for the rescaled version: `sqrt(S) * X_centered = sqrt(S) * (X_original - 1 @ X_offset.T) * diag(1 / X_scale)`.
+
+When we do `matvec(b)`:
+- `X` in the code is `sqrt(S) * X_original`
+- `X.dot(b)` = `sqrt(S) * X_original.dot(b)`... wait no, `X` is sparse, `b` is dense, `X.dot(b)` = `sqrt(S) * X_original.dot(b)`? 
+
+Hmm, this depends on whether the rescaling happened. Let me re-verify: after `_rescale_data`, `X = sw_matrix @ X_original` where `sw_matrix = diag(sample_weight_sqrt)`.
+
+So `X = diag(sample_weight_sqrt) @ X_original`, and `X.dot(b) = diag(sample_weight_sqrt) @ X_original @ b`.
+
+For the centered `X_centered_eff = (X_original - 1 @ X_offset.T) * diag(1 / X_scale)`, we want:
+`diag(sample_weight_sqrt) @ X_centered_eff @ b`.
+
+Let me define `X_offset_scale = X_offset / X_scale` (element-wise). Then `X_centered_eff @ b = X_original @ (b / X_scale) - 1 @ (X_offset / X_scale).T @ b = X_original @ (b / X_scale) - 1 * (X_offset_scale.T @ b)`.
+
+So:
+`diag(sample_weight_sqrt) @ X_centered_eff @ b = diag(sample_weight_sqrt) @ X_original @ (b / X_scale) - sample_weight_sqrt * (X_offset_scale.T @ b)`.
+
+But in the code, `X` is already `diag(sample_weight_sqrt) @ X_original`, not `X_original`. And `b` is not divided by `X_scale`.
+
+Hmm wait, I need to check whether `X_scale` is applied in the sparse case.
+
+In `_preprocess_data`:
+```python
+if normalize:
+    ...
+    if sp.issparse(X):
+        inplace_column_scale(X, 1.0 / X_scale)
+```
+
+So if `normalize=True`, the sparse `X` IS scaled. But `normalize` defaults to `False` in `_preprocess_data` and is not passed from `LinearRegression.fit`. So `X_scale` is all ones for sparse `X` in `LinearRegression`.
+
+Wait, let me check: does `LinearRegression.fit` call `_preprocess_data` with `normalize`? Looking at the code:
+
+```python
+X, y, X_offset, y_offset, X_scale = _preprocess_data(
+    X,
+    y,
+    fit_intercept=self.fit_intercept,
+    copy=self.copy_X,
+    sample_weight=sample_weight,
+)
+```
+
+No `normalize` parameter, so it defaults to `False`. For sparse `X`, `X_scale` is all ones.
+
+So `X_offset_scale = X_offset / X_scale = X_offset` (since `X_scale = 1`).
+
+And `matvec(b) = X.dot(b) - sample_weight_sqrt * b.dot(X_offset)`.
+
+With `X = diag(sample_weight_sqrt) @ X_original` (after rescale), this is:
+`= diag(sample_weight_sqrt) @ X_original @ b - sample_weight_sqrt * (b.T @ X_offset)`
+`= diag(sample_weight_sqrt) @ (X_original @ b - 1 * (b.T @ X_offset))`
+
+Wait, this doesn't look right. `diag(sample_weight_sqrt) @ 1` is `sample_weight_sqrt`, so:
+`diag(sample_weight_sqrt) @ X_original @ b - sample_weight_sqrt * (b.T @ X_offset)`
+`= diag(sample_weight_sqrt) @ (X_original @ b) - sample_weight_sqrt * (X_offset.T @ b)`.
+
+But we want: `diag(sample_weight_sqrt) @ (X_original - 1 @ X_offset.T) @ b`
+`= diag(sample_weight_sqrt) @ (X_original @ b - 1 @ X_offset.T @ b)`
+`= diag(sample_weight_sqrt) @ X_original @ b - sample_weight_sqrt @ (X_offset.T @ b)`.
+
+Hmm, `sample_weight_sqrt` is a vector, and `(X_offset.T @ b)` is a scalar, so `sample_weight_sqrt @ (X_offset.T @ b)` = `sample_weight_sqrt * (X_offset.T @ b)` where `*` is element-wise. This matches!
+
+OK so the math checks out. 
+
+Now, for the actual optimization. One issue: `b.dot(X_offset_scale)` - if `b` is float64 and `X_offset_scale` is float64, this is fine. But what about types?
+
+Actually, let me look at the actual performance issue. In `lsqr`, `matvec` and `rmatvec` are called many times. The current implementation of `matvec`:
+
+```python
+def matvec(b):
+    return X.dot(b) - sample_weight_sqrt * b.dot(X_offset_scale)
+```
+
+The `X.dot(b)` is the main cost (sparse-dense matrix-vector multiply). The second term `sample_weight_sqrt * b.dot(X_offset_scale)` involves a dot product and then scaling.
+
+But this is already fairly efficient. The overhead of Python function calls for `matvec`/`rmatvec` in `lsqr` is probably not avoidable.
+
+Hmm, let me think about what "optimization for sparse X or sparse y data" really means.
+
+After more thought, I believe the key optimizations are:
+
+1. **Avoid unnecessary densification of sparse `y`** - in `_preprocess_data` and `_rescale_data`
+
+2. **More efficient ` sample_weight_sqrt * b.dot(X_offset_scale)`** - This involves `b.dot(X_offset_scale)` which can be optimized if `X_offset_scale` is known to be zero or needs special handling.
+
+3. **`_rescale_data` for sparse inputs** - Use `csr_matrix`'s `multiply` method or direct row scaling instead of `dia_matrix` multiplication.
+
+Let me look at what happens when `y` is sparse in the current code:
+
+`y = np.asarray(y, dtype=X.dtype)` - densifies `y`. This is bad if `y` is large and sparse.
+
+For sparse `y`, we should:
+- Keep `y` as a sparse matrix
+- For centering: `y_offset = y.mean(axis=0)` (weighted mean if needed)
+- For `y - y_offset`, this makes `y` dense, so we'd need to densify or use a different approach
+
+But wait, `lsqr` needs dense `y`. So we have to densify eventually. The question is whether we can avoid keeping both sparse and dense copies around.
+
+One optimization: if `y` is sparse with very few non-zeros, we might use `sparse.linalg` routines differently. But `LinearRegression.fit` uses `lsqr` which requires dense `y`.
+
+Actually, looking at this more, I think the "sparse y" case might be less about `scipy.sparse` matrices and more about structured zero patterns or something else. But let me assume it means `scipy.sparse` matrices.
+
+Given the constraints and the need to preserve exact semantics, here are my concrete optimizations:
+
+### Change 1: Optimize `_rescale_data`
+
+Replace the `dia_matrix` approach with direct row scaling using `multiply` for sparse matrices and broadcasting for dense arrays. This avoids creating the `dia_matrix` object and the overhead of generic sparse matrix multiplication.
+
+```python
+def _rescale_data(X, y, sample_weight):
+    """Rescale data sample-wise by square root of sample_weight.
+
+    For many linear models, this enables easy support for sample_weight because
+
+        (y - X w)' S (y - X w)
+
+    with S = diag(sample_weight) becomes
+
+        ||y_rescaled - X_rescaled w||_2^2
+
+    when setting
+
+        y_rescaled = sqrt(S) y
+        X_rescaled = sqrt(S) X
+
+    Returns
+    -------
+    X_rescaled : {array-like, sparse matrix}
+
+    y_rescaled : {array-like, sparse matrix}
+    """
+    n_samples = X.shape[0]
+    sample_weight = np.asarray(sample_weight)
+    if sample_weight.ndim == 0:
+        sample_weight = np.full(n_samples, sample_weight, dtype=sample_weight.dtype)
+    sample_weight_sqrt = np.sqrt(sample_weight)
+
+    # Check if rescaling is needed
+    if np.all(sample_weight_sqrt == 1):
+        return X, y, sample_weight_sqrt
+
+    if sp.issparse(X):
+        X = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples)) @ X
+    else:
+        X = X * sample_weight_sqrt[:, np.newaxis]
+
+    # Handle both sparse and dense y
+    if sp.issparse(y):
+        y = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples)) @ y
+    elif y.ndim == 1:
+        y = y * sample_weight_sqrt
+    else:
+        y = y * sample_weight_sqrt[:, np.newaxis]
+    return X, y, sample_weight_sqrt
+```
+
+Wait, I need to check: does this preserve behavior for all cases? The original code used `safe_sparse_dot` which handles various cases. Let me verify.
+
+For `X` sparse, `safe_sparse_dot(sw_matrix, X)` with `sw_matrix` being `dia_matrix`: I believe this returns a sparse matrix of the same format as `X` or a compatible format. Using `@` should be similar in modern scipy.
+
+For `y` dense 2D, original: `safe_sparse_dot(sw_matrix, y)`. With `y` as `(n_samples, n_targets)`, this gives row-scaled `y`. My version: `y * sample_weight_sqrt[:, np.newaxis]` should be the same.
+
+For `y` dense 1D, original would... actually `safe_sparse_dot` with 1D `y` might not work correctly or might treat it differently. Let me check the original code:
+
+```python
+y = safe_sparse_dot(sw_matrix, y)
+```
+
+If `y` is 1D, `safe_sparse_dot(sw_matrix, y)` - `sw_matrix` is sparse 2D, `y` is 1D. I think `safe_sparse_dot` handles this by treating `y` as column vector, and the result should be 1D... or maybe 2D.
+
+Actually, this is a key point. Let me trace through what `safe_sparse_dot` does:
+
+Looking at sklearn's `safe_sparse_dot`:
+- If both are sparse, uses `a @ b`
+- If `a` is sparse and `b` is dense, uses `a @ b` which returns dense
+- Handles 1D arrays by reshaping
+
+For `sw_matrix` (sparse 2D, shape `(n_samples, n_samples)`) and `y` (1D, length `n_samples`), `a @ b` gives shape `(n_samples,)`.
+
+For my replacement, when `y.ndim == 1`, `y * sample_weight_sqrt` gives shape `(n_samples,)`, same result.
+
+Actually wait - in `LinearRegression.fit`, `y` from `_preprocess_data` is modified. For `fit_intercept=True`, `y = y - y_offset` which keeps 1D `y` as 1D. For 2D `y`, it stays 2D.
+
+OK I think my replacement is correct. Let me also add the optimization for empty or uniform weights.
+
+### Change 2: Optimize `_preprocess_data` for sparse `y`
+
+In `_preprocess_data`, we need to handle `y` being sparse:
+
+```python
+if sp.issparse(y):
+    y = y.astype(X.dtype, copy=False)
+else:
+    y = np.asarray(y, dtype=X.dtype)
+```
+
+And for the mean calculation with `sample_weight`:
+```python
+if sp.issparse(y):
+    # For sparse y, compute weighted mean
+    if sample_weight is None:
+        y_offset = np.asarray(y.mean(axis=0)).ravel()
+    else:
+        y_data = y.data if y.format == 'csr' or y.format == 'csc' else y.toarray()
+        # Actually, compute y.T @ sample_weight / sample_weight.sum()
+        y_offset = np.asarray(y.T.multiply(sample_weight).sum(axis=1)).ravel() / sample_weight.sum()
+    y_offset = y_offset.astype(X.dtype, copy=False)
+    y = y - y_offset  # This makes y dense! Or keep sparse...
+else:
+    y_offset = np.average(y, axis=0, weights=sample_weight)
+    y = y - y_offset
+```
+
+Hmm, `y = y - y_offset` for sparse `y` and scalar/vector `y_offset` - if `y_offset` is non-zero, this makes all zeros become `-y_offset`, so the result is dense. We have to densify or use a different structure.
+
+Actually, for `LinearRegression`, if `y` is passed as sparse, and we need to center it (subtract mean), the result is no longer sparse. So we'd need to densify here or earlier.
+
+But the optimization is to preserve sparsity as long as possible to save memory. If `y` is very large but very sparse, temporarily materializing a smaller intermediate might help.
+
+One approach: don't densify `y` until necessary. We can keep `y` sparse through the preprocessing if `fit_intercept=False` (no centering needed - already zero mean). But with `fit_intercept=True`, centering destroys sparsity.
+
+Hmm, actually for sparse `y`, the mean is likely very small if `y` is very sparse. But we need exact semantics.
+
+Wait, I just realized: `np.average(y, axis=0, weights=sample_weight)` for a sparse `y` - if we call `np.asarray(y)` first, it densifies. We can compute the weighted average without densifying.
+
+For `fit_intercept=True`, we need to compute `y_offset` and subtract it. The subtraction makes `y` dense. So at this point, we must convert to dense.
+
+The optimization: compute `y_offset` without fully densifying, then convert `y` to dense when subtracting.
+
+```python
+if sp.issparse(y):
+    y = y.toarray(dtype=X.dtype)
+else:
+    y = np.asarray(y, dtype=X.dtype)
+```
+
+But `toarray()` already does the right thing. The issue was `np.asarray(y, dtype=X.dtype)` on a sparse matrix might not give the right shape or might have issues.
+
+Let me test mentally: `np.asarray(sparse_matrix)` returns a 2D numpy array? Or does it return some object array?
+
+Actually, `np.asarray(scipy.sparse.csr_matrix(...))` returns a `numpy.ndarray` with dtype=object containing the matrix object itself! This is definitely wrong.
+
+So the fix is: check if `y` is sparse and use `toarray()` before `np.asarray()`.
+
+Actually wait, the original code might never be hit with sparse `y` because `_validate_data` or prior processing might convert `y` to dense. Let me check `LinearRegression.fit`:
+
+```python
+X, y = self._validate_data(
+    X, y, accept_sparse=accept_sparse, y_numeric=True, multi_output=True
+)
+```
+
+The `_validate_data` for `y` with `multi_output=True` - does it accept sparse `y`? Looking at typical sklearn behavior, `y` is usually checked with `check_array` or `check_X_y`, and sparse `y` might be rejected or converted.
+
+Hmm, but the user specifically asks for "sparse X or sparse y data" optimization, so let me assume it's possible.
+
+Actually, for `LinearRegression`, `y_numeric=True` in `_validate_data` means `y` should be numeric. The `multi_output=True` means multi-output is allowed.
+
+I think the safest optimization is in `_rescale_data` and possibly avoiding unnecessary `Parallel` overhead.
+
+### Change 3: Optimize `fit` for single-output or small multi-output cases
+
+In the sparse `X` path, for multi-output `y`:
+
+```python
+if y.ndim < 2:
+    self.coef_ = lsqr(X_centered, y)[0]
+else:
+    # sparse_lstsq cannot handle y with shape (M, K)
+    outs = Parallel(n_jobs=n_jobs_)(
+        delayed(lsqr)(X_centered, y[:, j].ravel())
+        for j in range(y.shape[1])
+    )
+    self.coef_ = np.vstack([out[0] for out in outs])
+```
+
+We can optimize this by avoiding `Parallel` when `n_jobs_` is effectively 1:
+
+```python
+if y.ndim < 2:
+    self.coef_ = lsqr(X_centered, y)[0]
+else:
+    # sparse_lstsq cannot handle y with shape (M, K)
+    if n_jobs_ == 1 or y.shape[1] == 1:
+        # Avoid Parallel overhead for single-threaded or single-output
+        outs = [lsqr(X_centered, y[:, j].ravel()) for j in range(y.shape[1])]
+    else:
+        outs = Parallel(n_jobs=n_jobs_)(
+            delayed(lsqr)(X_centered, y[:, j].ravel())
+            for j in range(y.shape[1])
+        )
+    self.coef_ = np.vstack([out[0] for out in outs])
+```
+
+But we need to check: what is `n_jobs_`? It's `self.n_jobs` which can be `None`. `Parallel(n_jobs=None)` uses 1 job by default. So if `n_jobs_ is None`, we can skip `Parallel`.
+
+Actually, `n_jobs_` retrieved as `self.n_jobs`. If `n_jobs` is `None`, `Parallel(n_jobs=None)` defaults to 1.
+
+Hmm, but this changes behavior: if someone uses `parallel_backend('threading')` context manager, `Parallel()` without `n_jobs` uses that backend, while `Parallel(n_jobs=1)` or our direct list comprehension doesn't.
+
+To preserve exact semantics for all configurations, we need to be careful. However, `n_jobs_` is set to `self.n_jobs` which is `None` by default. If `n_jobs` is `None`, the default `Parallel` behavior is 1 worker. So we can safely use direct execution when `n_jobs_ == 1` or `n_jobs_ is None and y.shape[1] == 1`.
+
+Actually, for simplicity and to preserve semantics with `joblib.parallel_backend`, we should only bypass `Parallel` when we explicitly know it's single-threaded.
+
+Hmm, but `n_jobs=None` passed to `Parallel` means "use 1 worker unless in a parallel_backend context". So if someone uses a context manager, `Parallel(n_jobs=None)` respects it. If we bypass with direct list comprehension, we don't respect the context.
+
+To preserve this exactly, we need to check if we're in a parallel backend context. This is messy.
+
+A safer approach: don't touch the `Parallel` call, but optimize elsewhere.
+
+### Reconsidering: What if we optimize `rmatvec` and `matvec`?
+
+Looking at `matvec`:
+```python
+def matvec(b):
+    return X.dot(b) - sample_weight_sqrt * b.dot(X_offset_scale)
+```
+
+And `rmatvec`:
+```python
+def rmatvec(b):
+    return X.T.dot(b) - X_offset_scale * b.dot(sample_weight_sqrt)
+```
+
+Wait, `b.dot(sample_weight_sqrt)` - `b` has length `n_samples`, `sample_weight_sqrt` has length `n_samples`. This is a scalar. Then `X_offset_scale * scalar` is a scaled vector.
+
+But `b` in `rmatvec` might be 1D or have a specific shape. In `lsqr`, `rmatvec` is called with `b` being the residual or other vectors.
+
+One optimization: if `X_offset_scale` is zero (which happens when `fit_intercept=False` - but we only get here when `sp.issparse(X)` and the preprocess logic sets `X_offset` even for `fit_intercept=True`), then we can simplify.
+
+Actually, for sparse `X`, even with `fit_intercept=True`, we compute `X_offset`. If `X` is already centered or if `fit_intercept=False`, `X_offset` is zero only if... wait, let me check:
+
+In `_preprocess_data`:
+```python
+if fit_intercept:
+    if sp.issparse(X):
+        X_offset, X_var = mean_variance_axis(X, axis=0, weights=sample_weight)
+else:
+    X_offset = np.zeros(X.shape[1], dtype=X.dtype)
+```
+
+So if `fit_intercept=False`, `X_offset` is all zeros. Then `X_offset_scale` is all zeros, and `matvec`/`rmatvec` simplify. But the code for `fit_intercept=False` and `sp.issparse(X)` still goes through the `LinearOperator` path.
+
+Hmm wait, if `fit_intercept=False` and `sp.issparse(X)`, in the current `fit`:
+```python
+X, y, X_offset, y_offset, X_scale = _preprocess_data(...)
+```
+
+With `fit_intercept=False`, `X_offset = 0`, `y_offset = 0`, `X_scale = 1`. Then in `fit`:
+```python
+X_offset_scale = X_offset / X_scale  # = 0
+
+def matvec(b):
+    return X.dot(b) - sample_weight_sqrt * b.dot(X_offset_scale)  # = X.dot(b) - 0
+
+def rmatvec(b):
+    return X.T.dot(b) - X_offset_scale * b.dot(sample_weight_sqrt)  # = X.T.dot(b) - 0
+```
+
+So when `X_offset_scale = 0`, the `matvec` and `rmatvec` are trivial, but we still pay the Python function call overhead and the dot product with zero. This could be optimized by checking if `X_offset_scale` is zero and using simpler functions.
+
+But this optimization might not be in the spirit of the requested change. Let me think about what the main bottleneck is.
+
+### Final approach
+
+After all this analysis, I believe the most impactful and safe optimization is in `_rescale_data` to avoid creating the `dia_matrix` and use more direct operations. Additionally, handling sparse `y` in `_preprocess_data` to avoid incorrect `np.asarray` behavior.
+
+But wait - looking at the code again, for `_preprocess_data`, the line:
+```python
+y = np.asarray(y, dtype=X.dtype)
+```
+
+If `y` is a scipy sparse matrix, `np.asarray(y)` actually returns an array of shape `()` with the object being the sparse matrix. Then `np.average(y, axis=0, ...)` would fail because `y` is a 0-d array containing an object.
+
+So sparse `y` would actually cause an error in current code! This suggests that either:
+1. Sparse `y` was never actually intended to be supported directly in this path
+2. There's something in `_validate_data` that converts `y` to dense
+
+Given this, and that the user asks to "optimize for sparse X or sparse y data", maybe the main case is **sparse X with dense y**, and the optimization is about making that faster and more memory efficient.
+
+For **sparse X, dense y**, the key optimization opportunity is:
+
+1. Avoid unnecessary `Parallel` overhead for single-output or sequential execution
+2. More efficient `_rescale_data` that doesn't create `dia_matrix`
+3. Potential use of `lsmr` instead of `lsqr` (but this changes behavior)
+
+Let me focus on what I can verifiably improve.
+
+Actually, re-reading the code yet again, I notice that `sample_weight_sqrt` in `matvec` is used like this:
+```python
+def matvec(b):
+    return X.dot(b) - sample_weight_sqrt * b.dot(X_offset_scale)
+```
+
+But `sample_weight_sqrt` is a numpy array, and `X` after `_rescale_data` is already scaled by `sample_weight_sqrt`. So `X.dot(b)` already includes the scaling. The subtraction term also uses `sample_weight_sqrt`. This is correct.
+
+However, there's a potential optimization: if `sample_weight_sqrt` is all ones (no sample weighting), then `matvec(b) = X.dot(b) - b.dot(X_offset_scale)` where `X` is the original (not scaled). Wait no, `X` IS scaled in `_rescale_data` even if `sample_weight_sqrt` is all ones.
+
+Actually, in the current code, `_rescale_data` always creates `sample_weight_sqrt = sqrt(sample_weight)`. If `sample_weight` is all ones, `sample_weight_sqrt` is all ones, and it still does `sw_matrix @ X` and `sw_matrix @ y`, which is unnecessary work!
+
+So the fast path in `_rescale_data` to return early when `sample_weight_sqrt` is all ones is a valid optimization.
+
+### Let's finalize the changes:
+
+1. **`_rescale_data`**: Add early return for uniform weights, use direct operations instead of `dia_matrix`
+
+2. **`_preprocess_data`**: Handle sparse `y` correctly before `np.asarray`
+
+3. **`fit`**: None - or small optimization for `lsqr` single-output
+
+Wait, I want to also check if there's any issue with `y[:, j].ravel()` when `y` is 1D. For `y.ndim < 2`, we go to the first branch. For `y.ndim == 2`, `y[:, j]` gives a 1D array (or 2D with shape `(n_samples, 1)`?), and `.ravel()` flattens it.
+
+For `y` with shape `(n_samples,)` originally, after `_preprocess_data`:
+- If `fit_intercept=True`, `y = y - y_offset` keeps it as 1D
+- So `y.ndim == 1`, we go to `lsqr(X_centered, y)[0]`
+
+For `y` with shape `(n_samples, 1)`:
+- `y.ndim == 2`
+- We go to the `else` branch with `Parallel`
+- `y[:, j]` for `j=0` gives shape `(n_samples,)` or `(n_samples, 1)` depending on whether `y` is numpy array or matrix-like
+- `.ravel()` flattens to `(n_samples,)`
+
+This should be fine.
+
+One more thing: if `y` is a sparse matrix with shape `(n_samples, 1)`, then `y.ndim == 2`, we go to the `else` branch. Then `y[:, 0]` gives a sparse matrix with shape `(n_samples, 1)`, `.ravel()` might give a sparse matrix with shape `(n_samples,)` or `(n_samples, 1)`... and `lsqr` needs dense input.
+
+But again, if sparse `y` was never intended, this is moot.
+
+Let me just implement the clear, safe optimizations:
+
+### Change 1: `_rescale_data`
+
+```python
+def _rescale_data(X, y, sample_weight):
+    """Rescale data sample-wise by square root of sample_weight.
+
+    For many linear models, this enables easy support for sample_weight because
+
+        (y - X w)' S (y - X w)
+
+    with S = diag(sample_weight) becomes
+
+        ||y_rescaled - X_rescaled w||_2^2
+
+    when setting
+
+        y_rescaled = sqrt(S) y
+        X_rescaled = sqrt(S) X
+
+    Returns
+    -------
+    X_rescaled : {array-like, sparse matrix}
+
+    y_rescaled : {array-like, sparse matrix}
+    """
+    n_samples = X.shape[0]
+    sample_weight = np.asarray(sample_weight)
+    if sample_weight.ndim == 0:
+        sample_weight = np.full(n_samples, sample_weight, dtype=sample_weight.dtype)
+    sample_weight_sqrt = np.sqrt(sample_weight)
+
+    if np.all(sample_weight_sqrt == 1):
+        return X, y, sample_weight_sqrt
+
+    if sp.issparse(X):
+        X = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples)) @ X
+    else:
+        X = X * sample_weight_sqrt[:, np.newaxis]
+
+    if sp.issparse(y):
+        y = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples)) @ y
+    elif y.ndim == 1:
+        y = y * sample_weight_sqrt
+    else:
+        y = y * sample_weight_sqrt[:, np.newaxis]
+
+    return X, y, sample_weight_sqrt
+```
+
+Wait, I need to be more careful. The original code:
+```python
+sw_matrix = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples))
+X = safe_sparse_dot(sw_matrix, X)
+y = safe_sparse_dot(sw_matrix, y)
+```
+
+For `y` sparse, `safe_sparse_dot(sw_matrix, y)` uses `spmatrix.dot`. With `dia_matrix.dot`, the result format depends on the input format.
+
+For `y` dense 1D, `safe_sparse_dot(sparse_matrix, dense_1d)` might return 1D or raise error depending on shape. Let me check...
+
+Actually, in the current code path, `y` after `_preprocess_data` is either 1D or 2D numpy array. `safe_sparse_dot(sw_matrix, y)` with 2D `y`: works. With 1D `y`: I'm not sure.
+
+Testing conceptually: `sw_matrix` is shape `(n, n)`, `y` is shape `(n,)` or `(n, k)`. The matrix product is well-defined. `safe_sparse_dot` should handle it.
+
+For my replacement, I have:
+- `y.ndim == 1`: `y * sample_weight_sqrt` - element-wise, result shape `(n,)`
+- `y.ndim == 2`: `y * sample_weight_sqrt[:, np.newaxis]` - broadcasting, result shape `(n, k)`
+
+This matches.
+
+### Checking format preservation
+
+One concern: when `X` is sparse CSC, does `sparse.dia_matrix(...) @ X` preserve CSC? In scipy, `dia_matrix @ csc_matrix` might return CSR or CSC depending on version. The original `safe_sparse_dot` might do format conversion too.
+
+Actually, looking at scipy's sparse matrix multiplication: `dia * csc` typically returns `csc` for the specific case, or `csr`. This should be fine.
+
+But wait - there's another performance issue. The `_preprocess_data` for sparse `X`:
+```python
+if fit_intercept:
+    if sp.issparse(X):
+        X_offset, X_var = mean_variance_axis(X, axis=0, weights=sample_weight)
+```
+
+Then later, the `fit` method does NOT center the sparse `X` in `_preprocess_data`. But then in `_rescale_data`, we multiply `X` by `sample_weight_sqrt`. This is fine.
+
+Hmm, I realize I should also check if `copy=False` in `_preprocess_data` does the right thing for sparse `X`. If `copy=True` (default in `LinearRegression`), `X = X.copy()` which is correct.
+
+OK, I think my optimizations are sound. Let me also think about one more thing: can we avoid the `X_offset_scale * b.dot(sample_weight_sqrt)` in `rmatvec` by precomputing something?
+
+Precomputing won't help much because `b` changes every iteration.
+
+### Additional subtle optimization
+
+In `fit`, for the `lsqr` calls, we have:
+```python
+if y.ndim < 2:
+    self.coef_ = lsqr(X_centered, y)[0]
+```
+
+If `y` is 1D, this calls `lsqr` once. The result `[0]` extracts the solution.
+
+For multi-output with `Parallel`, each job calls `lsqr(X_centered, y[:, j].ravel())`. The `ravel()` might be unnecessary if `y[:, j]` is already 1D, but it's harmless.
+
+Can we optimize the case where `y` has only 1 column but is 2D (shape `(n_samples, 1)`)?
+
+If we detect `y.shape[1] == 1`, we could flatten `y` and do a single `lsqr`:
+```python
+if y.ndim < 2 or y.shape[1] == 1:
+    self.coef_ = lsqr(X_centered, y.ravel())[0]
+    if y.ndim >= 2:
+        self.coef_ = self.coef_.reshape(1, -1)
+else:
+    ...
+```
+
+Wait, but then `self.coef_` needs to match expected shape. For `y.shape[1] == 1`, the current code does:
+```python
+outs = Parallel(n_jobs=n_jobs_)(... for j in range(1))
+self.coef_ = np.vstack([out[0] for out in outs])
+```
+
+This gives `self.coef_` with shape `(1, n_features)`. If we use `lsqr(X_centered, y.ravel())[0]`, we get shape `(n_features,)`, and we'd need to reshape to `(1, n_features)`.
+
+Then later:
+```python
+if y.ndim == 1:
+    self.coef_ = np.ravel(self.coef_)
+```
+
+For `y` with shape `(n_samples, 1)`, `y.ndim == 2`, so we don't `ravel`. The result should be 2D.
+
+This optimization is valid and avoids `Parallel` overhead for the single-column 2D case. Let me verify behavior:
+
+Current behavior for `y` with shape `(n_samples, 1)`:
+- After preprocess: same shape
+- `y.ndim < 2` is False (it's 2)
+- Go to `else` with `Parallel`
+- `y[:, 0]` shape depends, but `.ravel()` makes it 1D
+- `lsqr` returns `(n_features,)` solution
+- `np.vstack` with single element gives `(1, n_features)`
+
+New behavior if we optimize:
+- `y.shape[1] == 1`, so compute `lsqr(X_centered, y.ravel())[0]`
+- `y.ravel()` is 1D with shape `(n_samples,)`
+- Result of `lsqr` is `(n_features,)`
+- Reshape to `(1, n_features)` if needed
+
+We need to be careful about the reshape. Actually, for `np.vstack([out[0]])`, if `out[0]` is 1D with shape `(n_features,)`, `vstack` makes it 2D with shape `(1, n_features)` which matches.
+
+So: `lsqr(X_centered, y.ravel())[0].reshape(1, -1)` should work. But wait, if `out[0]` from `lsqr` is 1D, we can just do `np.array([out[0]])` or similar.
+
+Actually, simpler: we can just do what the `Parallel` path does but without `Parallel`:
+```python
+if y.ndim < 2:
+    self.coef_ = lsqr(X_centered, y)[0]
+elif y.shape[1] == 1:
+    self.coef_ = lsqr(X_centered, y.ravel())[0]
+    self.coef_ = np.array([self.coef_])
+else:
+    # Parallel...
+```
+
+This gives `self.coef_` shape `(1, n_features)` for 2D y with 1 column.
+
+But wait, I need to check what `np.vstack([out[0] for out in outs])` does vs `np.array([coef])`. If `out[0]` is 1D with shape `(n_features,)`, then:
+- `np.vstack([out[0]])` gives shape `(1, n_features)` - correct
+- `np.array([out[0]])` gives shape `(1, n_features)` - same!
+
+So we can replace the single-column case with direct execution.
+
+For `y.shape[1] == 1`, can we just use the first branch?
+```python
+if y.ndim < 2 or y.shape[1] == 1:
+    self.coef_ = lsqr(X_centered, y.ravel())[0]
+    if y.ndim >= 2:
+        self.coef_ = self.coef_.reshape(1, -1)
+```
+
+Testing:
+- `y` 1D: `lsqr(X_centered, y)[0]`, then `y.ndim` is 1, no reshape. Result: `(n_features,)`. Correct.
+- `y` 2D with 1 column: `lsqr(X_centered, y.ravel())[0]`, then reshape to `(1, n_features)`. Correct.
+
+Wait, but the outcome ordering matters. For 1D `y`, `self.coef_` should be 1D. For 2D `y` with 1 column, `self.coef_` should be 2D.
+
+Hmm, I realize there might be an issue. Let me check what happens later in `fit`:
+
+```python
+if y.ndim == 1:
+    self.coef_ = np.ravel(self.coef_)
+```
+
+For 1D `y`, `self.coef_` from `lsqr` is 1D, `np.ravel` is no-op. Fine.
+
+For 2D `y` with 1 column, `y.ndim == 2`, so we don't `ravel`, and `self.coef_` stays 2D with shape `(1, n_features)`.
+
+But does the rest of sklearn expect `coef_` to be `(n_features,)` for single-output even if `y` was 2D with 1 column? 
+
+Actually, in sklearn, if user passes `y` with shape `(n_samples, 1)` instead of `(n_samples,)`, the model should still work but `coef_` will be 2D. This is the existing behavior.
+
+OK I think this optimization is valid but might be marginal. Let me also verify: for `y` 2D with 1 column, the original code creates `Parallel` and processes 1 column. The overhead is small for 1 column but non-zero.
+
+Given the requirement to preserve exact semantics and outputs, and that my change to single-column processing gives the same mathematical result but potentially avoids Parallel overhead, this should be acceptable. However, it does change the code path which might have subtle differences (e.g., if `lsqr` is non-deterministic across runs, but that's unlikely).
+
+Actually, one more subtlety: `lsqr(X_centered, y[:, j].ravel())` vs `lsqr(X_centered, y.ravel())`. They're mathematically equivalent if `y` has 1 column, but `y[:, 0]` vs `y.ravel()` - do they always give the same array?
+
+For `y` with shape `(n, 1)`, `y[:, 0]` gives shape `(n,)` and `y.ravel()` gives shape `(n,)`. Same values, same shape. Good.
+
+But wait, what if `y` is Fortran-ordered or something? Still, the values are the same.
+
+I'll include this optimization as it's safe and avoids `Parallel` overhead.
+
+Now let me draft the final changes.
+
+Actually, before that, let me think one more time about what the user might really need. The title is "Optimize LinearRegression.fit for sparse X or sparse y data". 
+
+For sparse X, the current approach already uses `lsqr` with `LinearOperator`, which is correct. The overhead is in:
+1. `_preprocess_data` computing mean and variance
+2. `_rescale_data` creating `dia_matrix`
+3. `Parallel` overhead for multiple outputs
+
+For sparse y, the current approach likely has issues because `y` is treated as dense throughout.
+
+If I had to pick the most impactful optimization: **efficient `_rescale_data` without `dia_matrix`**. This benefits all cases with sample weights, and especially when `sample_weight` is uniform (the common case) where we can skip rescaling entirely.
+
+Second most impactful: **avoiding `Parallel` overhead for single-output**. This benefits the common case of single-target regression.
+
+Third: **proper sparse `y` handling in `_preprocess_data`**. This is a bug fix / robustness improvement.
+
+Let me now write the search/replace blocks.
+
+After more careful reading, I want to also check: for `sample_weight` of None, what happens?
+
+In `LinearRegression.fit`:
+```python
+sample_weight = _check_sample_weight(
+    sample_weight, X, dtype=X.dtype, only_non_negative=True
+)
+```
+
+This returns an array of ones if `sample_weight` is None.
+
+Then in `_preprocess_data`:
+```python
+if isinstance(sample_weight, numbers.Number):
+    sample_weight = None
+```
+
+A single number (like 1.0) becomes None. But an array of ones stays as array.
+
+Then in `_rescale_data`:
+```python
+sample_weight_sqrt = np.sqrt(sample_weight)
+...
+sw_matrix = sparse.dia_matrix(...)
+```
+
+So even for uniform weights, we create the `dia_matrix` and do multiplication. The early return I proposed would catch this.
+
+Let me also verify: in `_rescale_data`, `sample_weight` comes from `LinearRegression.fit` after `_check_sample_weight`. If the original `sample_weight` was None, it's now `np.ones(n_samples)`. If it was a scalar, it was converted to array. So `sample_weight` is always an array in `_rescale_data`.
+
+Wait, what if `sample_weight = [1, 1, 1, ...]` - an explicit array of ones? The early return with `np.all(sample_weight_sqrt == 1)` catches this too.
+
+OK, I'm confident in the optimizations. Let me write the final output.
+
+Actually, I want to double-check one thing. In the original `_rescale_data`, for `y` dense:
+```python
+y = safe_sparse_dot(sw_matrix, y)
+```
+
+If `y` is 2D with shape `(n_samples, n_targets)`, this does matrix multiplication. If `y` is 1D with shape `(n_samples,)`, `safe_sparse_dot` with a sparse matrix on the left... let me check sklearn's implementation:
+
+```python
+def safe_sparse_dot(a, b, *, dense_output=False):
+    if a.ndim > 2 or b.ndim > 2:
+        # Then a and/or b is not 2D. Not going to try this in any case.
+        if sparse.issparse(a):
+            # sparse is always 2-D. Implies b is 3-D+.
+            # a @ b requires b.T (for a @ b to work). Hence, (b.T @ a.T).T
+            return safe_sparse_dot(b.T, a.T).T
+        else:
+            return np.dot(a, b)
+    if sparse.issparse(a) or sparse.issparse(b):
+        assert a.ndim < 3 and b.ndim < 3
+        ret = a @ b
+        if dense_output and sparse.issparse(ret):
+            return ret.toarray()
+        return ret
+    else:
+        return np.dot(a, b)
+```
+
+For `a = sw_matrix` (sparse 2D), `b = y` (1D):
+- `a @ b` with scipy sparse: this should work if `b` is 1D? Let me think... in scipy, `sparse_matrix @ ndarray_1d` is supported and returns 1D array.
+
+So `safe_sparse_dot(sw_matrix, y)` with 1D `y` returns 1D.
+
+My replacement: `y * sample_weight_sqrt` for 1D `y` - also returns 1D. Good.
+
+For 2D `y`: `safe_sparse_dot` returns 2D. My replacement `y * sample_weight_sqrt[:, np.newaxis]` returns 2D. Good.
+
+OK, I'm now ready to write the changes. Here are my proposed modifications:
+
+1. **`_rescale_data`**: Add early return, use direct operations
+2. **`_preprocess_data`**: Handle sparse `y`
+3. **`fit`**: Single-column optimization
+
+Wait, I want to re-examine if there are any imports needed. The current file already imports `sp` from scipy, and `sparse` from scipy. Let me check the existing imports:
+
+From the file (implied by usage):
+- `import scipy.sparse as sp`
+- `from scipy import sparse` (used in `_rescale_data`)
+- `from scipy.sparse import linalg` (used in `fit`)
+- etc.
+
+Actually, looking at the code, I see both `sp.issparse(X)` and `sparse.dia_matrix(...)`. This suggests `import scipy.sparse as sp` and `from scipy import sparse` are both used. But `sp` and `sparse` might be the same module. Let me check: `scipy.sparse` is the same as `scipy.sparse`, so `sp` and `sparse` are the same if both imported from `scipy.sparse`.
+
+Actually, in sklearn code, typically:
+```python
+import scipy.sparse as sp
+from scipy import sparse
+```
+
+Both point to `scipy.sparse`. So `sp.issparse` and `sparse.issparse` are the same. In the code, `sp.issparse(X)` is used. I'll use `sp.issparse` for consistency.
+
+For my changes, I need to make sure I use the right names.
+
+Hmm, actually in `_rescale_data`:
+```python
+sw_matrix = sparse.dia_matrix(...)
+```
+
+This uses `sparse`, not `sp`. So `from scipy import sparse` is already available.
+
+Let me make sure my replacement uses `sp.issparse` when checking types, to be consistent with the rest of the file.
+
+One more check: in `_preprocess_data`, the early part has:
+```python
+if check_input:
+    X = check_array(X, copy=copy, accept_sparse=["csr", "csc"], dtype=FLOAT_DTYPES)
+```
+
+This checks `X` but not `y`. `y` is handled later. There is no check for sparse `y` being valid.
+
+OK, here's my complete and final plan for the changes:
+
+### File: `sklearn/linear_model/_base.py`
+
+**Change 1: `_preprocess_data` - handle sparse `y`**
+
+```python
+y = np.asarray(y, dtype=X.dtype)
+```
+
+Change to:
+```python
+if sp.issparse(y):
+    y = y.astype(X.dtype, copy=False)
+else:
+    y = np.asarray(y, dtype=X.dtype)
+```
+
+**Change 2: `_rescale_data` - optimize for common cases**
+
+Full function replacement with early returns and direct operations.
+
+**Change 3: `fit` - single-column optimization**
+
+In the sparse X branch, add special case for `y.shape[1] == 1`.
+
+Let me write these out now.
+
+For Change 2, the full function:
+
+```python
+def _rescale_data(X, y, sample_weight):
+    """Rescale data sample-wise by square root of sample_weight.
+
+    For many linear models, this enables easy support for sample_weight because
+
+        (y - X w)' S (y - X w)
+
+    with S = diag(sample_weight) becomes
+
+        ||y_rescaled - X_rescaled w||_2^2
+
+    when setting
+
+        y_rescaled = sqrt(S) y
+        X_rescaled = sqrt(S) X
+
+    Returns
+    -------
+    X_rescaled : {array-like, sparse matrix}
+
+    y_rescaled : {array-like, sparse matrix}
+    """
+    n_samples = X.shape[0]
+    sample_weight = np.asarray(sample_weight)
+    if sample_weight.ndim == 0:
+        sample_weight = np.full(n_samples, sample_weight, dtype=sample_weight.dtype)
+    sample_weight_sqrt = np.sqrt(sample_weight)
+
+    if np.all(sample_weight_sqrt == 1):
+        return X, y, sample_weight_sqrt
+
+    if sp.issparse(X):
+        X = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples)) @ X
+    else:
+        X = X * sample_weight_sqrt[:, np.newaxis]
+
+    if sp.issparse(y):
+        y = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples)) @ y
+    elif y.ndim == 1:
+        y = y * sample_weight_sqrt
+    else:
+        y = y * sample_weight_sqrt[:, np.newaxis]
+
+    return X, y, sample_weight_sqrt
+```
+
+Wait, I need to be very careful about whether `sparse.dia_matrix(...) @ X` is always equivalent to `safe_sparse_dot(sw_matrix, X)`. 
+
+In scipy:
+- `dia_matrix @ csr_matrix` returns something... probably dense? Or stays sparse?
+
+Let me think. In scipy 1.10+ and with Python 3, `@` calls `__matmul__` which should work correctly for sparse matrices. The result format depends.
+
+But originally `safe_sparse_dot` was used. Let me check what it does for sparse @ sparse:
+
+```python
+if sparse.issparse(a) or sparse.issparse(b):
+    assert a.ndim < 3 and b.ndim < 3
+    ret = a @ b
+    if dense_output and sparse.issparse(ret):
+        return ret.toarray()
+    return ret
+```
+
+So it's just `a @ b` with optional densification. My `@` replacement is the same for the sparse case.
+
+For `X` dense: `safe_sparse_dot(sw_matrix, X)` with `sw_matrix` sparse, `X` dense: returns dense. This is `sw_matrix @ X`. My replacement `X * sample_weight_sqrt[:, np.newaxis]` is element-wise multiplication. ARE THEY THE SAME?
+
+Wait! `sw_matrix @ X` is matrix multiplication: `(sw_matrix @ X)[i,j] = sum_k sw_matrix[i,k] * X[k,j]`. Since `sw_matrix` is diagonal, this is `sw_matrix[i,i] * X[i,j] = sample_weight_sqrt[i] * X[i,j]`.
+
+And `X * sample_weight_sqrt[:, np.newaxis]` is broadcasting: for each row `i`, multiply by `sample_weight_sqrt[i]`. This is `sample_weight_sqrt[i] * X[i,j]`.
+
+YES, they are the same! (For the dense case.)
+
+For `y` dense: same argument.
+
+For `X` sparse (say CSR): `sw_matrix @ X` scales each row of `X` by the corresponding `sample_weight_sqrt` value. This preserves sparsity but changes the values. Element-wise `X * sample_weight_sqrt[:, np.newaxis]` for sparse `X`... hmm, this might not work the same way.
+
+Wait, for sparse `X`, `X * sample_weight_sqrt[:, np.newaxis]` - does scipy sparse support broadcasting like this? Let me think...
+
+For `csr_matrix`, you can multiply by a scalar, or do element-wise with another sparse matrix. But `sample_weight_sqrt[:, np.newaxis]` is a dense 2D array with shape `(n_samples, 1)`. Can you do `sparse_csr * dense_array` with broadcasting? I think scipy sparse doesn't support broadcasting in element-wise multiplication directly.
+
+So for sparse `X`, I should stick with matrix multiplication: `sparse.dia_matrix(...) @ X` or use `X.multiply(sample_weight_sqrt[:, np.newaxis])` if supported, or use explicit row scaling.
+
+Actually, let me check: `csr_matrix` has a `multiply` method. `X.multiply(sample_weight_sqrt[:, np.newaxis])` - I think this requires shapes to match. For CSR, you might need to do it differently.
+
+A safer approach for sparse `X`:
+```python
+if sp.issparse(X):
+    X = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples)) @ X
+```
+
+This is the original approach but inline instead of using `safe_sparse_dot`. This should be fine.
+
+But we can do even better for memory: instead of creating `dia_matrix`, we can scale rows directly. For CSR:
+```python
+X = X.copy()
+X.data *= sample_weight_sqrt[X.indices]  # wrong, this is for column scaling
+```
+
+Hmm, let me think. For row scaling in CSR: `X[i, :]` is row `i`. We want to scale each row by `sample_weight_sqrt[i]`.
+
+Actually, for `csr_matrix`, the data is stored row by row. But doing this efficiently requires understanding CSR structure.
+
+Simpler: convert to COO, scale, convert back? No, that's extra work.
+
+Or: for each row, find the slice of data and scale it. This is a Python loop.
+
+Actually, there's a scipy helper `sklearn.utils.sparsefuncs.inplace_row_scale` or similar? Let me check if sklearn has such functions...
+
+`_preprocess_data` has `inplace_column_scale`. There's likely an `inplace_row_scale`. But I don't see it imported.
+
+Actually, looking at the imports in the file (not fully shown), there might be utility functions.
+
+For simplicity and to ensure correctness with all scipy sparse formats, I'll use the `dia_matrix @ X` approach, which scipy handles correctly.
+
+BUT - we can avoid creating the `dia_matrix` by noting that it's only needed if we're going to actually rescale, and we can do the rescaling more directly using `spdiags` or by using the fact that `dia_matrix` is lightweight.
+
+Actually, `sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples))` creates a `dia_matrix` object with shape `(n, n)` but only stores `n` elements. This is already quite memory-efficient. The issue is the multiplication algorithm, not the storage.
+
+Hmm, but we could also use `scipy.sparse.spdiags` to create the matrix, or just keep the `dia_matrix` creation. The real saving is the early return when `sample_weight_sqrt == 1`.
+
+OK I'll go with the simpler approach: keep the `dia_matrix` for sparse inputs, use broadcasting for dense inputs, and add the early return.
+
+Wait, one more thing: what about `y` being a sparse matrix in `_rescale_data`? The original code did `safe_sparse_dot(sw_matrix, y)` which handles sparse `y`. My replacement with `sparse.dia_matrix(...) @ y` also handles it. But can we do better?
+
+For `y` sparse (say CSR), `dia_matrix @ csr_matrix` should be handled efficiently by scipy. But it's still a sparse matrix multiplication.
+
+If `y` is sparse and we want to keep it sparse, and `sample_weight_sqrt` is not uniform, the result might become less sparse (if centers shift) or stay equally sparse (if just scaling). Actually, just scaling rows doesn't change sparsity pattern, only values. So result is equally sparse.
+
+Hmm, the `dia_matrix @ sparse` might use a generic algorithm. We could do better by directly scaling the data:
+
+For CSR `y`: `y.data *= sample_weight_sqrt[y.nonzero()[0]]` or something like that.
+
+But this is getting complex and error-prone. Let me keep it simple.
+
+Actually, for a COO matrix, we can do: `y.data *= sample_weight_sqrt[y.row]`. For CSR, it's more complex.
+
+I'll stick with the matrix multiplication for sparse inputs. The early return is the main optimization.
+
+### Final changes summary:
+
+1. `_preprocess_data`: Handle sparse `y` by converting properly before processing
+2. `_rescale_data`: Add early return for no rescaling, use efficient operations
+3. `LinearRegression.fit`: Optimize single-column 2D `y`
+
+Let me now write the exact search/replace blocks.
+
+For `_preprocess_data`, the relevant line:
+```python
+    y = np.asarray(y, dtype=X.dtype)
+```
+
+I need to replace with sparse-aware conversion.
+
+For `_rescale_data`, I'll replace the entire function body after the docstring, or the whole function. The instruction says "SEARCH must be the SMALLEST snippet that uniquely identifies the location." So I should replace specific lines.
+
+For `fit`, I need to find the `sp.issparse(X)` branch and modify the `y.ndim < 2` check to also handle `y.shape[1] == 1`.
+
+Let me carefully write each block.
+
+For `_preprocess_data`:
+
+```python
+    y = np.asarray(y, dtype=X.dtype)
+```
+
+I need to change to:
+
+```python
+    if sp.issparse(y):
+        y = y.astype(X.dtype, copy=False)
+    else:
+        y = np.asarray(y, dtype=X.dtype)
+```
+
+For `_rescale_data`, starting from `n_samples = X.shape[0]` to the end:
+
+Search for:
+```python
+    n_samples = X.shape[0]
+    sample_weight = np.asarray(sample_weight)
+    if sample_weight.ndim == 0:
+        sample_weight = np.full(n_samples, sample_weight, dtype=sample_weight.dtype)
+    sample_weight_sqrt = np.sqrt(sample_weight)
+    sw_matrix = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples))
+    X = safe_sparse_dot(sw_matrix, X)
+    y = safe_sparse_dot(sw_matrix, y)
+    return X, y, sample_weight_sqrt
+```
+
+Replace with:
+```python
+    n_samples = X.shape[0]
+    sample_weight = np.asarray(sample_weight)
+    if sample_weight.ndim == 0:
+        sample_weight = np.full(n_samples, sample_weight, dtype=sample_weight.dtype)
+    sample_weight_sqrt = np.sqrt(sample_weight)
+
+    if np.all(sample_weight_sqrt == 1):
+        return X, y, sample_weight_sqrt
+
+    if sp.issparse(X):
+        X = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples)) @ X
+    else:
+        X = X * sample_weight_sqrt[:, np.newaxis]
+
+    if sp.issparse(y):
+        y = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples)) @ y
+    elif y.ndim == 1:
+        y = y * sample_weight_sqrt
+    else:
+        y = y * sample_weight_sqrt[:, np.newaxis]
+
+    return X, y, sample_weight_sqrt
+```
+
+Wait, I need to check: the original code uses `safe_sparse_dot(sw_matrix, X)` and `safe_sparse_dot(sw_matrix, y)`. For `y`, if it's 1D, `safe_sparse_dot` with sparse 2D `sw_matrix` returns 1D. For my code, I have `y * sample_weight_sqrt` for 1D `y`, which returns 1D with same shape. Good.
+
+But wait - does `safe_sparse_dot(sw_matrix, y)` for 1D `y` always return 1D? Let me double check by looking at what scipy does: `dia_matrix @ ndarray_1d` returns `ndarray_1d` with shape `(n_samples,)`. And `ndarray_1d * sample_weight_sqrt` also returns `(n_samples,)`. Yes, equivalent.
+
+For `y` 2D: `safe_sparse_dot(sw_matrix, y)` returns `(n_samples, n_targets)` 2D array. And `y * sample_weight_sqrt[:, np.newaxis]` with `y` shape `(n_samples, n_targets)` returns `(n_samples, n_targets)`. Equivalent.
+
+For `y` sparse: `safe_sparse_dot(sw_matrix, y)` uses `sw_matrix @ y` which returns sparse. My code uses `sparse.dia_matrix(...) @ y` which also returns sparse. Equivalent.
+
+OK, I'm confident.
+
+For `fit`, I need to modify:
+```python
+        elif sp.issparse(X):
+            X_offset_scale = X_offset / X_scale
+
+            def matvec(b):
+                return X.dot(b) - sample_weight_sqrt * b.dot(X_offset_scale)
+
+            def rmatvec(b):
+                return X.T.dot(b) - X_offset_scale * b.dot(sample_weight_sqrt)
+
+            X_centered = sparse.linalg.LinearOperator(
+                shape=X.shape, matvec=matvec, rmatvec=rmatvec
+            )
+
+            if y.ndim < 2:
+                self.coef_ = lsqr(X_centered, y)[0]
+            else:
+                # sparse_lstsq cannot handle y with shape (M, K)
+                outs = Parallel(n_jobs=n_jobs_)(
+                    delayed(lsqr)(X_centered, y[:, j].ravel())
+                    for j in range(y.shape[1])
+                )
+                self.coef_ = np.vstack([out[0] for out in outs])
+```
+
+I want to change to handle `y.shape[1] == 1`:
+
+```python
+        elif sp.issparse(X):
+            X_offset_scale = X_offset / X_scale
+
+            def matvec(b):
+                return X.dot(b) - sample_weight_sqrt * b.dot(X_offset_scale)
+
+            def rmatvec(b):
+                return X.T.dot(b) - X_offset_scale * b.dot(sample_weight_sqrt)
+
+            X_centered = sparse.linalg.LinearOperator(
+                shape=X.shape, matvec=matvec, rmatvec=rmatvec
+            )
+
+            if y.ndim < 2 or y.shape[1] == 1:
+                self.coef_ = lsqr(X_centered, y.ravel())[0]
+                if y.ndim >= 2:
+                    self.coef_ = self.coef_.reshape(1, -1)
+            else:
+                # sparse_lstsq cannot handle y with shape (M, K)
+                outs = Parallel(n_jobs=n_jobs_)(
+                    delayed(lsqr)(X_centered, y[:, j].ravel())
+                    for j in range(y.shape[1])
+                )
+                self.coef_ = np.vstack([out[0] for out in outs])
+```
+
+Wait, I need to be very careful about the `y.shape[1]` part. `y` at this point could be 1D or 2D. If 1D, `y.shape[1]` would raise an `IndexError`!
+
+So I need: `y.ndim < 2 or (y.ndim >= 2 and y.shape[1] == 1)` or more simply: `y.ndim < 2 or y.shape[1] == 1` but only if `y.ndim >= 2` for the second part.
+
+Actually, in Python, `y.ndim < 2 or y.shape[1] == 1` - if `y.ndim < 2` is True, the `or` short-circuits and `y.shape[1]` is never evaluated. If `y.ndim >= 2`, then `y.shape[1]` is valid. So this is safe!
+
+Testing:
+- `y` 1D: `y.ndim == 1 < 2`, True, short-circuit. Good.
+- `y` 2D with 1 column: `y.ndim == 2`, first part False, evaluate `y.shape[1] == 1`, True. Good.
+- `y` 2D with >1 column: `y.ndim == 2`, first part False, `y.shape[1] == 1` False. Good.
+
+So `y.ndim < 2 or y.shape[1] == 1` is safe and correct.
+
+But wait, `y.ravel()` for 1D `y` is no-op (returns 1D view). For 2D with 1 column, `y.ravel()` gives 1D with shape `(n_samples,)`.
+
+Then `lsqr(X_centered, y.ravel())[0]` gives `coef_` with shape `(n_features,)`.
+
+For 1D `y`: `y.ndim < 2`, so `if y.ndim >= 2` is False, no reshape. `self.coef_` stays 1D. Good.
+
+For 2D `y` with 1 column: `y.shape[1] == 1`, we do `coef_ = lsqr(...)[0]` then `coef_.reshape(1, -1)`. This gives 2D with shape `(1, n_features)`. Good.
+
+Then later:
+```python
+if y.ndim == 1:
+    self.coef_ = np.ravel(self.coef_)
+```
+
+For 2D `y` with 1 column, `y.ndim == 2`, so no ravel. `self.coef_` stays 2D. Good.
+
+This matches the behavior of the original code where `np.vstack` with a single 1D array gives 2D result.
+
+Hmm wait, I want to double-check: what does `lsqr` return?
+
+`lsqr(A, b)` returns `(x, istop, itn, ...)`. So `[0]` gives `x`, the solution vector. For `b` with shape `(n_samples,)`, `x` has shape `(n_features,)`.
+
+Then for the `Parallel` path: `out[0]` for each `out` is `(n_features,)`, and `np.vstack([out[0]])` gives shape `(1, n_features)`.
+
+My direct code gives the same for 2D `y` with 1 column.
+
+But for 1D `y`, the original code gives `self.coef_` with shape `(n_features,)`. My code also gives `(n_features,)`.
+
+OK, perfect.
+
+Now, one more validation: for `y` sparse in `fit`. If `y` is sparse 2D with 1 column, `y.ndim == 2`, `y.shape[1] == 1`. We call `lsqr(X_centered, y.ravel())`. But `y` is sparse, and `lsqr` needs dense. So `y.ravel()` on a sparse matrix might not give a dense 1D array.
+
+Actually, `scipy.sparse.csr_matrix.ravel()` returns a sparse matrix, not a dense array! To get dense, we'd need `y.toarray().ravel()` or `np.ravel(y.toarray())`.
+
+Hmm, this is a problem. For sparse `y`, we need to densify before `lsqr`. But if `y` is large and sparse, this defeats the purpose.
+
+However, `lsqr` as an iterative algorithm needs to compute `A @ x` and `A.T @ r` multiple times, which requires dense `x` and `r`. So there's no way around densifying `y` at some point.
+
+But maybe we can use a sparse-aware least squares solver? No, `lsqr` is specifically for large sparse linear systems, but it requires dense `b`.
+
+Actually, looking at scipy's `lsqr` implementation: it does work with sparse `A` via `LinearOperator`, but `b` must be array-like (dense). This is by design.
+
+So for sparse `y`, we must densify before calling `lsqr`. The question is whether to do it here or earlier.
+
+Given the constraints, I'll assume that if `y` is sparse, it gets handled somehow, or we can add a conversion. But since the original code didn't explicitly handle sparse `y` in `fit`, maybe this isn't a priority.
+
+Actually, the user's request is "Optimize LinearRegression.fit for sparse X or sparse y data". I think the "sparse y" might refer to the output being multi-output with many zeros, or it might mean `scipy.sparse` matrix. I'll interpret it as handling both efficiently.
+
+For sparse `y` that must be densified for `lsqr`, the optimization is to avoid storing multiple copies. In the current code, with `Parallel`, `y[:, j].ravel()` for each `j` creates a slice and flattens. For sparse `y`, this should work but creates dense copies.
+
+Hmm, let me not overcomplicate this. The clear wins are in `_rescale_data` (early return, direct ops) and `fit` (single-column optimization).
+
+Actually, let me reconsider whether the `y.shape[1] == 1` optimization is substantial enough. The `Parallel` with `n_jobs=None` uses 1 worker by default, and for 1 task, it has some overhead but not huge. The main benefit is avoiding `Parallel` object construction.
+
+But I want to make sure I don't break anything with `parallel_backend`. If someone uses:
+```python
+with parallel_backend('threading', n_jobs=4):
+    reg.fit(X, y)
+```
+
+With `n_jobs=None` in `LinearRegression`, `Parallel(n_jobs=None)` would use the threading backend with 4 workers... wait, no. `n_jobs=None` in `Parallel` means "use default which is 1 unless overridden by context". The context manager sets the default.
+
+Actually, let me re-read joblib's `Parallel` docs. With `n_jobs=None`, it uses `None` which typically means 1, but in a `parallel_backend` context, it might follow the backend's default.
+
+Hmm, I'm not 100% sure. To be safe, let me NOT optimize away the `Parallel` call and instead keep it. The single-column optimization might break context manager behavior.
+
+Or... let me think. If we bypass `Parallel` with direct list comprehension, we always run single-threaded. But if the user explicitly set `n_jobs=4` in `LinearRegression`, then `n_jobs_ = 4`, and we'd still use `Parallel`. The bypass only happens when `n_jobs_ is None or n_jobs_ == 1`... no, I wrote `y.ndim < 2 or y.shape[1] == 1`, which means even with `n_jobs=4` and `y` having 1 column, we'd bypass `Parallel`.
+
+This would be a behavioral change: with `n_jobs=4` and single-column `y`, original code uses 4 workers (though only 1 task so it's wasted), while my code bypasses `Parallel`.
+
+But wait, with 1 task, `Parallel(n_jobs=4)` still runs single-threaded (only 1 task). The parallelization is per-task, and with 1 task, all workers except 1 are idle. So bypassing is correct and more efficient.
+
+However, `Parallel` with a context manager might have side effects or different scheduling. To be absolutely safe, I'll only bypass when `n_jobs_` is `None` or `1`, OR when there really is 1 column:
+
+Actually, let me just not include this optimization. The `_rescale_data` and `_preprocess_data` changes are more important and safer.
+
+But hmm, the user asked to optimize `LinearRegression.fit`. Let me include it but be very careful.
+
+Revised `fit` optimization: only bypass `Parallel` when there's genuinely 1 task and no parallelism is possible:
+
+Actually, even with 1 task, `Parallel` has overhead. But preserving exact behavior might require keeping `Parallel`.
+
+Alright, I'll skip the `fit` optimization to be safe. The `_preprocess_data` and `_rescale_data` changes are the main performance improvements.
+
+Wait, but let me re-check: without the `fit` optimization, what about the case where `y` is 2D with shape `(n_samples, 1)`? This happens if the user passes `y.reshape(-1, 1)` instead of `y.ravel()`. The original code goes to `Parallel` with 1 task. Does this work correctly?
+
+Yes, it does. `Parallel(n_jobs)(... for j in range(1))` with 1 task is fine. The overhead is small but non-zero.
+
+OK, I'll skip the `fit` change and focus on:
+1. `_preprocess_data` for sparse `y`
+2. `_rescale_data` for efficient weight handling
+
+Actually, you know what, let me reconsider the `fit` change. The user explicitly wants speed optimization. The `Parallel` overhead for single-column `y` is real, and avoiding it is a valid optimization. Let me include it but make it very precise:
+
+```python
+            if y.ndim < 2:
+                self.coef_ = lsqr(X_centered, y)[0]
+            elif y.shape[1] == 1:
+                self.coef_ = lsqr(X_centered, y[:, 0])[0]
+                self.coef_ = np.array([self.coef_])
+            else:
+                ...
+```
+
+Wait, `y[:, 0]` might not be 1D for all array types. `.ravel()` is safer. Let me use `y.ravel()` for the `lsqr` input, but only when `y.shape[1] == 1`.
+
+Actually, for `y` with shape `(n_samples, 1)`, `y.ravel()` is shape `(n_samples,)`. But `lsqr` can also work with shape `(n_samples, 1)` input? Let me check... probably not, it expects 1D.
+
+For the original code with `Parallel`, it does `y[:, j].ravel()` which is 1D. For `j=0`, `y[:, 0]` might be 1D or 2D depending on `y`'s type, but `.ravel()` makes it 1D.
+
+For my optimization, I'll use `y.ravel()` or `y[:, 0].ravel()`. But for 1D `y`, we already have the `y.ndim < 2` case.
+
+For 2D with 1 column:
+```python
+self.coef_ = lsqr(X_centered, y.ravel())[0]
+self.coef_ = np.array([self.coef_])
+```
+
+This gives 2D `coef_` with shape `(1, n_features)`.
+
+Hmm, but is `y.ravel()` always the same as `y[:, 0].ravel()` for all array types? For `np.ndarray`, yes. For sparse matrices, `y.ravel()` returns a sparse matrix (not flattened to 1D in the traditional sense).
+
+Actually, for scipy sparse, `ravel()` returns a 1xN or Nx1 sparse matrix, not a 1D array. So `lsqr(X_centered, y.ravel())` with sparse `y` would fail.
+
+But if `y` is sparse, we need `y.toarray().ravel()`. However, as discussed, sparse `y` in `fit` might not be well-supported currently.
+
+To keep things simple and correct for the dense `y` case, I'll use `y[:, 0]` which for dense `y` gives 1D, and then `.ravel()` to be safe:
+
+```python
+elif y.shape[1] == 1:
+    self.coef_ = lsqr(X_centered, y[:, 0].ravel())[0]
+    self.coef_ = np.array([self.coef_])
+```
+
+Actually `y[:, 0]` for numpy 2D with shape `(n, 1)` gives shape `(n,)` - a 1D array. The `.ravel()` is redundant but harmless.
+
+For the `Parallel` path, the original does `y[:, j].ravel()` for each `j`. For `j=0`, this is `y[:, 0].ravel()`. Same as my direct call. Good.
+
+But wait, what if `y` is a pandas DataFrame or some other array-like? `y[:, 0]` might return a Series or other type. `.ravel()` might not work on it. But the original code also does `y[:, j].ravel()`, so if that works, mine should too.
+
+Actually, by the time we reach `fit`, `y` has been through `_validate_data` which should have converted it to a numpy array (unless sparse, which is a special case). So `y` is either `np.ndarray` or sparse matrix at this point.
+
+For `np.ndarray`, `y[:, 0]` is fine. For sparse, we may or may not reach this code.
+
+OK let me just include the optimization. It's standard in sklearn to have special cases for single-column to avoid unnecessary overhead.
+
+Actually no, you know what, I want to re-examine whether the user really needs this or if the core optimization is elsewhere. Looking at profiling data for `LinearRegression` (which I don't have, but can estimate), the main bottleneck for sparse `X` is:
+
+1. **Matrix-vector products in `lsqr`** - This is O(nnz) per iteration and is the dominant cost. Can't be avoided.
+
+2. **`_rescale_data` creating `dia_matrix`** - Fixed by my early return and direct ops.
+
+3. **`_preprocess_data` mean/variance computation** - This is O(nnz) for sparse `X`, necessary for centering.
+
+4. **`Parallel` overhead** - Only matters for multi-output with few columns.
+
+For most use cases (single-output linear regression), the `lsqr` iteration dominates. `_rescale_data` is called once, so any optimization there is minor unless it's a big-O improvement (which it isn't, just constant factors).
+
+But for large sparse `X` with `sample_weight=None` (the default), avoiding the `dia_matrix` creation and multiplication in `_rescale_data` is a clear win, especially since the early return completely skips unnecessary work.
+
+Similarly, proper handling of sparse `y` in `_preprocess_data` is important for correctness and memory.
+
+I'll include the single-column `fit` optimization too, as it's a small but clean improvement.
+
+Let me finalize my changes:
+
+### Block 1: `_preprocess_data` - sparse y handling
+
+```python
+sklearn/linear_model/_base.py
+[SEARCH]
+    y = np.asarray(y, dtype=X.dtype)
+[/SEARCH]
+[REPLACE]
+    if sp.issparse(y):
+        y = y.astype(X.dtype, copy=False)
+    else:
+        y = np.asarray(y, dtype=X.dtype)
+[/REPLACE]
+```
+
+### Block 2: `_rescale_data` - efficient rescaling
+
+```python
+sklearn/linear_model/_base.py
+[SEARCH]
+    n_samples = X.shape[0]
+    sample_weight = np.asarray(sample_weight)
+    if sample_weight.ndim == 0:
+        sample_weight = np.full(n_samples, sample_weight, dtype=sample_weight.dtype)
+    sample_weight_sqrt = np.sqrt(sample_weight)
+    sw_matrix = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples))
+    X = safe_sparse_dot(sw_matrix, X)
+    y = safe_sparse_dot(sw_matrix, y)
+    return X, y, sample_weight_sqrt
+[/SEARCH]
+[REPLACE]
+    n_samples = X.shape[0]
+    sample_weight = np.asarray(sample_weight)
+    if sample_weight.ndim == 0:
+        sample_weight = np.full(n_samples, sample_weight, dtype=sample_weight.dtype)
+    sample_weight_sqrt = np.sqrt(sample_weight)
+
+    if np.all(sample_weight_sqrt == 1):
+        return X, y, sample_weight_sqrt
+
+    if sp.issparse(X):
+        X = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples)) @ X
+    else:
+        X = X * sample_weight_sqrt[:, np.newaxis]
+
+    if sp.issparse(y):
+        y = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples)) @ y
+    elif y.ndim == 1:
+        y = y * sample_weight_sqrt
+    else:
+        y = y * sample_weight_sqrt[:, np.newaxis]
+
+    return X, y, sample_weight_sqrt
+[/REPLACE]
+```
+
+### Block 3: `fit` - single column optimization
+
+```python
+sklearn/linear_model/_base.py
+[SEARCH]
+            if y.ndim < 2:
+                self.coef_ = lsqr(X_centered, y)[0]
+            else:
+                # sparse_lstsq cannot handle y with shape (M, K)
+                outs = Parallel(n_jobs=n_jobs_)(
+                    delayed(lsqr)(X_centered, y[:, j].ravel())
+                    for j in range(y.shape[1])
+                )
+                self.coef_ = np.vstack([out[0] for out in outs])
+[/SEARCH]
+[REPLACE]
+            if y.ndim < 2:
+                self.coef_ = lsqr(X_centered, y)[0]
+            elif y.shape[1] == 1:
+                self.coef_ = lsqr(X_centered, y[:, 0].ravel())[0]
+                self.coef_ = np.array([self.coef_])
+            else:
+                # sparse_lstsq cannot handle y with shape (M, K)
+                outs = Parallel(n_jobs=n_jobs_)(
+                    delayed(lsqr)(X_centered, y[:, j].ravel())
+                    for j in range(y.shape[1])
+                )
+                self.coef_ = np.vstack([out[0] for out in outs])
+[/REPLACE]
+```
+
+Wait, I need to verify: `y[:, 0]` for a 2D sparse matrix - does it work the same as for dense? For `csr_matrix`, `y[:, 0]` gives a sparse matrix with shape `(n_samples, 1)`. Then `.ravel()` gives a sparse matrix with shape `(1, n_samples)` or `(n_samples, 1)`... actually, scipy sparse `ravel()` returns a sparse matrix, not a dense 1D array.
+
+But, as discussed, if `y` is sparse and reaches this code, the original `y[:, j].ravel()` in `Parallel` would also produce a sparse matrix for `lsqr`, which might fail. So either way, sparse `y` is not fully supported in this path.
+
+For dense `y` (numpy array), `y[:, 0]` for `y` with shape `(n, 1)` gives shape `(n,)`. `.ravel()` is a no-op for the shape but ensures 1D. This is correct.
+
+One more consideration: should I check if `y` is a matrix subclass? `np.matrix` has different `ravel()` behavior. But sklearn generally doesn't use `np.matrix` anymore.
+
+Alright, I'm going with these three changes. Let me make sure they meet all constraints:
+- Preserve exact semantics and outputs: Yes, tested above.
+- Preserve all public APIs: Yes, we only change internal functions.
+- Do not modify tests: No test changes.
+
+Actually, wait. I want to double-check: does the single-column optimization in `fit` preserve semantics for all edge cases?
+
+Edge cases:
+1. `y` is 2D with shape `(n, 1)` - my code gives `coef_` shape `(1, n_features)`. Original `Parallel` code: `y[:, 0].ravel()` gives 1D, `lsqr` gives `coef` 1D, `vstack` with single element gives `(1, n_features)`. Same!
+2. `y` is 2D with shape `(n, m)` where `m > 1` - unchanged.
+3. `y` is 1D - unchanged.
+
+One more subtlety: the `lsqr` function has additional return values. In both cases, we take `[0]` (the solution). For the parallel case, `out[0]` where `out = lsqr(...)`. For direct case: `lsqr(...)[0]`. Same.
+
+Another subtlety: floating point determinism. `lsqr` with the same inputs should give the same result. No issue.
+
+What about the `LinearOperator` behavior? `lsqr` iterates and calls `matvec`. With single-call vs `Parallel`, the same `lsqr` algorithm runs, so same number of `matvec` calls. No issue.
+
+OK I'm confident.
+
+But actually, let me reconsider whether we should include the `fit` change at all. The user asked to "optimize for speed and memory efficiency". The `_rescale_data` change gives both (avoids creating `dia_matrix`, avoids unnecessary multiplication). The `_preprocess_data` change gives memory efficiency for sparse `y`. The `fit` change gives minor speed improvement for single-column 2D `y`.
+
+Given that the user is a "performance engineer" and wants to "optimize", they probably want all reasonable optimizations. Let me include it.
+
+Actually, one more thought: the `fit` change for `y.shape[1] == 1` might not be related to "sparse X or sparse y data" per se. It's a general optimization. But it's valid.
+
+Hmm, I just want to make sure about one thing. The user's title says "Optimize LinearRegression.fit for sparse X or sparse y data". Maybe I should focus on the sparse-specific parts and not include a general `fit` optimization that isn't specifically about sparsity.
+
+For sparse `X`, the path goes through `lsqr`. For single-column `y` with sparse `X`, avoiding `Parallel` is a valid optimization because `Parallel` has overhead that matters more when `lsqr` itself is relatively fast (which might be the case for small problems or single-column `y`).
+
+But for really large sparse `X`, `lsqr` dominates and `Parallel` overhead is negligible.
+
+I'll include it since it's part of `LinearRegression.fit` and provides a speedup.
+
+Actually, one last thought: in `fit`, after my changes, for `y` with `y.shape[1] == 1`, we do `self.coef_ = np.array([self.coef_])`. For the `Parallel` path, `np.vstack` was used. Does `np.array` always give the same format?
+
+For 1D `coef_` with shape `(n_features,)`:
+- `np.vstack([coef_])` gives shape `(1, n_features)`, dtype same as `coef_`
+- `np.array([coef_])` gives shape `(1, n_features)`, dtype same as `coef_`
+
+Same result. Good.
+
+OK, I'm done with analysis. Let me write the final output.
+
+Wait, I want to test one more thing mentally. What if `coef_` from `lsqr` is not contiguous or has some weird striding? Both `np.vstack` and `np.array` should handle this.
+
+Also, for `y` with `y.shape[1] == 1`, is `y[:, 0]` always valid? For numpy arrays, yes. For scipy sparse, `y[:, 0]` gives a sparse submatrix. `.ravel()` on sparse... might not work with `lsqr`.
+
+But if `y` were sparse, it would need to have been converted to dense earlier. The current code doesn't do this. I think sparse `y` support might be partial in sklearn's `LinearRegression`.
+
+Let me check: in `_validate_data`, with `y_numeric=True` and `multi_output=True`, what happens to sparse `y`?
+
+Looking at sklearn's source (from memory), `_validate_data` eventually calls `check_array` or similar for `y`. For `y_numeric=True`, it might call `_check_y` which could reject sparse `y` or convert it.
+
+Actually, I don't need to know this for sure.我的 changes don't make things worse for sparse `y`.
+
+Alright, final output time.
+
+One more thing: in `_preprocess_data`, after my change, if `y` is sparse, it stays sparse. Then `y = y - y_offset` - for sparse `y` and scalar/vector `y_offset`, this might fail or produce unexpected results. Let me check.
+
+In scipy, `sparse_matrix - scalar` is not supported directly. `sparse_matrix - np.array` might work for some shapes but not others. This could be an issue!
+
+Looking at `_preprocess_data`:
+```python
+y_offset = np.average(y, axis=0, weights=sample_weight)
+y = y - y_offset
+```
+
+For sparse `y`, `np.average(y, ...)` might fail because `np.average` doesn't natively support sparse matrices.
+
+Oh! This is important. My change to keep `y` sparse in `_preprocess_data` needs to also handle the mean calculation and subtraction for sparse `y`.
+
+Let me look at the current code path for `y`:
+```python
+y = np.asarray(y, dtype=X.dtype)
+...
+y_offset = np.average(y, axis=0, weights=sample_weight)
+y = y - y_offset
+```
+
+If `y` is sparse, `np.asarray(y)` with default settings gives... actually, as I mentioned earlier, for a scipy sparse matrix `y`, `np.asarray(y)` returns a 0-dimensional array containing the sparse matrix object. Then `np.average(y, axis=0, ...)` would fail because `y` is not really a numeric array.
+
+So the current code ALREADY fails for sparse `y`! This means my "fix" for sparse `y` is actually necessary for it to work at all, not just an optimization.
+
+But wait, if sparse `y` currently fails, then tests probably don't cover it, and changing behavior to support it might be a feature addition, not an optimization.
+
+The user specifically said "without altering its behavior". If sparse `y` currently errors, then making it work is changing behavior. But if the user wants optimization for sparse `y`, they might expect it to work.
+
+Hmm, this is ambiguous. Let me re-read: "Your objective is to optimize sklearn.linear_model.LinearRegression.fit for speed and memory efficiency without altering its behavior, public APIs, or test expectations."
+
+I think "behavior" means for the cases that currently work. For cases that currently error (like sparse `y`), making them work is a behavioral change, but in a good way. However, the conservative interpretation is to only optimize working code paths.
+
+Actually, for sparse `X` (which definitely works), the main optimization is in `_rescale_data`. For sparse `y` (which might or might not work), I'll add basic handling to avoid errors.
+
+But in `_preprocess_data`, if I change:
+```python
+y = np.asarray(y, dtype=X.dtype)
+```
+
+to convert sparse `y` to dense immediately (which is what would happen in practice), then:
+```python
+if sp.issparse(y):
+    y = y.toarray(dtype=X.dtype)
+else:
+    y = np.asarray(y, dtype=X.dtype)
+```
+
+This preserves the current "behavior" for dense `y` and makes sparse `y` work by converting to dense (which is what we need for `lsqr` anyway).
+
+Wait, but `np.asarray(y)` for sparse `y` doesn't convert properly. It creates an object array. So the current behavior for sparse `y` is to produce a malformed array or error. Converting properly with `toarray()` is the right thing and makes the feature work.
+
+However, the user said "without altering its behavior", which might mean we should preserve existing errors too. But that seems pedantic.
+
+Let me look at what happens in current code if `y` is sparse:
+
+1. `_validate_data(X, y, ...)` is called. Does it accept sparse `y`? With `y_numeric=True`, it likely calls `check_array(y, ...)` or similar, which might not accept sparse by default.
+
+Actually, tracing through: `BaseEstimator._validate_data` calls `check_X_y` or similar, which for `y` with `y_numeric=True` calls `check_array(y, ensure_2d=False, dtype='numeric')` or `column_or_1d`.
+
+For `check_array` with sparse input and default `accept_sparse=False` (or no `accept_sparse` parameter for `y`), it would reject sparse `y`.
+
+So in `LinearRegression.fit`, `self._validate_data(X, y, ...)` might already reject sparse `y` before reaching `_preprocess_data`.
+
+Let me verify by looking at the code: `accept_sparse=accept_sparse` is passed, which is for `X`, not `y`. The `y` parameter has no `accept_sparse`. So `y` is validated as dense, and sparse `y` would be rejected.
+
+This means the sparse `y` case is not currently supported! The "sparse y data" in the user's request might be a misstatement, or they want us to prepare for it, or they mean something else.
+
+Given this, I'll focus my optimization on **sparse X** which is the well-supported case. The `_rescale_data` optimization directly benefits sparse X. The `_preprocess_data` change for `y` can be kept minimal.
+
+Actually, to be maximally safe, I'll change `_preprocess_data` to:
+```python
+if sp.issparse(y):
+    y = y.toarray(dtype=X.dtype)
+else:
+    y = np.asarray(y, dtype=X.dtype)
+```
+
+This preserves exact behavior for dense `y` (no change) and properly handles sparse `y` by converting to dense (which is what `np.asarray` should have done but didn't).
+
+For the rest, my changes are all optimizations for the working code path.
+
+One more thing: in `_rescale_data`, the docstring says `y_rescaled : {array-like, sparse matrix}`. But if `y` is dense, the result is dense. If `y` is sparse (and we get there), the result is sparse. Both are fine.
+
+OK, final answer. Let me double-check the search strings one more time to make sure they match exactly.
+
+For `_preprocess_data`, searching for:
+```python
+    y = np.asarray(y, dtype=X.dtype)
+```
+
+This should uniquely identify the location.
+
+For `_rescale_data`, I need to include the exact lines. Let me re-read the original:
+
+```python
+    n_samples = X.shape[0]
+    sample_weight = np.asarray(sample_weight)
+    if sample_weight.ndim == 0:
+        sample_weight = np.full(n_samples, sample_weight, dtype=sample_weight.dtype)
+    sample_weight_sqrt = np.sqrt(sample_weight)
+    sw_matrix = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples))
+    X = safe_sparse_dot(sw_matrix, X)
+    y = safe_sparse_dot(sw_matrix, y)
+    return X, y, sample_weight_sqrt
+```
+
+For `fit`, searching for:
+
+```python
+            if y.ndim < 2:
+                self.coef_ = lsqr(X_centered, y)[0]
+            else:
+                # sparse_lstsq cannot handle y with shape (M, K)
+                outs = Parallel(n_jobs=n_jobs_)(
+                    delayed(lsqr)(X_centered, y[:, j].ravel())
+                    for j in range(y.shape[1])
+                )
+                self.coef_ = np.vstack([out[0] for out in outs])
+```
+
+These are exact.
+
+Let me also consider if `np.all(sample_weight_sqrt == 1)` is the best check. What if `sample_weight_sqrt` is very close to 1 but not exactly? Like `1.0000000000000001` due to floating point? The early return should probably use exact equality since we're checking if the original `sample_weight` was all ones or all same value that gives sqrt=1.
+
+Actually, `sample_weight` comes from `_check_sample_weight`. If `sample_weight=None`, it returns `np.ones(...)`, so `sample_weight_sqrt` is exactly 1. If user passes explicit `sample_weight=np.ones(...)`, same. If user passes `sample_weight=[1.0, 1.0, ...]`, same. For other cases, we do the rescaling.
+
+Using exact `==` is correct here because we want to avoid rescaling only when it's truly a no-op.
+
+But wait, what about `sample_weight` being a single number like `4.0`? Then `sample_weight_sqrt = 2.0`, not 1. So we need rescaling. Correct.
+
+What about `sample_weight` being `np.full(n, 2.25)`? Then `sample_weight_sqrt` is `1.5`, all equal, but not 1. We still need to rescale.
+
+So the check `np.all(sample_weight_sqrt == 1)` is correct and sufficient.
+
+Is `np.all` efficient for large arrays? It's O(n) which is same as the rescaling itself, but it's a fast vectorized operation. In the common case (all ones or not), it's quick. And if we skip the rescaling, we save O(nnz) or O(n*m) work. For large matrices, this is a big win.
+
+For the case where `sample_weight_sqrt != 1`, the `np.all` adds a small overhead, but it's minimal compared to the actual work.
+
+Alright, I'm fully satisfied. Let me write the output.</think>sklearn/linear_model/_base.py
+[SEARCH]
+    y = np.asarray(y, dtype=X.dtype)
+[/SEARCH]
+[REPLACE]
+    if sp.issparse(y):
+        y = y.toarray(dtype=X.dtype)
+    else:
+        y = np.asarray(y, dtype=X.dtype)
+[/REPLACE]
+
+sklearn/linear_model/_base.py
+[SEARCH]
+    n_samples = X.shape[0]
+    sample_weight = np.asarray(sample_weight)
+    if sample_weight.ndim == 0:
+        sample_weight = np.full(n_samples, sample_weight, dtype=sample_weight.dtype)
+    sample_weight_sqrt = np.sqrt(sample_weight)
+    sw_matrix = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples))
+    X = safe_sparse_dot(sw_matrix, X)
+    y = safe_sparse_dot(sw_matrix, y)
+    return X, y, sample_weight_sqrt
+[/SEARCH]
+[REPLACE]
+    n_samples = X.shape[0]
+    sample_weight = np.asarray(sample_weight)
+    if sample_weight.ndim == 0:
+        sample_weight = np.full(n_samples, sample_weight, dtype=sample_weight.dtype)
+    sample_weight_sqrt = np.sqrt(sample_weight)
+
+    if np.all(sample_weight_sqrt == 1):
+        return X, y, sample_weight_sqrt
+
+    if sp.issparse(X):
+        X = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples)) @ X
+    else:
+        X = X * sample_weight_sqrt[:, np.newaxis]
+
+    if sp.issparse(y):
+        y = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples)) @ y
+    elif y.ndim == 1:
+        y = y * sample_weight_sqrt
+    else:
+        y = y * sample_weight_sqrt[:, np.newaxis]
+
+    return X, y, sample_weight_sqrt
+[/REPLACE]
+
+sklearn/linear_model/_base.py
+[SEARCH]
+            if y.ndim < 2:
+                self.coef_ = lsqr(X_centered, y)[0]
+            else:
+                # sparse_lstsq cannot handle y with shape (M, K)
+                outs = Parallel(n_jobs=n_jobs_)(
+                    delayed(lsqr)(X_centered, y[:, j].ravel())
+                    for j in range(y.shape[1])
+                )
+                self.coef_ = np.vstack([out[0] for out in outs])
+[/SEARCH]
+[REPLACE]
+            if y.ndim < 2:
+                self.coef_ = lsqr(X_centered, y)[0]
+            elif y.shape[1] == 1:
+                self.coef_ = lsqr(X_centered, y[:, 0].ravel())[0]
+                self.coef_ = np.array([self.coef_])
+            else:
+                # sparse_lstsq cannot handle y with shape (M, K)
+                outs = Parallel(n_jobs=n_jobs_)(
+                    delayed(lsqr)(X_centered, y[:, j].ravel())
+                    for j in range(y.shape[1])
+                )
+                self.coef_ = np.vstack([out[0] for out in outs])
+[/REPLACE]

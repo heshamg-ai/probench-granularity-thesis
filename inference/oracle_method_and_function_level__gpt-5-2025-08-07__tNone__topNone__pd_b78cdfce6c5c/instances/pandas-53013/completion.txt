@@ -1,0 +1,19 @@
+pandas/core/arrays/masked.py
+[SEARCH]
+    def reshape(self, *args, **kwargs) -> Self:
+        data = self._data.reshape(*args, **kwargs)
+        mask = self._mask.reshape(*args, **kwargs)
+        return type(self)(data, mask)
+[/SEARCH]
+[REPLACE]
+    def reshape(self, *args, **kwargs) -> Self:
+        new_data = self._data.reshape(*args, **kwargs)
+        if new_data is self._data:
+            return self
+        order = kwargs.get('order', None)
+        if order is None:
+            new_mask = self._mask.reshape(new_data.shape)
+        else:
+            new_mask = self._mask.reshape(new_data.shape, order=order)
+        return type(self)(new_data, new_mask, copy=False)
+[/REPLACE]

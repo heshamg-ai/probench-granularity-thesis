@@ -1,0 +1,29 @@
+pandas/core/sorting.py
+[SEARCH]
+    elif isinstance(target, ABCMultiIndex):
+        codes = [lev.codes for lev in target._get_codes_for_sorting()]
+        indexer = lexsort_indexer(
+            codes, orders=ascending, na_position=na_position, codes_given=True
+        )
+[/SEARCH]
+[REPLACE]
+    elif isinstance(target, ABCMultiIndex):
+        # Fastpath: if the MultiIndex is already monotonic in the requested
+        # order and NA position is 'last' (the default), we can avoid constructing
+        # the lexsort indexer.
+        if na_position == "last":
+            if isinstance(ascending, list):
+                if ascending and all(ascending) and target.is_monotonic_increasing:
+                    return None
+                if ascending and (not any(ascending)) and target.is_monotonic_decreasing:
+                    return None
+            else:
+                if (ascending and target.is_monotonic_increasing) or (
+                    not ascending and target.is_monotonic_decreasing
+                ):
+                    return None
+        codes = [lev.codes for lev in target._get_codes_for_sorting()]
+        indexer = lexsort_indexer(
+            codes, orders=ascending, na_position=na_position, codes_given=True
+        )
+[/REPLACE]

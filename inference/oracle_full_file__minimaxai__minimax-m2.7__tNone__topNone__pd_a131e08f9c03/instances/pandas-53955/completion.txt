@@ -1,0 +1,144 @@
+
+
+Let me search for the intersection method in the MultiIndex class and understand its current implementation.
+
+pandas/core/indexes/multi.py
+[SEARCH]
+    def _wrap_intersection_result(self, other, result) -> MultiIndex:
+        _, result_names = self._convert_can_do_setop(other)
+        return result.set_names(result_names)
+
+    def _wrap_difference_result(self, other, result: MultiIndex) -> MultiIndex:
+        _, result_names = self._convert_can_do_setop(other)
+
+        if len(result) == 0:
+            return result.remove_unused_levels().set_names(result_names)
+        else:
+            return result.set_names(result_names)
+
+    def _convert_can_do_setop(self, other):
+        result_names = self.names
+
+        if not isinstance(other, Index):
+            if len(other) == 0:
+                return self[:0], self.names
+            else:
+                msg = "other must be a MultiIndex or a list of tuples"
+                try:
+                    other = MultiIndex.from_tuples(other, names=self.names)
+                except (ValueError, TypeError) as err:
+                    # ValueError raised by tuples_to_object_array if we
+                    #  have non-object dtype
+                    raise TypeError(msg) from err
+        else:
+            result_names = get_unanimous_names(self, other)
+
+        return other, result_names
+[/SEARCH]
+[REPLACE]
+    def intersection(self, other, sort=None):
+        """
+        Form the intersection of two MultiIndex objects.
+
+        Parameters
+        ----------
+        other : MultiIndex or array-like
+            The other index to intersect with.
+        sort : True, False or None, default None
+            Sort the resulting MultiIndex if possible.
+
+            .. versionadded:: 2.0.0
+
+        Returns
+        -------
+        MultiIndex
+            The intersection of both indexes.
+
+        Notes
+        -----
+       ``other`` must be a MultiIndex or a list of tuples.
+
+        Examples
+        --------
+        >>> mi1 = pd.MultiIndex.from_arrays([['a', 'b', 'c'], ['x', 'y', 'z']])
+        >>> mi2 = pd.MultiIndex.from_arrays([['a', 'b', 'd'], ['x', 'y', 'z']])
+        >>> mi1.intersection(mi2)
+        MultiIndex([('a', 'x'), ('b', 'y')],
+                   )
+        """
+        # Optimized path: both are MultiIndex with same levels
+        if isinstance(other, MultiIndex) and self._can_do_setop(other):
+            # Check if levels are equal (fast path for identical structures)
+            if self.equal_levels(other):
+                # Use set intersection on internal integer representation
+                if self.is_unique and other.is_unique:
+                    left_int = self._engine._codes_to_ints(
+                        np.vstack(self.codes).T
+                    )
+                    right_int = other._engine._codes_to_ints(
+                        np.vstack(other.codes).T
+                    )
+                    # Use numpy intersect1d which is highly optimized
+                    mask = np.in1d(left_int, right_int)
+                    if not mask.any():
+                        return self[:0].rename(self.names)
+
+                    # Build result from matching indices
+                    new_codes = [codes[mask] for codes in self.codes]
+                    return MultiIndex(
+                        levels=self.levels,
+                        codes=new_codes,
+                        names=self.names,
+                        sortorder=None,
+                        verify_integrity=False,
+                    )._wrap_intersection_result(other)
+
+        # Fall back to generic Index.intersection
+        return super().intersection(other, sort)
+
+    def _can_do_setop(self, other) -> bool:
+        """
+        Check if we can do optimized set operations with other.
+        """
+        if not isinstance(other, MultiIndex):
+            return False
+        if len(self) == 0 or len(other) == 0:
+            return False
+        if self.nlevels != other.nlevels:
+            return False
+        # Must have compatible levels for efficient intersection
+        return True
+
+    def _wrap_intersection_result(self, other, result) -> MultiIndex:
+        _, result_names = self._convert_can_do_setop(other)
+        if len(result) == 0:
+            return result.remove_unused_levels().set_names(result_names)
+        return result.set_names(result_names)
+
+    def _wrap_difference_result(self, other, result: MultiIndex) -> MultiIndex:
+        _, result_names = self._convert_can_do_setop(other)
+
+        if len(result) == 0:
+            return result.remove_unused_levels().set_names(result_names)
+        else:
+            return result.set_names(result_names)
+
+    def _convert_can_do_setop(self, other):
+        result_names = self.names
+
+        if not isinstance(other, Index):
+            if len(other) == 0:
+                return self[:0], self.names
+            else:
+                msg = "other must be a MultiIndex or a list of tuples"
+                try:
+                    other = MultiIndex.from_tuples(other, names=self.names)
+                except (ValueError, TypeError) as err:
+                    # ValueError raised by tuples_to_object_array if we
+                    #  have non-object dtype
+                    raise TypeError(msg) from err
+        else:
+            result_names = get_unanimous_names(self, other)
+
+        return other, result_names
+[/REPLACE]

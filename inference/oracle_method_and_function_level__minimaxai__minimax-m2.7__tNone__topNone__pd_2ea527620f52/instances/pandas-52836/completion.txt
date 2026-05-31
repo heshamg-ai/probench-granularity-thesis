@@ -1,0 +1,63 @@
+
+
+Looking at the code, I need to add a specialized fast path for masked arrays in the `transpose` method. The new function `transpose_homogenous_masked_arrays` from `pandas.core.arrays.masked` should be used when the DataFrame contains masked extension array types.
+
+Let me add this optimization:
+
+pandas/core/frame.py
+[SEARCH]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            # We have EAs with the same dtype. We can preserve that dtype in transpose.
+            dtype = dtypes[0]
+            arr_type = dtype.construct_array_type()
+            values = self.values
+
+            new_values = [arr_type._from_sequence(row, dtype=dtype) for row in values]
+            result = type(self)._from_arrays(
+                new_values, index=self.columns, columns=self.index
+            )
+[/SEARCH]
+[REPLACE]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            # We have EAs with the same dtype. We can preserve that dtype in transpose.
+            dtype = dtypes[0]
+
+            # Check if all columns are masked extension arrays
+            from pandas.core.arrays.masked import transpose_homogenous_masked_arrays
+
+            if isinstance(dtype, ExtensionDtype) and dtype.name in (
+                "Int8",
+                "Int16",
+                "Int32",
+                "Int64",
+                "UInt8",
+                "UInt16",
+                "UInt32",
+                "UInt64",
+                "Float32",
+                "Float64",
+            ):
+                # Use optimized transpose for masked extension arrays
+                new_values, new_index, new_columns = transpose_homogenous_masked_arrays(
+                    self._values, self.columns, self.index
+                )
+                result = type(self)._from_arrays(
+                    new_values, index=new_index, columns=new_columns
+                )
+            else:
+                arr_type = dtype.construct_array_type()
+                values = self.values
+
+                new_values = [arr_type._from_sequence(row, dtype=dtype) for row in values]
+                result = type(self)._from_arrays(
+                    new_values, index=self.columns, columns=self.index
+                )
+[/REPLACE]

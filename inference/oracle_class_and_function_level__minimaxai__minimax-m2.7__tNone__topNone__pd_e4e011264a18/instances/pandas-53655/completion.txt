@@ -1,0 +1,45 @@
+
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        result_data = []
+        for lst in split.to_pylist():
+            if lst is None:
+                result_data.append([False] * len(uniques_sorted))
+            else:
+                res = pc.is_in(uniques_sorted, pa.array(set(lst)))
+                result_data.append(res.to_pylist())
+        result = type(self)(pa.array(result_data))
+        return result, uniques_sorted.to_pylist()
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+
+        # Get unique values
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        n_unique = len(uniques_sorted)
+
+        if n_unique == 0:
+            result = type(self)(pa.array([], type=pa.bool_()))
+            return result, uniques_sorted.to_pylist()
+
+        n_rows = len(self)
+        result_matrix = np.zeros((n_rows, n_unique), dtype=np.bool_)
+
+        # Iterate over unique values - only call to_pylist() on smaller index arrays
+        for i in range(n_unique):
+            val = uniques_sorted[i]
+            indices = pc.index_in_array(split, val)
+            row_indices = indices.to_pylist()
+            for row_idx in row_indices:
+                result_matrix[row_idx, i] = True
+
+        result = type(self)(pa.array(result_matrix))
+        return result, uniques_sorted.to_pylist()
+[/REPLACE]

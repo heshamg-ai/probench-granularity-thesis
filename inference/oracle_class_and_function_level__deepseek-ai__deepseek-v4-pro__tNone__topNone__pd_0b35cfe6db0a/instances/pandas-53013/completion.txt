@@ -1,0 +1,20 @@
+pandas/core/arrays/masked.py
+[SEARCH]
+    def reshape(self, *args, **kwargs) -> Self:
+        data = self._data.reshape(*args, **kwargs)
+        mask = self._mask.reshape(*args, **kwargs)
+        return type(self)(data, mask)
+[/SEARCH]
+[REPLACE]
+    def reshape(self, *args, **kwargs) -> Self:
+        # Delegate the heavy lifting to numpy's reshape
+        # Using order='K' by default to match numpy default behavior
+        order = kwargs.get("order", "C")
+        data = self._data.reshape(*args, order=order)
+        mask = self._mask.reshape(*args, order=order)
+        # When shapes are identical, we can avoid unnecessary validation and copy
+        if data.base is self._data.base and mask.base is self._mask.base:
+            # Views – safe fast path
+            return type(self)(data, mask, copy=False)
+        return type(self)(data, mask)
+[/REPLACE]

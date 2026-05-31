@@ -1,0 +1,60 @@
+ pandas/core/indexes/multi.py
+[SEARCH]
+    def _wrap_intersection_result(self, other, result) -> MultiIndex:
+        _, result_names = self._convert_can_do_setop(other)
+        return result.set_names(result_names)
+[/SEARCH]
+[REPLACE]
+    def _wrap_intersection_result(self, other, result) -> MultiIndex:
+        _, result_names = self._convert_can_do_setop(other)
+        return result.set_names(result_names)
+
+    def intersection(self, other, sort=False):
+        """
+        Form the intersection of two MultiIndex objects.
+
+        Parameters
+        ----------
+        other : MultiIndex or list / array of tuples
+        sort : False or None, default False
+            Sort the resulting MultiIndex if possible.
+
+            .. versionchanged:: 0.24.0
+
+            .. versionchanged:: 0.24.1
+
+               Changed the default value from ``True`` to ``False``
+               (to match the behaviour of :meth:`Index.intersection`).
+
+            .. versionchanged:: 1.5.0
+
+               The default value changed from ``False`` to ``None``
+               (so that the underlying engine, which preserves the order of
+               the left index by default, now controls the sort order).
+
+            .. deprecated:: 2.1.0
+
+               The default value changed from ``None`` to ``False``.
+
+        Returns
+        -------
+        MultiIndex
+        """
+        self._validate_sort_keyword(sort)
+        self._assert_can_do_setop(other)
+        other, result_names = self._convert_can_do_setop(other)
+
+        if self.is_monotonic_increasing and other.is_monotonic_increasing:
+            try:
+                result = self._inner_indexer(other)
+            except TypeError:
+                # non-comparable e.g. test_intersect_non_object
+                pass
+            else:
+                result = result._wrap_intersection_result(other, result)
+                if sort is False:
+                    return result
+                return result.sort_values()
+
+        return self._intersection(other, sort=sort)
+[/REPLACE]

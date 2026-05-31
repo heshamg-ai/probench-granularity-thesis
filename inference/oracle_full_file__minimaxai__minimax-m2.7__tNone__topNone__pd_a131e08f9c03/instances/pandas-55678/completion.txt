@@ -1,0 +1,87 @@
+
+
+Looking at the code, the issue is in `_AsOfMerge._get_join_indexers` where `by` columns with different dtypes are converted to arrays without first ensuring they have compatible dtypes. This can cause performance issues and potential errors. Let me optimize this by adding dtype normalization for `by` columns.
+
+pandas/core/reshape/merge.py
+[SEARCH]
+            # get tuple representation of values if more than one
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+                if needs_i8_conversion(lbv.dtype):
+                    lbv = lbv.view("i8")
+                if needs_i8_conversion(rbv.dtype):
+                    rbv = rbv.view("i8")
+            else:
+                # We get here with non-ndarrays in test_merge_by_col_tz_aware
+                #  and test_merge_groupby_multiple_column_with_categorical_column
+                mapped = [
+                    _factorize_keys(
+                        left_by_values[n],
+                        right_by_values[n],
+                        sort=False,
+                        how="left",
+                    )
+                    for n in range(len(left_by_values))
+                ]
+                arrs = [np.concatenate(m[:2]) for m in mapped]
+                shape = tuple(m[2] for m in mapped)
+                group_index = get_group_index(
+                    arrs, shape=shape, sort=False, xnull=False
+                )
+                left_len = len(left_by_values[0])
+                lbv = group_index[:left_len]
+                rbv = group_index[left_len:]
+[/SEARCH]
+[REPLACE]
+            # get tuple representation of values if more than one
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+                # Normalize dtypes for by columns to ensure compatibility
+                # This avoids issues when left and right have different dtypes
+                if lbv.dtype != rbv.dtype:
+                    if is_numeric_dtype(lbv.dtype) and is_numeric_dtype(rbv.dtype):
+                        # Find common numeric type
+                        common_type = find_common_type([lbv.dtype, rbv.dtype])
+                        if not isinstance(common_type, ExtensionDtype):
+                            lbv = lbv.astype(common_type)
+                            rbv = rbv.astype(common_type)
+                    elif is_string_dtype(lbv.dtype) and is_string_dtype(rbv.dtype):
+                        # Both string types - convert to object for comparison
+                        lbv = lbv.astype(np.object_)
+                        rbv = rbv.astype(np.object_)
+
+                if needs_i8_conversion(lbv.dtype):
+                    lbv = lbv.view("i8")
+                if needs_i8_conversion(rbv.dtype):
+                    rbv = rbv.view("i8")
+            else:
+                # We get here with non-ndarrays in test_merge_by_col_tz_aware
+                #  and test_merge_groupby_multiple_column_with_categorical_column
+                mapped = [
+                    _factorize_keys(
+                        left_by_values[n],
+                        right_by_values[n],
+                        sort=False,
+                        how="left",
+                    )
+                    for n in range(len(left_by_values))
+                ]
+                arrs = [np.concatenate(m[:2]) for m in mapped]
+                shape = tuple(m[2] for m in mapped)
+                group_index = get_group_index(
+                    arrs, shape=shape, sort=False, xnull=False
+                )
+                left_len = len(left_by_values[0])
+                lbv = group_index[:left_len]
+                rbv = group_index[left_len:]
+[/REPLACE]

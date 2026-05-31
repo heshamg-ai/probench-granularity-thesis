@@ -1,0 +1,47 @@
+sklearn/feature_selection/_univariate_selection.py
+[SEARCH]
+    Y = LabelBinarizer().fit_transform(y)
+    if Y.shape[1] == 1:
+        Y = np.append(1 - Y, Y, axis=1)
+
+    observed = safe_sparse_dot(Y.T, X)  # n_classes * n_features
+
+    feature_count = X.sum(axis=0).reshape(1, -1)
+    class_prob = Y.mean(axis=0).reshape(1, -1)
+    expected = np.dot(class_prob.T, feature_count)
+[/SEARCH]
+[REPLACE]
+    # Compute class indices without constructing a dense one-hot matrix
+    y = np.asarray(y)
+    classes, y_int = np.unique(y, return_inverse=True)
+    n_classes = classes.shape[0]
+    n_samples, n_features = X.shape
+
+    if n_classes == 1:
+        # Single-class case: build a 2-class contingency with an empty complement
+        feature_count = X.sum(axis=0).reshape(1, -1)
+        observed = np.vstack([np.asarray(feature_count), np.zeros_like(np.asarray(feature_count))])
+        class_prob = np.array([[1.0, 0.0]])
+    else:
+        # Sum features per class
+        if issparse(X):
+            observed = np.zeros((n_classes, n_features), dtype=X.dtype)
+            indptr = X.indptr
+            indices = X.indices
+            data = X.data
+            for i in range(n_samples):
+                start, end = indptr[i], indptr[i + 1]
+                if start != end:
+                    obs_row = observed[y_int[i]]
+                    cols = indices[start:end]
+                    obs_row[cols] += data[start:end]
+        else:
+            observed = np.zeros((n_classes, n_features), dtype=X.dtype)
+            np.add.at(observed, y_int, X)
+
+        feature_count = X.sum(axis=0).reshape(1, -1)
+        counts = np.bincount(y_int, minlength=n_classes)
+        class_prob = (counts / float(n_samples)).reshape(1, -1)
+
+    expected = np.dot(class_prob.T, feature_count)
+[/REPLACE]

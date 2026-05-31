@@ -1,0 +1,55 @@
+Looking at `MultiIndex._nbytes`, I can see the optimization opportunity. The method calls `i.memory_usage(deep=deep)` for each level, which internally calls `Index._memory_usage`, which in turn calls `self._engine.sizeof(deep=deep)`. Computing the engine hashtable size for each level is expensive and unnecessary for this calculation.
+
+The engine's memory is only needed for lookup operations on the MultiIndex itself, not for the level data. We can call `_memory_usage(deep=deep)` instead, which computes just the data memory without the engine overhead.
+
+Similarly, we can avoid calling the property `self.levels` (which creates renamed copies) by accessing `self._levels` directly.
+
+```python
+pandas/core/indexes/multi.py
+[SEARCH]
+    def _nbytes(self, deep: bool = False) -> int:
+        """
+        return the number of bytes in the underlying data
+        deeply introspect the level data if deep=True
+
+        include the engine hashtable
+
+        *this is in internal routine*
+
+        """
+        # for implementations with no useful getsizeof (PyPy)
+        objsize = 24
+
+        level_nbytes = sum(i.memory_usage(deep=deep) for i in self.levels)
+        label_nbytes = sum(i.nbytes for i in self.codes)
+        names_nbytes = sum(getsizeof(i, objsize) for i in self.names)
+        result = level_nbytes + label_nbytes + names_nbytes
+
+        # include our engine hashtable
+        result += self._engine.sizeof(deep=deep)
+        return result
+[/SEARCH]
+[REPLACE]
+    def _nbytes(self, deep: bool = False) -> int:
+        """
+        return the number of bytes in the underlying data
+        deeply introspect the level data if deep=True
+
+        include the engine hashtable
+
+        *this is in internal routine*
+
+        """
+        # for implementations with no useful getsizeof (PyPy)
+        objsize = 24
+
+        level_nbytes = sum(i._memory_usage(deep=deep) for i in self._levels)
+        label_nbytes = sum(i.nbytes for i in self.codes)
+        names_nbytes = sum(getsizeof(i, objsize) for i in self.names)
+        result = level_nbytes + label_nbytes + names_nbytes
+
+        # include our engine hashtable
+        result += self._engine.sizeof(deep=deep)
+        return result
+[/REPLACE]
+```

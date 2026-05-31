@@ -1,0 +1,62 @@
+pandas/core/generic.py
+[SEARCH]
+    @final
+    def _find_valid_index(self, *, how: str) -> Hashable | None:
+        """
+        Retrieves the index of the first valid value.
+
+        Parameters
+        ----------
+        how : {'first', 'last'}
+            Use this parameter to change between the first or last valid index.
+
+        Returns
+        -------
+        idx_first_valid : type of index
+        """
+        idxpos = find_valid_index(self._values, how=how, is_valid=~isna(self._values))
+        if idxpos is None:
+            return None
+        return self.index[idxpos]
+[/SEARCH]
+[REPLACE]
+    @final
+    def _find_valid_index(self, *, how: str) -> Hashable | None:
+        """
+        Retrieves the index of the first valid value.
+
+        Parameters
+        ----------
+        how : {'first', 'last'}
+            Use this parameter to change between the first or last valid index.
+
+        Returns
+        -------
+        idx_first_valid : type of index
+        """
+        if self.ndim == 2 and len(self._mgr.blocks) == 1:
+            # Optimization for single-block DataFrames (common for EAs):
+            # operate on the 2D array directly, then use the index.
+            from pandas.core.dtypes.missing import isna as _isna_func
+
+            arr = self._mgr.blocks[0].values
+            is_valid = ~_isna_func(arr)
+            if how == "first":
+                # is_valid.any(axis=1) for each row having at least one valid value
+                row_valid = is_valid.any(axis=1)
+                if not row_valid.any():
+                    return None
+                idxpos = row_valid.argmax()
+            else:
+                # row with at least one valid, find last
+                row_valid = is_valid.any(axis=1)
+                if not row_valid.any():
+                    return None
+                idxpos = len(row_valid) - 1 - row_valid[::-1].argmax()
+            return self.index[idxpos]
+
+        idxpos = find_valid_index(self._values, how=how, is_valid=~isna(self._values))
+        if idxpos is None:
+            return None
+        return self.index[idxpos]
+[/REPLACE]

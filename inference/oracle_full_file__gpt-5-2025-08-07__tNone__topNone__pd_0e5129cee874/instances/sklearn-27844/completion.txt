@@ -1,0 +1,16 @@
+sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py
+[SEARCH]
+        # TODO: This could be done in parallel
+        encoded_classes = np.argmax(self.predict_proba(X), axis=1)
+        return self.classes_[encoded_classes]
+[/SEARCH]
+[REPLACE]
+        # TODO: This could be done in parallel
+        if self.n_trees_per_iteration_ == 1:
+            # Binary classification: avoid computing full predict_proba
+            # decision_function > 0 <=> proba of positive class > 0.5
+            encoded_classes = (self.decision_function(X) > 0).astype(int, copy=False)
+        else:
+            encoded_classes = np.argmax(self.predict_proba(X), axis=1)
+        return self.classes_[encoded_classes]
+[/REPLACE]

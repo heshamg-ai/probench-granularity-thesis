@@ -1,0 +1,15 @@
+xarray/backends/h5netcdf_.py
+[SEARCH]
+        return _open_datatree_netcdf(ncDataset, filename_or_obj, **kwargs)
+[/SEARCH]
+[REPLACE]
+        return _open_datatree_netcdf(ncDataset, filename_or_obj, engine="h5netcdf", **kwargs)
+[/REPLACE]
+
+xarray/backends/netCDF4_.py
+[SEARCH]
+        return _open_datatree_netcdf(ncDataset, filename_or_obj, **kwargs)
+[/SEARCH]
+[REPLACE]
+        return _open_datatree_netcdf(ncDataset, filename_or_obj, engine="netcdf4", **kwargs)
+[/REPLACE]

@@ -1,0 +1,11 @@
+pandas/core/groupby/groupby.py
+[SEARCH]
+    @final
+    def __len__(self) -> int:
+        return len(self.groups)
+[/SEARCH]
+[REPLACE]
+    @final
+    def __len__(self) -> int:
+        return len(self._grouper.codes) if self._grouper.is_fitted else len(self.groups)
+[/REPLACE]

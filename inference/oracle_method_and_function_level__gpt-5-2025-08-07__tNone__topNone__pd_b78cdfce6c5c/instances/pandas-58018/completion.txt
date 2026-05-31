@@ -1,0 +1,20 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        if name is lib.no_default:
+            name = self._get_level_names()
+        result = DataFrame({name: self}, copy=False)
+
+        if index:
+            result.index = self
+        return result
+[/SEARCH]
+[REPLACE]
+        if name is lib.no_default:
+            name = self._get_level_names()
+        if index:
+            result = DataFrame(index=self)
+            result.insert(0, name, self)
+        else:
+            result = DataFrame({name: self}, copy=False)
+        return result
+[/REPLACE]

@@ -1,0 +1,138 @@
+xarray/groupers.py
+[SEARCH]
+    def _factorize_unique(self) -> EncodedGroups:
+        # look through group to find the unique values
+        sort = not isinstance(self.group_as_index, pd.MultiIndex)
+        unique_values, codes_ = unique_value_groups(self.group_as_index, sort=sort)
+        if (codes_ == -1).all():
+            raise ValueError(
+                "Failed to group data. Are you grouping by a variable that is all NaN?"
+            )
+        codes = self.group.copy(data=codes_.reshape(self.group.shape))
+        unique_coord = Variable(
+            dims=codes.name, data=unique_values, attrs=self.group.attrs
+        )
+        full_index = pd.Index(unique_values)
+
+        return EncodedGroups(
+            codes=codes,
+            full_index=full_index,
+            unique_coord=unique_coord,
+            coords=_coordinates_from_variable(unique_coord),
+        )
+[/SEARCH]
+[REPLACE]
+    def _factorize_unique(self) -> EncodedGroups:
+        # look through group to find the unique values
+        sort = not isinstance(self.group_as_index, pd.MultiIndex)
+        unique_values, codes_ = unique_value_groups(self.group_as_index, sort=sort)
+        if (codes_ == -1).all():
+            raise ValueError(
+                "Failed to group data. Are you grouping by a variable that is all NaN?"
+            )
+        codes = self.group.copy(data=codes_.reshape(self.group.shape))
+        unique_coord = Variable(
+            dims=codes.name, data=unique_values, attrs=self.group.attrs
+        )
+        full_index = pd.Index(unique_values)
+
+        if self.group.ndim == 1:
+            codes = codes.copy(data=np.asarray(codes.data, dtype=np.intp))
+        else:
+            codes.load()
+
+        return EncodedGroups(
+            codes=codes,
+            full_index=full_index,
+            unique_coord=unique_coord,
+            coords=_coordinates_from_variable(unique_coord),
+        )
+[/REPLACE]
+
+xarray/groupers.py
+[SEARCH]
+    def _init_properties(self, group: T_Group) -> None:
+        from xarray import CFTimeIndex
+
+        group_as_index = safe_cast_to_index(group)
+        offset = self.offset
+
+        if not group_as_index.is_monotonic_increasing:
+            # TODO: sort instead of raising an error
+            raise ValueError("Index must be monotonic for resampling")
+
+        if isinstance(group_as_index, CFTimeIndex):
+            from xarray.core.resample_cftime import CFTimeGrouper
+
+            self.index_grouper = CFTimeGrouper(
+                freq=self.freq,
+                closed=self.closed,
+                label=self.label,
+                origin=self.origin,
+                offset=offset,
+            )
+        else:
+            self.index_grouper = pd.Grouper(
+                # TODO remove once requiring pandas >= 2.2
+                freq=_new_to_legacy_freq(self.freq),
+                closed=self.closed,
+                label=self.label,
+                origin=self.origin,
+                offset=offset,
+            )
+        self.group_as_index = group_as_index
+[/SEARCH]
+[REPLACE]
+    def _init_properties(self, group: T_Group) -> None:
+        from xarray import CFTimeIndex
+        from xarray.core.resample_cftime import CFTimeGrouper
+
+        group_as_index = safe_cast_to_index(group)
+        offset = self.offset
+
+        if not group_as_index.is_monotonic_increasing:
+            # TODO: sort instead of raising an error
+            raise ValueError("Index must be monotonic for resampling")
+
+        if isinstance(group_as_index, CFTimeIndex):
+            self.index_grouper = CFTimeGrouper(
+                freq=self.freq,
+                closed=self.closed,
+                label=self.label,
+                origin=self.origin,
+                offset=offset,
+            )
+        else:
+            self.index_grouper = pd.Grouper(
+                # TODO remove once requiring pandas >= 2.2
+                freq=_new_to_legacy_freq(self.freq),
+                closed=self.closed,
+                label=self.label,
+                origin=self.origin,
+                offset=offset,
+            )
+        self.group_as_index = group_as_index
+[/REPLACE]
+
+xarray/groupers.py
+[SEARCH]
+    def _get_index_and_items(self) -> tuple[pd.Index, pd.Series, np.ndarray]:
+        first_items, codes = self.first_items()
+        full_index = first_items.index
+        if first_items.isnull().any():
+            first_items = first_items.dropna()
+
+        full_index = full_index.rename("__resample_dim__")
+        return full_index, first_items, codes
+[/SEARCH]
+[REPLACE]
+    def _get_index_and_items(self) -> tuple[pd.Index, pd.Series, np.ndarray]:
+        first_items, codes = self.first_items()
+        full_index = first_items.index
+        if first_items.isnull().any():
+            first_items = first_items.dropna()
+            codes = np.arange(len(first_items))
+
+        full_index = full_index.rename("__resample_dim__")
+        return full_index, first_items, codes
+[/REPLACE]

@@ -1,0 +1,51 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        if pa.types.is_temporal(pa_type) and not pa.types.is_date(pa_type):
+            # temporal types with units and/or timezones currently
+            #  require pandas/python scalars to pass all tests
+            # TODO: improve performance (this is slow)
+            result = np.array(list(self), dtype=dtype)
+        elif is_object_dtype(dtype) and self._hasna:
+[/SEARCH]
+[REPLACE]
+        if pa.types.is_temporal(pa_type) and not pa.types.is_date(pa_type):
+            # temporal types with units and/or timezones currently
+            #  require pandas/python scalars to pass all tests
+            # TODO: improve performance (this is slow)
+            result = np.array(list(self), dtype=dtype)
+        elif dtype is not None and np.dtype(dtype).kind == "f" and lib.is_float(na_value) and np.isnan(na_value):
+            # Fast-path: convert to numpy float with NaNs for missing values
+            # Avoid Python-level masking and intermediate Arrow mutations
+            np_dtype = np.dtype(dtype)
+            # All-null fast path
+            null_count = self._pa_array.null_count
+            if null_count == len(self._pa_array):
+                result = np.empty(len(self._pa_array), dtype=np_dtype)
+                result.fill(np.nan)
+                if copy:
+                    result = result.copy()
+                return result
+            pa_float = pa.float64() if np_dtype.itemsize >= 8 else pa.float32()
+            pa_arr = self._pa_array
+            if not pa.types.is_floating(pa_arr.type) or (
+                pa.types.is_floating(pa_arr.type)
+                and ((pa_arr.type.bit_width == 64 and np_dtype.itemsize < 8) or (pa_arr.type.bit_width == 32 and np_dtype.itemsize > 4))
+            ):
+                # Cast non-floats or mismatched float width to a float array
+                try:
+                    pa_arr = pa_arr.cast(pa_float)
+                except pa.ArrowNotImplementedError:
+                    # Fallback to numpy object conversion if casting unsupported
+                    result = np.array(list(self), dtype=np_dtype)
+                    if copy:
+                        result = result.copy()
+                    return result
+            result = pa_arr.to_numpy(zero_copy_only=False, writable=True)
+            if result.dtype != np_dtype:
+                # Downcast/Upcast to requested numpy float dtype
+                result = result.astype(np_dtype, copy=False)
+            if copy:
+                result = result.copy()
+            return result
+        elif is_object_dtype(dtype) and self._hasna:
+[/REPLACE]

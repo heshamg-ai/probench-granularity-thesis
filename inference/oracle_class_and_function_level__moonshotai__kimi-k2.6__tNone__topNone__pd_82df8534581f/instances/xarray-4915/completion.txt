@@ -1,0 +1,33 @@
+ xarray/core/rolling.py
+[SEARCH]
+    argmax = _reduce_method("argmax")
+    argmin = _reduce_method("argmin")
+    max = _reduce_method("max")
+    min = _reduce_method("min")
+    mean = _reduce_method("mean")
+    prod = _reduce_method("prod")
+    sum = _reduce_method("sum")
+    std = _reduce_method("std")
+    var = _reduce_method("var")
+    median = _reduce_method("median")
+[/SEARCH]
+[REPLACE]
+    argmax = _reduce_method("argmax")
+    argmin = _reduce_method("argmin")
+    max = _reduce_method("max")
+    min = _reduce_method("min")
+    prod = _reduce_method("prod")
+    sum = _reduce_method("sum")
+    std = _reduce_method("std")
+    var = _reduce_method("var")
+    median = _reduce_method("median")
+
+    def mean(self, keep_attrs=None, **kwargs):
+        keep_attrs = self._get_keep_attrs(keep_attrs)
+        return self._numpy_or_bottleneck_reduce(
+            duck_array_ops.mean,
+            bottleneck.move_mean,
+            keep_attrs=keep_attrs,
+            **kwargs,
+        )
+[/REPLACE]

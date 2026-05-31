@@ -1,0 +1,35 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        if (
+            type(self) is Index
+            and isinstance(self._values, ExtensionArray)
+            and not isinstance(self._values, BaseMaskedArray)
+            and not (
+                isinstance(self._values, ArrowExtensionArray)
+                and is_numeric_dtype(self.dtype)
+                # Exclude decimal
+                and self.dtype.kind != "O"
+            )
+        ):
+            # TODO(ExtensionIndex): remove special-case, just use self._values
+            return self._values.astype(object)
+[/SEARCH]
+[REPLACE]
+        if (
+            type(self) is Index
+            and isinstance(self._values, ExtensionArray)
+            and not isinstance(self._values, BaseMaskedArray)
+            and not (
+                isinstance(self._values, ArrowExtensionArray)
+                and (
+                    is_numeric_dtype(self.dtype)
+                    or self._values.dtype.name.startswith("timestamp")
+                    or self._values.dtype.name.startswith("duration")
+                )
+                # Exclude decimal
+                and self.dtype.kind != "O"
+            )
+        ):
+            # TODO(ExtensionIndex): remove special-case, just use self._values
+            return self._values.astype(object)
+[/REPLACE]

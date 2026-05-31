@@ -1,0 +1,40 @@
+
+
+Looking at the current `isna` implementation:
+
+```python
+def isna(self) -> npt.NDArray[np.bool_]:
+    """
+    Boolean NumPy array indicating if each value is missing.
+
+    This should return a 1-D array the same length as 'self'.
+    """
+    return self._data.is_null().to_numpy()
+```
+
+The optimization for zero-null and all-null cases can be done by checking `null_count` before calling the expensive `is_null().to_numpy()` operation.
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def isna(self) -> npt.NDArray[np.bool_]:
+        """
+        Boolean NumPy array indicating if each value is missing.
+
+        This should return a 1-D array the same length as 'self'.
+        """
+        return self._data.is_null().to_numpy()
+[/SEARCH]
+[REPLACE]
+    def isna(self) -> npt.NDArray[np.bool_]:
+        """
+        Boolean NumPy array indicating if each value is missing.
+
+        This should return a 1-D array the same length as 'self'.
+        """
+        null_count = self._data.null_count
+        if null_count == 0:
+            return np.zeros(len(self), dtype=np.bool_)
+        elif null_count == len(self._data):
+            return np.ones(len(self), dtype=np.bool_)
+        return self._data.is_null().to_numpy()
+[/REPLACE]

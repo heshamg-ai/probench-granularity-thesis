@@ -1,0 +1,14 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        elif pa.types.is_boolean(pa_type):
+            from pandas.core.arrays import BooleanArray
+
+            scalars = BooleanArray._from_sequence_of_strings(strings).to_numpy()
+[/SEARCH]
+[REPLACE]
+        elif pa.types.is_boolean(pa_type):
+            if isinstance(strings, (pa.Array, pa.ChunkedArray)):
+                scalars = strings.cast(pa.bool_(), safe=False)
+            else:
+                scalars = pa.array(strings, type=pa.bool_(), from_pandas=True)
+[/REPLACE]

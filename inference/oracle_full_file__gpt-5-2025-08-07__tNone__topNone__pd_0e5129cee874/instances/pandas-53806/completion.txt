@@ -1,0 +1,25 @@
+pandas/core/sorting.py
+[SEARCH]
+    count = len(group_index)
+    alpha = 0.0  # taking complexities literally; there may be
+[/SEARCH]
+[REPLACE]
+    count = len(group_index)
+    # Fast path: if group_index is already monotonic non-decreasing,
+    # the stable sorter is the identity and we can avoid any work.
+    if count <= 1 or (group_index[1:] >= group_index[:-1]).all():
+        return ensure_platform_int(np.arange(count))
+    alpha = 0.0  # taking complexities literally; there may be
+[/REPLACE]
+
+pandas/core/sorting.py
+[SEARCH]
+    if sort and len(obs_group_ids) > 0:
+        obs_group_ids, comp_ids = _reorder_by_uniques(obs_group_ids, comp_ids)
+[/SEARCH]
+[REPLACE]
+    if sort and len(obs_group_ids) > 0:
+        # Fast path: if observed ids are already in ascending order, reordering is unnecessary
+        if obs_group_ids.size > 1 and not (obs_group_ids[1:] >= obs_group_ids[:-1]).all():
+            obs_group_ids, comp_ids = _reorder_by_uniques(obs_group_ids, comp_ids)
+[/REPLACE]

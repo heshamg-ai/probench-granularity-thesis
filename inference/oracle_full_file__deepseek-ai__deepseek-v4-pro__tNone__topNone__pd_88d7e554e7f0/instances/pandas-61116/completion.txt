@@ -1,0 +1,134 @@
+pandas/core/methods/selectn.py
+[SEARCH]
+        # slow method
+        if n >= len(self.obj):
+            ascending = method == "nsmallest"
+            return self.obj.sort_values(ascending=ascending).head(n)
+
+        # fast method
+        new_dtype = dropped.dtype
+
+        # Similar to algorithms._ensure_data
+        arr = dropped._values
+        if needs_i8_conversion(arr.dtype):
+            arr = arr.view("i8")
+        elif isinstance(arr.dtype, BaseMaskedDtype):
+            arr = arr._data
+        else:
+            arr = np.asarray(arr)
+        if arr.dtype.kind == "b":
+            arr = arr.view(np.uint8)
+
+        if method == "nlargest":
+            arr = -arr
+            if is_integer_dtype(new_dtype):
+                # GH 21426: ensure reverse ordering at boundaries
+                arr -= 1
+
+            elif is_bool_dtype(new_dtype):
+                # GH 26154: ensure False is smaller than True
+                arr = 1 - (-arr)
+
+        if self.keep == "last":
+            arr = arr[::-1]
+
+        nbase = n
+        narr = len(arr)
+        n = min(n, narr)
+
+        # arr passed into kth_smallest must be contiguous. We copy
+        # here because kth_smallest will modify its input
+        # avoid OOB access with kth_smallest_c when n <= 0
+        if len(arr) > 0:
+            kth_val = libalgos.kth_smallest(arr.copy(order="C"), n - 1)
+        else:
+            kth_val = np.nan
+        (ns,) = np.nonzero(arr <= kth_val)
+        inds = ns[arr[ns].argsort(kind="mergesort")]
+
+        if self.keep != "all":
+            inds = inds[:n]
+            findex = nbase
+        else:
+            if len(inds) < nbase <= len(nan_index) + len(inds):
+                findex = len(nan_index) + len(inds)
+            else:
+                findex = len(inds)
+
+        if self.keep == "last":
+            # reverse indices
+            inds = narr - 1 - inds
+
+        return concat([dropped.iloc[inds], nan_index]).iloc[:findex]
+[/SEARCH]
+[REPLACE]
+        # slow method
+        if n >= len(self.obj):
+            ascending = method == "nsmallest"
+            return self.obj.sort_values(ascending=ascending).head(n)
+
+        # fast method
+        new_dtype = dropped.dtype
+
+        # Similar to algorithms._ensure_data
+        arr = dropped._values
+        if needs_i8_conversion(arr.dtype):
+            arr = arr.view("i8")
+        elif isinstance(arr.dtype, BaseMaskedDtype):
+            arr = arr._data
+        else:
+            arr = np.asarray(arr)
+        if arr.dtype.kind == "b":
+            arr = arr.view(np.uint8)
+
+        if method == "nlargest":
+            arr = -arr
+            if is_integer_dtype(new_dtype):
+                # GH 21426: ensure reverse ordering at boundaries
+                arr -= 1
+
+            elif is_bool_dtype(new_dtype):
+                # GH 26154: ensure False is smaller than True
+                arr = 1 - (-arr)
+
+        narr = len(arr)
+        nbase = n
+        n = min(n, narr)
+
+        if self.keep == "last":
+            arr = arr[::-1]
+
+        # Use partial sort + take for better memory and speed
+        if n > 0 and n < narr:
+            # partial sort: smallest n elements moved to front
+            arr_for_partition = arr.copy(order="C")
+            kth = np.zeros(narr, dtype=bool)
+            try:
+                # use introselect (O(n)) to partition
+                kth_val = np.partition(arr_for_partition, n - 1)[n - 1]
+            except TypeError:
+                # fallback to kth_smallest for object dtypes etc.
+                kth_val = libalgos.kth_smallest(arr_for_partition, n - 1)
+            # mask of values <= kth_val
+            kth = arr <= kth_val
+            ns = np.flatnonzero(kth)
+            # argsort only the selected group
+            inds = ns[arr[ns].argsort(kind="mergesort")]
+        else:
+            inds = np.arange(narr, dtype=np.intp)
+
+        if self.keep != "all":
+            inds = inds[:n]
+            findex = nbase
+        else:
+            if len(inds) < nbase <= len(nan_index) + len(inds):
+                findex = len(nan_index) + len(inds)
+            else:
+                findex = len(inds)
+
+        if self.keep == "last":
+            # reverse indices
+            inds = narr - 1 - inds
+
+        return concat([dropped.iloc[inds], nan_index]).iloc[:findex]
+[/REPLACE]

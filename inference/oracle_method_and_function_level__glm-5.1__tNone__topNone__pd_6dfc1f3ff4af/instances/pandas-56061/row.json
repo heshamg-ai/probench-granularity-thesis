@@ -1,0 +1,64 @@
+{
+  "id": 47,
+  "scenario_id": "pandas-56061",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 56061,
+  "baseline_sha": "7012d6a60724bf55d1fc0d03d6c50484aa19fb85",
+  "reference_sha": "89e31b9df3687f0eb21f4c1733fb37b4b9f00892",
+  "task": "Optimize DataFrameGroupBy.nunique for large group cardinality",
+  "entry_point": "pandas.core.groupby.DataFrameGroupBy.nunique",
+  "whats_new": "Performance improvement in DataFrameGroupBy.nunique and SeriesGroupBy.nunique",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-56061:baseline",
+      "digest": "sha256:8164ee9bff2fce844f298eba9dfe5ad193d942cc66f88e5f0cc82694e6587438"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-56061:reference",
+      "digest": "sha256:44f682905a39319b3deb580c18359861d653260524fe450bf99702a7cfc5426a"
+    }
+  },
+  "params": [
+    {
+      "name": "Total Rows",
+      "short_indicator": "R",
+      "explanation": "Total number of rows",
+      "values": [
+        "100000",
+        "1000000",
+        "10000000"
+      ]
+    },
+    {
+      "name": "Cardinality",
+      "short_indicator": "C",
+      "explanation": "Number of unique categories",
+      "values": [
+        "10",
+        "100",
+        "1000"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/groupby/test_reductions.py::test_nunique",
+    "pandas/tests/groupby/test_reductions.py::test_nunique_preserves_column_level_names",
+    "pandas/tests/groupby/test_reductions.py::test_nunique_with_NaT",
+    "pandas/tests/groupby/test_reductions.py::test_nunique_with_empty_series",
+    "pandas/tests/groupby/test_reductions.py::test_nunique_with_object",
+    "pandas/tests/groupby/test_reductions.py::test_nunique_with_timegrouper",
+    "pandas/tests/groupby/test_reductions.py::test_series_groupby_nunique",
+    "pandas/tests/groupby/test_reductions.py::test_nunique_transform_with_datetime",
+    "pandas/tests/groupby/test_categorical.py::test_groupby_categorical_observed_nunique",
+    "pandas/tests/groupby/test_groupby.py::test_groupby_crash_on_nunique",
+    "pandas/tests/groupby/test_timegrouper.py::TestGroupBy::test_nunique_with_timegrouper_and_nat",
+    "pandas/tests/resample/test_datetime_index.py::test_resample_nunique",
+    "pandas/tests/resample/test_datetime_index.py::test_resample_nunique_preserves_column_level_names",
+    "pandas/tests/resample/test_datetime_index.py::test_resample_nunique_with_date_gap",
+    "pandas/tests/resample/test_resampler_grouper.py::test_methods_nunique",
+    "pandas/tests/groupby/aggregate/test_aggregate.py::test_agg_index_has_complex_internals",
+    "pandas/tests/groupby/test_reductions.py::test_empty_categorical"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.core.groupby.DataFrameGroupBy.nunique for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n- Only change what directly improves the optimization target.\n\nOPTIMIZATION REQUEST:\nOptimize DataFrameGroupBy.nunique for large group cardinality\nOptimization function: pandas.core.groupby.DataFrameGroupBy.nunique\n\n\n[start of pandas/core/groupby/generic.py]\n### Relevant context\n#### Class `pandas.core.groupby.generic.SeriesGroupBy`\n**Class Signature**\n```python\nclass SeriesGroupBy(GroupBy[Series]):\n```\n**Class Attributes**\n```python\n    _agg_examples_doc = dedent(\n        \"\"\"\n    Examples\n    --------\n    >>> s = pd.Series([1, 2, 3, 4])\n\n    >>> s\n    0    1\n    1    2\n    2    3\n    3    4\n    dtype: int64\n\n    >>> s.groupby([1, 1, 2, 2]).min()\n    1    1\n    2    3\n    dtype: int64\n\n    >>> s.groupby([1, 1, 2, 2]).agg('min')\n    1    1\n    2    3\n    dtype: int64\n\n    >>> s.groupby([1, 1, 2, 2]).agg(['min', 'max'])\n       min  max\n    1    1    2\n    2    3    4\n\n    The output column names can be controlled by passing\n    the desired column names and aggregations as keyword arguments.\n\n    >>> s.groupby([1, 1, 2, 2]).agg(\n    ...     minimum='min',\n    ...     maximum='max',\n    ... )\n       minimum  maximum\n    1        1        2\n    2        3        4\n\n    .. versionchanged:: 1.3.0\n\n        The resulting dtype will reflect the return value of the aggregating function.\n\n    >>> s.groupby([1, 1, 2, 2]).agg(lambda x: x.astype(float).min())\n    1    1.0\n    2    3.0\n    dtype: float64\n    \"\"\"\n    )\n    agg = aggregate\n    __examples_series_doc = dedent(\n        \"\"\"\n    >>> ser = pd.Series(\n    ...    [390.0, 350.0, 30.0, 20.0],\n    ...    index=[\"Falcon\", \"Falcon\", \"Parrot\", \"Parrot\"],\n    ...    name=\"Max Speed\")\n    >>> grouped = ser.groupby([1, 1, 2, 2])\n    >>> grouped.transform(lambda x: (x - x.mean()) / x.std())\n        Falcon    0.707107\n        Falcon   -0.707107\n        Parrot    0.707107\n        Parrot   -0.707107\n        Name: Max Speed, dtype: float64\n\n    Broadcast result of the transformation\n\n    >>> grouped.transform(lambda x: x.max() - x.min())\n    Falcon    40.0\n    Falcon    40.0\n    Parrot    10.0\n    Parrot    10.0\n    Name: Max Speed, dtype: float64\n\n    >>> grouped.transform(\"mean\")\n    Falcon    370.0\n    Falcon    370.0\n    Parrot     25.0\n    Parrot     25.0\n    Name: Max Speed, dtype: float64\n\n    .. versionchanged:: 1.3.0\n\n    The resulting dtype will reflect the return value of the passed ``func``,\n    for example:\n\n    >>> grouped.transform(lambda x: x.astype(int).max())\n    Falcon    390\n    Falcon    390\n    Parrot     30\n    Parrot     30\n    Name: Max Speed, dtype: int64\n    \"\"\"\n    )\n```\n##### Method `pandas.core.groupby.generic.SeriesGroupBy.nunique`\n```python\ndef nunique(self, dropna: bool = True) -> Series | DataFrame:\n        \"\"\"\n        Return number of unique elements in the group.\n\n        Returns\n        -------\n        Series\n            Number of unique values within each group.\n\n        Examples\n        --------\n        For SeriesGroupby:\n\n        >>> lst = ['a', 'a', 'b', 'b']\n        >>> ser = pd.Series([1, 2, 3, 3], index=lst)\n        >>> ser\n        a    1\n        a    2\n        b    3\n        b    3\n        dtype: int64\n        >>> ser.groupby(level=0).nunique()\n        a    2\n        b    1\n        dtype: int64\n\n        For Resampler:\n\n        >>> ser = pd.Series([1, 2, 3, 3], index=pd.DatetimeIndex(\n        ...                 ['2023-01-01', '2023-01-15', '2023-02-01', '2023-02-15']))\n        >>> ser\n        2023-01-01    1\n        2023-01-15    2\n        2023-02-01    3\n        2023-02-15    3\n        dtype: int64\n        >>> ser.resample('MS').nunique()\n        2023-01-01    2\n        2023-02-01    1\n        Freq: MS, dtype: int64\n        \"\"\"\n        ids, _, _ = self.grouper.group_info\n\n        val = self.obj._values\n\n        codes, _ = algorithms.factorize(val, sort=False)\n        sorter = np.lexsort((codes, ids))\n        codes = codes[sorter]\n        ids = ids[sorter]\n\n        # group boundaries are where group ids change\n        # unique observations are where sorted values change\n        idx = np.r_[0, 1 + np.nonzero(ids[1:] != ids[:-1])[0]]\n        inc = np.r_[1, codes[1:] != codes[:-1]]\n\n        # 1st item of each group is a new unique observation\n        mask = codes == -1\n        if dropna:\n            inc[idx] = 1\n            inc[mask] = 0\n        else:\n            inc[mask & np.r_[False, mask[:-1]]] = 0\n            inc[idx] = 1\n\n        out = np.add.reduceat(inc, idx).astype(\"int64\", copy=False)\n        if len(ids):\n            # NaN/NaT group exists if the head of ids is -1,\n            # so remove it from res and exclude its index from idx\n            if ids[0] == -1:\n                res = out[1:]\n                idx = idx[np.flatnonzero(idx)]\n            else:\n                res = out\n        else:\n            res = out[1:]\n        ri = self.grouper.result_index\n\n        # we might have duplications among the bins\n        if len(res) != len(ri):\n            res, out = np.zeros(len(ri), dtype=out.dtype), res\n            if len(ids) > 0:\n                # GH#21334s\n                res[ids[idx]] = out\n\n        result: Series | DataFrame = self.obj._constructor(\n            res, index=ri, name=self.obj.name\n        )\n        if not self.as_index:\n            result = self._insert_inaxis_grouper(result)\n            result.index = default_index(len(result))\n        return self._reindex_output(result, fill_value=0)\n```\n[end of pandas/core/groupby/generic.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

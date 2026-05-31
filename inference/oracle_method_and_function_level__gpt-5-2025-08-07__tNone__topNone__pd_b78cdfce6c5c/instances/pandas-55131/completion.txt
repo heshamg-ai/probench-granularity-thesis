@@ -1,0 +1,138 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _groupby_op(
+            self,
+            *,
+            how: str,
+            has_dropped_na: bool,
+            min_count: int,
+            ngroups: int,
+            ids: npt.NDArray[np.intp],
+            **kwargs,
+        ):
+            if isinstance(self.dtype, StringDtype):
+                return super()._groupby_op(
+                    how=how,
+                    has_dropped_na=has_dropped_na,
+                    min_count=min_count,
+                    ngroups=ngroups,
+                    ids=ids,
+                    **kwargs,
+                )
+
+            masked = self._to_masked()
+
+            result = masked._groupby_op(
+                how=how,
+                has_dropped_na=has_dropped_na,
+                min_count=min_count,
+                ngroups=ngroups,
+                ids=ids,
+                **kwargs,
+            )
+            if isinstance(result, np.ndarray):
+                return result
+            return type(self)._from_sequence(result, copy=False)
+[/SEARCH]
+[REPLACE]
+    def _groupby_op(
+            self,
+            *,
+            how: str,
+            has_dropped_na: bool,
+            min_count: int,
+            ngroups: int,
+            ids: npt.NDArray[np.intp],
+            **kwargs,
+        ):
+            if isinstance(self.dtype, StringDtype):
+                return super()._groupby_op(
+                    how=how,
+                    has_dropped_na=has_dropped_na,
+                    min_count=min_count,
+                    ngroups=ngroups,
+                    ids=ids,
+                    **kwargs,
+                )
+
+            # Fastpath for max over PyArrow-backed timestamp/duration dtypes
+            atype = self._pa_array.type
+            if how == "max" and (pa.types.is_timestamp(atype) or pa.types.is_duration(atype)):
+                # Require at least one valid value by default; respect larger min_count if provided
+                required = max(1, int(min_count))
+
+                ng = int(ngroups)
+                if ng == 0:
+                    # No groups, short-circuit to empty result of correct dtype
+                    if pa.types.is_timestamp(atype):
+                        pa_res = pa.compute.cast(pa.array([], type=pa.int64()), atype)
+                    else:
+                        pa_res = pa.array([], type=atype)
+                    return type(self)._from_sequence(pa_res, copy=False)
+
+                max_vals = np.empty(ng, dtype=np.int64)
+                # 'has_any' tracks if we have seen any valid value for the group
+                has_any = np.zeros(ng, dtype=bool)
+                counts = np.zeros(ng, dtype=np.int64)
+
+                pos = 0
+                for chunk in self._pa_array.chunks:
+                    n = len(chunk)
+                    if n == 0:
+                        continue
+                    ids_chunk = ids[pos : pos + n]
+                    pos += n
+
+                    # Valid mask and physical int64 values
+                    valid_mask = pa.compute.is_valid(chunk).to_numpy()
+                    if not valid_mask.any():
+                        continue
+                    ints = pa.compute.cast(chunk, pa.int64()).to_numpy()
+
+                    # Scatter-reduce to per-group maxima
+                    for i in range(n):
+                        gid = ids_chunk[i]
+                        if gid < 0:
+                            continue
+                        if not valid_mask[i]:
+                            continue
+                        val = ints[i]
+                        if has_any[gid]:
+                            if val > max_vals[gid]:
+                                max_vals[gid] = val
+                        else:
+                            max_vals[gid] = val
+                            has_any[gid] = True
+                        counts[gid] += 1
+
+                # Build result with None for groups that don't meet min_count or have no valid values
+                pylist = []
+                for g in range(ng):
+                    if has_any[g] and counts[g] >= required:
+                        pylist.append(int(max_vals[g]))
+                    else:
+                        pylist.append(None)
+
+                if pa.types.is_timestamp(atype):
+                    # Cast from int64 to timestamp to preserve unit/tz accurately
+                    pa_ints = pa.array(pylist, type=pa.int64())
+                    pa_res = pa.compute.cast(pa_ints, atype)
+                else:
+                    # Duration: construct directly with the correct type
+                    pa_res = pa.array(pylist, type=atype)
+                return type(self)._from_sequence(pa_res, copy=False)
+
+            masked = self._to_masked()
+
+            result = masked._groupby_op(
+                how=how,
+                has_dropped_na=has_dropped_na,
+                min_count=min_count,
+                ngroups=ngroups,
+                ids=ids,
+                **kwargs,
+            )
+            if isinstance(result, np.ndarray):
+                return result
+            return type(self)._from_sequence(result, copy=False)
+[/REPLACE]

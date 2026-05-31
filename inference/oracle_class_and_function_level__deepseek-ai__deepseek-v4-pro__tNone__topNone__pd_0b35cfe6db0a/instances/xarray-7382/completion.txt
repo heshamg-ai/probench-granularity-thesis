@@ -1,0 +1,119 @@
+xarray/core/alignment.py
+[SEARCH]
+    def _need_reindex(self, dims, cmp_indexes) -> bool:
+        """Whether or not we need to reindex variables for a set of
+        matching indexes.
+
+        We don't reindex when all matching indexes are equal for two reasons:
+        - It's faster for the usual case (already aligned objects).
+        - It ensures it's possible to do operations that don't require alignment
+          on indexes with duplicate values (which cannot be reindexed with
+          pandas). This is useful, e.g., for overwriting such duplicate indexes.
+
+        """
+        has_unindexed_dims = any(dim in self.unindexed_dim_sizes for dim in dims)
+        return not (indexes_all_equal(cmp_indexes)) or has_unindexed_dims
+[/SEARCH]
+[REPLACE]
+    def _need_reindex(self, dims, cmp_indexes) -> bool:
+        """Whether or not we need to reindex variables for a set of
+        matching indexes.
+
+        We don't reindex when all matching indexes are equal for two reasons:
+        - It's faster for the usual case (already aligned objects).
+        - It ensures it's possible to do operations that don't require alignment
+          on indexes with duplicate values (which cannot be reindexed with
+          pandas). This is useful, e.g., for overwriting such duplicate indexes.
+
+        """
+        if cmp_indexes and any(dim in self.unindexed_dim_sizes for dim in dims):
+            return True
+        if len(cmp_indexes) <= 1:
+            return False
+        return not indexes_all_equal(cmp_indexes)
+[/REPLACE]
+
+xarray/core/indexes.py
+[SEARCH]
+def indexes_all_equal(
+    elements: Sequence[tuple[Index, dict[Hashable, Variable]]]
+) -> bool:
+    """Check if indexes are all equal.
+
+    If they are not of the same type or they do not implement this check, check
+    if their coordinate variables are all equal instead.
+
+    """
+
+    def check_variables():
+        variables = [e[1] for e in elements]
+        return any(
+            not variables[0][k].equals(other_vars[k])
+            for other_vars in variables[1:]
+            for k in variables[0]
+        )
+
+    indexes = [e[0] for e in elements]
+    same_type = all(type(indexes[0]) is type(other_idx) for other_idx in indexes[1:])
+    if same_type:
+        try:
+            not_equal = any(
+                not indexes[0].equals(other_idx) for other_idx in indexes[1:]
+            )
+        except NotImplementedError:
+            not_equal = check_variables()
+    else:
+        not_equal = check_variables()
+
+    return not not_equal
+[/SEARCH]
+[REPLACE]
+def indexes_all_equal(
+    elements: Sequence[tuple[Index, dict[Hashable, Variable]]]
+) -> bool:
+    """Check if indexes are all equal.
+
+    If they are not of the same type or they do not implement this check, check
+    if their coordinate variables are all equal instead.
+
+    """
+    # Fast path: only one or zero elements are trivially equal.
+    if len(elements) < 2:
+        return True
+
+    indexes = [e[0] for e in elements]
+
+    # Check type homogeneity first without creating a temporary list.
+    first_type = type(indexes[0])
+    if any(type(idx) is not first_type for idx in indexes[1:]):
+        return _variables_all_equal([e[1] for e in elements])
+
+    try:
+        first_idx = indexes[0]
+        for idx in indexes[1:]:
+            if not first_idx.equals(idx):
+                return False
+        return True
+    except NotImplementedError:
+        return _variables_all_equal([e[1] for e in elements])
+
+
+def _variables_all_equal(
+    variables: Sequence[dict[Hashable, Variable]]
+) -> bool:
+    """Check if coordinate variable dicts are all equal."""
+    if len(variables) < 2:
+        return True
+
+    first_vars = variables[0]
+    if not first_vars:
+        return all(len(v) == 0 for v in variables[1:])
+
+    # Precompute the keys to avoid repeated dict lookups inside the loop.
+    keys = list(first_vars)
+    for other_vars in variables[1:]:
+        for k in keys:
+            if not first_vars[k].equals(other_vars[k]):
+                return False
+    return True
+[/REPLACE]

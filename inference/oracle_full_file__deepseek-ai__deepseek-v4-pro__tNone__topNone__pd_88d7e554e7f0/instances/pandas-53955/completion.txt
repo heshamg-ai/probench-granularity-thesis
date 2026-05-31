@@ -1,0 +1,92 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+    @doc(Index.unique)
+    def unique(self, level=None):
+        if level is None:
+            return self.drop_duplicates()
+        else:
+            level = self._get_level_number(level)
+            return self._get_level_values(level=level, unique=True)
+[/SEARCH]
+[REPLACE]
+    @doc(Index.unique)
+    def unique(self, level=None):
+        if level is None:
+            return self.drop_duplicates()
+        else:
+            level = self._get_level_number(level)
+            return self._get_level_values(level=level, unique=True)
+
+    def intersection(self, other, sort=False):
+        """
+        Form the intersection of two Index objects.
+
+        This returns a new Index with elements common to the index and `other`.
+
+        Parameters
+        ----------
+        other : Index or array-like
+        sort : bool, default False
+            Whether to sort the resulting index.
+
+            .. versionadded:: 1.0.0
+
+        Returns
+        -------
+        Index
+        """
+        self._validate_sort_keyword(sort)
+        other = ensure_index(other)
+
+        if not isinstance(other, MultiIndex):
+            other = self._convert_can_do_setop(other)[0]
+
+        if self.equals(other):
+            if self.has_duplicates:
+                return self.unique()._get_reconciled_name_object(other)
+            return self._get_reconciled_name_object(other)
+
+        if not self.is_unique or not other.is_unique:
+            # Fast path: intersect as 1D arrays on the internal codes/engine.
+            # Avoid materializing as tuples which is expensive for large MultiIndex.
+            self_int, other_int = self._get_compressed_ids(), other._get_compressed_ids()
+            mask = self_int.isin(other_int)
+            result = self[mask].unique()
+            if not isinstance(result, MultiIndex):
+                result = MultiIndex.from_arrays(
+                    zip(*result), sortorder=None, names=self.names
+                )
+            return result
+
+        # Both are unique; use set difference to find common elements.
+        if self.nlevels == 1 and not isinstance(self.levels[0], MultiIndex):
+            idx = self.intersection(other, sort=sort)
+            return idx
+
+        if len(self) <= len(other):
+            idx = self[other.get_indexer(self) != -1]
+        else:
+            idx = other[self.get_indexer(other) != -1]
+
+        if sort:
+            idx = idx.sort_values()
+
+        return idx
+
+    def _get_compressed_ids(self) -> Index:
+        """
+        Map each unique row to a unique integer, using the same logic as the
+        internal engine, ensuring lexicographic order matches integer order.
+
+        Returns
+        -------
+        Index
+            Integer Index where each integer corresponds to a row in self.
+        """
+        # Leverage the engine's _codes_to_ints to compress each row
+        # into a single integer, respecting offsets.
+        engine = self._engine
+        codes = [ensure_int64(c) for c in self.codes]
+        ints = engine._codes_to_ints(np.column_stack(codes))
+        return Index(ints)
+[/REPLACE]

@@ -1,0 +1,72 @@
+
+
+Looking at the code, I can see that when using `engine='pyarrow'`, dates are parsed by PyArrow but then still go through the Python-based converter in `_process_date_conversion`, causing redundant work. The optimization is to skip the Python date converter when PyArrow has already parsed the dates.
+
+Let me first add the `_engine` attribute to track which engine is being used, then modify `_do_date_conversions` to skip the converter when using PyArrow.
+
+pandas/io/parsers/base_parser.py
+[SEARCH]
+        self._date_conv = _make_date_converter(
+            date_parser=self.date_parser,
+            date_format=self.date_format,
+            dayfirst=self.dayfirst,
+            cache_dates=self.cache_dates,
+        )
+[/SEARCH]
+[REPLACE]
+        self._date_conv = _make_date_converter(
+            date_parser=self.date_parser,
+            date_format=self.date_format,
+            dayfirst=self.dayfirst,
+            cache_dates=self.cache_dates,
+        )
+
+        self._engine = kwds.get("engine")
+[/REPLACE]
+
+pandas/io/parsers/base_parser.py
+[SEARCH]
+    def _do_date_conversions(
+        self,
+        names: Sequence[Hashable] | Index,
+        data: Mapping[Hashable, ArrayLike] | DataFrame,
+    ) -> tuple[Sequence[Hashable] | Index, Mapping[Hashable, ArrayLike] | DataFrame]:
+        # returns data, columns
+
+        if self.parse_dates is not None:
+            data, names = _process_date_conversion(
+                data,
+                self._date_conv,
+                self.parse_dates,
+                self.index_col,
+                self.index_names,
+                names,
+                keep_date_col=self.keep_date_col,
+            )
+
+        return names, data
+[/SEARCH]
+[REPLACE]
+    def _do_date_conversions(
+        self,
+        names: Sequence[Hashable] | Index,
+        data: Mapping[Hashable, ArrayLike] | DataFrame,
+    ) -> tuple[Sequence[Hashable] | Index, Mapping[Hashable, ArrayLike] | DataFrame]:
+        # returns data, columns
+
+        if self.parse_dates is not None:
+            # When using PyArrow engine, dates are already parsed efficiently
+            # Skip the Python-based date converter to avoid redundant work
+            if self._engine != "pyarrow":
+                data, names = _process_date_conversion(
+                    data,
+                    self._date_conv,
+                    self.parse_dates,
+                    self.index_col,
+                    self.index_names,
+                    names,
+                    keep_date_col=self.keep_date_col,
+                )
+
+        return names, data
+[/REPLACE]

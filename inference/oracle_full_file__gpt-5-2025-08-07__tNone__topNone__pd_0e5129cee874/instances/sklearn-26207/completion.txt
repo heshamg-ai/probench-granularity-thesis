@@ -1,0 +1,97 @@
+sklearn/linear_model/_base.py
+[SEARCH]
+from ..utils.sparsefuncs import mean_variance_axis, inplace_column_scale
+[/SEARCH]
+[REPLACE]
+from ..utils.sparsefuncs import mean_variance_axis, inplace_column_scale, inplace_row_scale
+[/REPLACE]
+
+sklearn/linear_model/_base.py
+[SEARCH]
+def _rescale_data(X, y, sample_weight):
+    """Rescale data sample-wise by square root of sample_weight.
+
+    For many linear models, this enables easy support for sample_weight because
+
+        (y - X w)' S (y - X w)
+
+    with S = diag(sample_weight) becomes
+
+        ||y_rescaled - X_rescaled w||_2^2
+
+    when setting
+
+        y_rescaled = sqrt(S) y
+        X_rescaled = sqrt(S) X
+
+    Returns
+    -------
+    X_rescaled : {array-like, sparse matrix}
+
+    y_rescaled : {array-like, sparse matrix}
+    """
+    n_samples = X.shape[0]
+    sample_weight = np.asarray(sample_weight)
+    if sample_weight.ndim == 0:
+        sample_weight = np.full(n_samples, sample_weight, dtype=sample_weight.dtype)
+    sample_weight_sqrt = np.sqrt(sample_weight)
+    sw_matrix = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples))
+    X = safe_sparse_dot(sw_matrix, X)
+    y = safe_sparse_dot(sw_matrix, y)
+    return X, y, sample_weight_sqrt
+[/SEARCH]
+[REPLACE]
+def _rescale_data(X, y, sample_weight):
+    """Rescale data sample-wise by square root of sample_weight.
+
+    For many linear models, this enables easy support for sample_weight because
+
+        (y - X w)' S (y - X w)
+
+    with S = diag(sample_weight) becomes
+
+        ||y_rescaled - X_rescaled w||_2^2
+
+    when setting
+
+        y_rescaled = sqrt(S) y
+        X_rescaled = sqrt(S) X
+
+    Returns
+    -------
+    X_rescaled : {array-like, sparse matrix}
+
+    y_rescaled : {array-like, sparse matrix}
+    """
+    n_samples = X.shape[0]
+
+    # Handle the no-weight case explicitly to avoid unnecessary work.
+    if sample_weight is None:
+        sample_weight_sqrt = np.ones(n_samples, dtype=X.dtype)
+        return X, y, sample_weight_sqrt
+
+    sample_weight = np.asarray(sample_weight)
+    if sample_weight.ndim == 0:
+        sample_weight = np.full(n_samples, sample_weight, dtype=sample_weight.dtype)
+    sample_weight_sqrt = np.sqrt(sample_weight)
+
+    if sp.issparse(X):
+        # Use efficient in-place row scaling for sparse matrices.
+        if not sp.isspmatrix_csr(X):
+            X = X.tocsr(copy=False)
+        inplace_row_scale(X, sample_weight_sqrt)
+        # y is dense (as ensured by _preprocess_data); scale accordingly
+        if y.ndim == 1:
+            y = y * sample_weight_sqrt
+        else:
+            y = y * sample_weight_sqrt[:, np.newaxis]
+        return X, y, sample_weight_sqrt
+
+    # Dense case: scale in-place to avoid constructing large diagonal matrices.
+    if y.ndim == 1:
+        y = y * sample_weight_sqrt
+    else:
+        y = y * sample_weight_sqrt[:, np.newaxis]
+    X = X * sample_weight_sqrt[:, np.newaxis]
+    return X, y, sample_weight_sqrt
+[/REPLACE]

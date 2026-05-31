@@ -1,0 +1,137 @@
+
+
+Looking at the `to_frame` method, I need to optimize it to preserve RangeIndex when possible. The key insight is that when `index=True` and the index is a RangeIndex, the DataFrame constructor already creates a RangeIndex by default, so we can avoid the index assignment overhead in certain cases.
+
+Let me implement the optimization:
+
+pandas/core/indexes/base.py
+[SEARCH]
+    def to_frame(
+        self, index: bool = True, name: Hashable = lib.no_default
+    ) -> DataFrame:
+        """
+        Create a DataFrame with a column containing the Index.
+
+        Parameters
+        ----------
+        index : bool, default True
+            Set the index of the returned DataFrame as the original Index.
+
+        name : object, defaults to index.name
+            The passed name should substitute for the index name (if it has
+            one).
+
+        Returns
+        -------
+        DataFrame
+            DataFrame containing the original Index data.
+
+        See Also
+        --------
+        Index.to_series : Convert an Index to a Series.
+        Series.to_frame : Convert Series to DataFrame.
+
+        Examples
+        --------
+        >>> idx = pd.Index(["Ant", "Bear", "Cow"], name="animal")
+        >>> idx.to_frame()
+               animal
+        animal
+        Ant       Ant
+        Bear     Bear
+        Cow       Cow
+
+        By default, the original index is reused. To enforce a new Index:
+
+        >>> idx.to_frame(index=False)
+            animal
+        0   Ant
+        1  Bear
+        2   Cow
+
+        To override the name of the resulting column, specify `name`:
+
+        >>> idx.to_frame(index=False, name="zoo")
+            zoo
+        0   Ant
+        1  Bear
+        2   Cow
+        """
+        from pandas import DataFrame
+
+        if name is lib.no_default:
+            name = self._get_level_names()
+        result = DataFrame({name: self}, copy=False)
+
+        if index:
+            result.index = self
+        return result
+[/SEARCH]
+[REPLACE]
+    def to_frame(
+        self, index: bool = True, name: Hashable = lib.no_default
+    ) -> DataFrame:
+        """
+        Create a DataFrame with a column containing the Index.
+
+        Parameters
+        ----------
+        index : bool, default True
+            Set the index of the returned DataFrame as the original Index.
+
+        name : object, defaults to index.name
+            The passed name should substitute for the index name (if it has
+            one).
+
+        Returns
+        -------
+        DataFrame
+            DataFrame containing the original Index data.
+
+        See Also
+        --------
+        Index.to_series : Convert an Index to a Series.
+        Series.to_frame : Convert Series to DataFrame.
+
+        Examples
+        --------
+        >>> idx = pd.Index(["Ant", "Bear", "Cow"], name="animal")
+        >>> idx.to_frame()
+               animal
+        animal
+        Ant       Ant
+        Bear     Bear
+        Cow       Cow
+
+        By default, the original index is reused. To enforce a new Index:
+
+        >>> idx.to_frame(index=False)
+            animal
+        0   Ant
+        1  Bear
+        2   Cow
+
+        To override the name of the resulting column, specify `name`:
+
+        >>> idx.to_frame(index=False, name="zoo")
+            zoo
+        0   Ant
+        1  Bear
+        2   Cow
+        """
+        from pandas import DataFrame
+
+        if name is lib.no_default:
+            name = self._get_level_names()
+        result = DataFrame({name: self}, copy=False)
+
+        if index:
+            # Only set the index if it's not already a RangeIndex
+            # This avoids unnecessary overhead when the DataFrame already has
+            # a RangeIndex with the same parameters
+            if not isinstance(self, ABCRangeIndex):
+                result.index = self
+            elif result.index.start != self.start or result.index.step != self.step or result.index.stop != self.stop:
+                result.index = self
+        return result
+[/REPLACE]

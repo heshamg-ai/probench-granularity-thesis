@@ -1,0 +1,33 @@
+
+
+Let me analyze the code to understand the optimization opportunity.
+
+Looking at the `dtype` property in `NumericArray`:
+
+```python
+@cache_readonly
+def dtype(self) -> NumericDtype:
+    mapping = self._dtype_cls._str_to_dtype_mapping()
+    return mapping[str(self._data.dtype)]
+```
+
+The inefficiency is that `_str_to_dtype_mapping()` is a class method that gets called on every access, returning the same class-level dictionary. We can optimize by:
+
+1. Caching the mapping at the class level instead of calling the method each time
+2. Using `self._data.dtype.name` which is slightly more efficient than `str(self._data.dtype)`
+
+Let me implement the optimization:
+
+pandas/core/arrays/numeric.py
+[SEARCH]
+    @cache_readonly
+    def dtype(self) -> NumericDtype:
+        mapping = self._dtype_cls._str_to_dtype_mapping()
+        return mapping[str(self._data.dtype)]
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def dtype(self) -> NumericDtype:
+        mapping = self._dtype_cls._DTYPE_MAPPING
+        return mapping[self._data.dtype.name]
+[/REPLACE]

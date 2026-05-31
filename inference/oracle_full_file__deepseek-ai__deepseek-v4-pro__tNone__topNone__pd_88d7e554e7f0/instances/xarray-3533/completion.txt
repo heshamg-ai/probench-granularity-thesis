@@ -1,0 +1,70 @@
+xarray/core/dataarray.py
+[SEARCH]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/SEARCH]
+[REPLACE]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+
+        # Fast-path: avoid Dataset round-trip for simple int indexers on
+        # small arrays. This keeps the hot path lightweight and avoids
+        # constructing intermediate Dataset objects and re-merging coords.
+        ds = None
+        if (
+            not drop
+            and indexers
+            and all(isinstance(v, int) for v in indexers.values())
+        ):
+            variable = self._variable
+            try:
+                # Apply the integer indexers directly to the Variable
+                # and propagate the selection through the coords.
+                new_variable = variable.isel(indexers)
+                new_coords = {}
+                for k, v in self._coords.items():
+                    if k in indexers:
+                        continue   # drop scalar index coords
+                    # Only keep coords whose dims are still present
+                    if set(v.dims).issubset(new_variable.dims):
+                        new_coords[k] = v
+                name = self.name if self.name is not None else _default
+                return self._replace(new_variable, new_coords, name=name)
+            except Exception:
+                # If anything goes wrong (e.g. an indexer names a non-dim
+                # coordinate, or the Variable rejects the index), fall
+                # through to the original Dataset-based path.
+                pass
+
+        if ds is None:
+            ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/REPLACE]

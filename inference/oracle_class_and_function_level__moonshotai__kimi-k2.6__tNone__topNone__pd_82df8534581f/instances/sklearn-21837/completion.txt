@@ -1,0 +1,62 @@
+ sklearn/feature_selection/_univariate_selection.py
+[SEARCH]
+    # XXX: we might want to do some of the following in logspace instead for
+    # numerical stability.
+    X = check_array(X, accept_sparse="csr")
+    if np.any((X.data if issparse(X) else X) < 0):
+        raise ValueError("Input X must be non-negative.")
+
+    Y = LabelBinarizer().fit_transform(y)
+    if Y.shape[1] == 1:
+        Y = np.append(1 - Y, Y, axis=1)
+
+    observed = safe_sparse_dot(Y.T, X)  # n_classes * n_features
+
+    feature_count = X.sum(axis=0).reshape(1, -1)
+    class_prob = Y.mean(axis=0).reshape(1, -1)
+    expected = np.dot(class_prob.T, feature_count)
+[/SEARCH]
+[REPLACE]
+    # XXX: we might want to do some of the following in logspace instead for
+    # numerical stability.
+    X = check_array(X, accept_sparse="csr")
+    if np.any((X.data if issparse(X) else X) < 0):
+        raise ValueError("Input X must be non-negative.")
+
+    labels, y_encoded = np.unique(y, return_inverse=True)
+    n_classes = len(labels)
+
+    if n_classes == 2:
+        # y_encoded is 0 or 1; create standard binary indicator matrix
+        Y = np.column_stack((1 - y_encoded, y_encoded))
+        class_prob = Y.mean(axis=0).reshape(1, -1)
+    else:
+        # Compute class probabilities directly without full binarization
+        class_prob = np.bincount(y_encoded, minlength=n_classes).reshape(1, -1) / X.shape[0]
+
+    if sp.issparse(X):
+        # Sparse matrix optimization: compute per-class sums via indexing
+        observed = np.zeros((n_classes, X.shape[1]), dtype=X.dtype)
+        for i in range(n_classes):
+            mask = y_encoded == i
+            if np.any(mask):
+                observed[i] = np.asarray(X[mask].sum(axis=0)).ravel()
+    else:
+        # Dense matrix: use advanced indexing for summation
+        observed = np.zeros((n_classes, X.shape[1]), dtype=X.dtype)
+        for i in range(n_classes):
+            mask = y_encoded == i
+            if np.any(mask):
+                observed[i] = X[mask].sum(axis=0)
+
+    feature_count = np.asarray(X.sum(axis=0)).reshape(1, -1)
+    expected = np.dot(class_prob.T, feature_count)
+[/REPLACE]
+sklearn/feature_selection/_univariate_selection.py
+[SEARCH]
+from ..preprocessing import LabelBinarizer
+[/SEARCH]
+[REPLACE]
+from ..preprocessing import LabelBinarizer
+import scipy.sparse as sp
+[/REPLACE]

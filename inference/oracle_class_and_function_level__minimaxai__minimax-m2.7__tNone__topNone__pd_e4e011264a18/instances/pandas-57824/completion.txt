@@ -1,0 +1,84 @@
+
+
+pandas/core/indexes/range.py
+[SEARCH]
+    # --------------------------------------------------------------------
+    # Reductions
+
+    def all(self, *args, **kwargs) -> bool:
+        return 0 not in self._range
+
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+[/SEARCH]
+[REPLACE]
+    # --------------------------------------------------------------------
+    # Reductions
+
+    def all(self, *args, **kwargs) -> bool:
+        return 0 not in self._range
+
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+
+    # --------------------------------------------------------------------
+    # Rounding
+
+    def round(self, decimals: int = 0) -> Self:
+        """
+        Round each value in the Index to the given number of decimals.
+
+        Parameters
+        ----------
+        decimals : int, optional
+            Number of decimal places to round to. If decimals is negative,
+            it specifies the number of positions to the left of the decimal point.
+
+        Returns
+        -------
+        RangeIndex
+            A new RangeIndex with the rounded values.
+
+        Examples
+        --------
+        >>> import pandas as pd
+        >>> idx = pd.RangeIndex(5)
+        >>> idx.round(decimals=0)
+        RangeIndex(start=0, stop=5, step=1)
+        """
+        if decimals == 0:
+            return self.copy()
+        elif decimals > 0:
+            # Rounding to positive decimals produces floats, cannot be RangeIndex
+            return super().round(decimals)
+        else:
+            # Rounding to negative decimals: shift by power of 10
+            # Result is integer if original values are integers
+            factor = 10 ** (-decimals)
+            start = round(self.start / factor) * factor
+            stop = round(self.stop / factor) * factor
+
+            if len(self) > 1:
+                step = round((self[1] - self[0]) / factor) * factor
+            else:
+                step = self.step
+
+            # Check if we can represent as RangeIndex (all integer values)
+            if step == 0:
+                # All values rounded to same number
+                return type(self)(start, start + step, step if step != 0 else 1)
+
+            if (
+                start == int(start)
+                and stop == int(stop)
+                and step == int(step)
+            ):
+                start_int, stop_int, step_int = int(start), int(stop), int(step)
+                if step_int != 0:
+                    return type(self)(start_int, stop_int, step_int, name=self.name)
+                elif step_int == 0 and len(self) <= 1:
+                    # Edge case: step rounded to 0
+                    return type(self)(start_int, start_int + 1, name=self.name)
+
+            return super().round(decimals)
+[/REPLACE]

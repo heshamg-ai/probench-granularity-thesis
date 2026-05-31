@@ -1,0 +1,56 @@
+
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _groupby_op(
+        self,
+        *,
+        how: str,
+        has_dropped_na: bool,
+        min_count: int,
+        ngroups: int,
+        ids: npt.NDArray[np.intp],
+        **kwargs,
+    ):
+        if isinstance(self.dtype, StringDtype):
+            return super()._groupby_op(
+                how=how,
+                has_dropped_na=has_dropped_na,
+                min_count=min_count,
+                ngroups=ngroups,
+                ids=ids,
+                **kwargs,
+            )
+
+        masked = self._to_masked()
+[/SEARCH]
+[REPLACE]
+    def _groupby_op(
+        self,
+        *,
+        how: str,
+        has_dropped_na: bool,
+        min_count: int,
+        ngroups: int,
+        ids: npt.NDArray[np.intp],
+        **kwargs,
+    ):
+        if isinstance(self.dtype, StringDtype):
+            return super()._groupby_op(
+                how=how,
+                has_dropped_na=has_dropped_na,
+                min_count=min_count,
+                ngroups=ngroups,
+                ids=ids,
+                **kwargs,
+            )
+
+        pa_type = self._pa_array.type
+        if how in ("max", "min") and pa.types.is_timestamp(pa_type):
+            try:
+                return self._groupby_max_min_optimized(ids, how)
+            except Exception:
+                pass
+
+        masked = self._to_masked()
+[/REPLACE]

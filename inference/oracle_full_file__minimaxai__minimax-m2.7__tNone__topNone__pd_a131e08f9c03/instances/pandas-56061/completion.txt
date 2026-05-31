@@ -1,0 +1,177 @@
+
+
+Looking at the code, I need to optimize `DataFrameGroupBy.nunique` for large group cardinality. The key insight is that the current implementation creates a `SeriesGroupBy` for each column separately via `_apply_to_column_groupbys`, which has overhead for large datasets.
+
+Let me analyze the code and create an optimized version.
+
+pandas/core/groupby/generic.py
+[SEARCH]
+    def nunique(self, dropna: bool = True) -> DataFrame:
+        """
+        Return DataFrame with counts of unique elements in each position.
+
+        Parameters
+        ----------
+        dropna : bool, default True
+            Don't include NaN in the counts.
+
+        Returns
+        -------
+        nunique: DataFrame
+
+        Examples
+        --------
+        >>> df = pd.DataFrame({'id': ['spam', 'egg', 'egg', 'spam',
+        ...                           'ham', 'ham'],
+        ...                    'value1': [1, 5, 5, 2, 5, 5],
+        ...                    'value2': list('abbaxy')})
+        >>> df
+             id  value1 value2
+        0  spam       1      a
+        1   egg       5      b
+        2   egg       5      b
+        3  spam       2      a
+        4   ham       5      x
+        5   ham       5      y
+
+        >>> df.groupby('id').nunique()
+              value1  value2
+        id
+        egg        1       1
+        ham        1       2
+        spam       2       1
+
+        Check for rows with the same id but conflicting values:
+
+        >>> df.groupby('id').filter(lambda g: (g.nunique() > 1).any())
+             id  value1 value2
+        0  spam       1      a
+        3  spam       2      a
+        4   ham       5      x
+        5   ham       5      y
+        """
+
+        if self.axis != 0:
+            # see test_groupby_crash_on_nunique
+            return self._python_apply_general(
+                lambda sgb: sgb.nunique(dropna), self._obj_with_exclusions, is_agg=True
+            )
+
+        return self._apply_to_column_groupbys(lambda sgb: sgb.nunique(dropna))
+[/SEARCH]
+[REPLACE]
+    def nunique(self, dropna: bool = True) -> DataFrame:
+        """
+        Return DataFrame with counts of unique elements in each position.
+
+        Parameters
+        ----------
+        dropna : bool, default True
+            Don't include NaN in the counts.
+
+        Returns
+        -------
+        nunique: DataFrame
+
+        Examples
+        --------
+        >>> df = pd.DataFrame({'id': ['spam', 'egg', 'egg', 'spam',
+        ...                           'ham', 'ham'],
+        ...                    'value1': [1, 5, 5, 2, 5, 5],
+        ...                    'value2': list('abbaxy')})
+        >>> df
+             id  value1 value2
+        0  spam       1      a
+        1   egg       5      b
+        2   egg       5      b
+        3  spam       2      a
+        4   ham       5      x
+        5   ham       5      y
+
+        >>> df.groupby('id').nunique()
+              value1  value2
+        id
+        egg        1       1
+        ham        1       2
+        spam       2       1
+
+        Check for rows with the same id but conflicting values:
+
+        >>> df.groupby('id').filter(lambda g: (g.nunique() > 1).any())
+             id  value1 value2
+        0  spam       1      a
+        3  spam       2      a
+        4   ham       5      x
+        5   ham       5      y
+        """
+
+        if self.axis != 0:
+            # see test_groupby_crash_on_nunique
+            return self._python_apply_general(
+                lambda sgb: sgb.nunique(dropna), self._obj_with_exclusions, is_agg=True
+            )
+
+        # Optimized path for large group cardinality:
+        # Process all columns at once to avoid per-column SeriesGroupBy overhead
+        obj = self._obj_with_exclusions
+        columns = obj.columns
+        ncols = len(columns)
+
+        if ncols == 0:
+            return self.obj._constructor(
+                [], index=self.grouper.result_index, columns=obj.columns
+            )
+
+        ids, _, _ = self.grouper.group_info
+
+        # Pre-allocate output array
+        ngroups = len(self.grouper.result_index)
+        out = np.zeros((ngroups, ncols), dtype=np.int64)
+
+        for j, colname in enumerate(columns):
+            val = obj[colname]._values
+
+            codes, _ = algorithms.factorize(val, sort=False)
+            sorter = np.lexsort((codes, ids))
+            codes = codes[sorter]
+            ids_sorted = ids[sorter]
+
+            # Group boundaries
+            idx = np.r_[0, 1 + np.nonzero(ids_sorted[1:] != ids_sorted[:-1])[0]]
+            # Unique observations are where sorted values change
+            inc = np.r_[1, codes[1:] != codes[:-1]]
+
+            mask = codes == -1
+            if dropna:
+                inc[idx] = 1
+                inc[mask] = 0
+            else:
+                inc[mask & np.r_[False, mask[:-1]]] = 0
+                inc[idx] = 1
+
+            result = np.add.reduceat(inc, idx).astype(np.int64, copy=False)
+
+            if len(ids_sorted):
+                if ids_sorted[0] == -1:
+                    result = result[1:]
+                    idx = idx[np.flatnonzero(idx)]
+            else:
+                result = result[1:]
+
+            # Handle potential duplications among bins
+            if len(result) != ngroups:
+                result_tmp = np.zeros(ngroups, dtype=np.int64)
+                if len(ids_sorted) > 0:
+                    result_tmp[ids_sorted[idx]] = result
+                result = result_tmp
+
+            out[:, j] = result
+
+        result_df = self.obj._constructor(
+            out, index=self.grouper.result_index, columns=columns
+        )
+        if not self.as_index:
+            result_df = self._insert_inaxis_grouper(result_df)
+            result_df.index = default_index(len(result_df))
+        return self._reindex_output(result_df, fill_value=0)
+[/REPLACE]

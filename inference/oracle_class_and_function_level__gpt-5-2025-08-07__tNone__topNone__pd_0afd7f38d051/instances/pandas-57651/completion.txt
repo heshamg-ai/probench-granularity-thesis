@@ -1,0 +1,131 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def symmetric_difference(
+        self, other, result_name: Hashable | None = None, sort=None
+    ) -> Index:
+        if not isinstance(other, RangeIndex) or sort is not None:
+            return super().symmetric_difference(other, result_name, sort)
+
+        left = self.difference(other)
+        right = other.difference(self)
+        result = left.union(right)
+
+        if result_name is not None:
+            result = result.rename(result_name)
+        return result
+[/SEARCH]
+[REPLACE]
+    def symmetric_difference(
+        self, other, result_name: Hashable | None = None, sort=None
+    ) -> Index:
+        if not isinstance(other, RangeIndex) or sort is not None:
+            return super().symmetric_difference(other, result_name, sort)
+
+        left = self.difference(other)
+        right = other.difference(self)
+        result = left.union(right)
+
+        if result_name is not None:
+            result = result.rename(result_name)
+        return result
+
+    def join(
+        self,
+        other,
+        *,
+        how="left",
+        level=None,
+        return_indexers: bool = False,
+        sort: bool = False,
+    ):
+        # Fastpaths specialized for RangeIndex-vs-RangeIndex joins.
+        # Delegate to base implementation for unsupported cases to preserve semantics.
+        if not isinstance(other, Index):
+            return super().join(
+                other,
+                how=how,
+                level=level,
+                return_indexers=return_indexers,
+                sort=sort,
+            )
+
+        sort = sort or how == "outer"
+
+        if level is not None or not isinstance(other, RangeIndex):
+            return super().join(
+                other,
+                how=how,
+                level=level,
+                return_indexers=return_indexers,
+                sort=sort,
+            )
+
+        if len(self) == 0 or len(other) == 0:
+            return super().join(
+                other,
+                how=how,
+                level=level,
+                return_indexers=return_indexers,
+                sort=sort,
+            )
+
+        lidx = ridx = None
+
+        if how == "left":
+            if sort:
+                if self.step > 0 or len(self) <= 1:
+                    join_index = self
+                    lidx = np.arange(len(self), dtype=np.intp)
+                else:
+                    join_index = self[::-1]
+                    lidx = np.arange(len(self) - 1, -1, -1, dtype=np.intp)
+                ridx = other.get_indexer_for(join_index)
+            else:
+                join_index = self
+                ridx = other.get_indexer_for(self)
+
+        elif how == "right":
+            if sort:
+                if other.step > 0 or len(other) <= 1:
+                    join_index = other
+                    ridx = np.arange(len(other), dtype=np.intp)
+                else:
+                    join_index = other[::-1]
+                    ridx = np.arange(len(other) - 1, -1, -1, dtype=np.intp)
+                lidx = self.get_indexer_for(join_index)
+            else:
+                join_index = other
+                lidx = self.get_indexer_for(other)
+
+        elif how == "inner":
+            join_index = self.intersection(other, sort=sort)
+            if join_index is not self:
+                lidx = self.get_indexer_for(join_index)
+            if join_index is not other:
+                ridx = other.get_indexer_for(join_index)
+
+        elif how == "outer":
+            join_index = self.union(other, sort=sort)
+            if join_index is not self:
+                lidx = self.get_indexer_for(join_index)
+            if join_index is not other:
+                ridx = other.get_indexer_for(join_index)
+
+        else:
+            # Validate and delegate unknown how values to base for error handling
+            return super().join(
+                other,
+                how=how,
+                level=level,
+                return_indexers=return_indexers,
+                sort=sort,
+            )
+
+        names = other.names if how == "right" else self.names
+        if join_index.names != names:
+            join_index = join_index.set_names(names)
+
+        if return_indexers:
+            return join_index, lidx, ridx
+        return join_index
+[/REPLACE]

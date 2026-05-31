@@ -1,0 +1,95 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+        if self._is_lexsorted() and self.is_monotonic_increasing:
+            return self
+
+        new_levels = []
+        new_codes = []
+[/SEARCH]
+[REPLACE]
+        if self._is_lexsorted() and self.is_monotonic_increasing:
+            return self
+
+        new_levels = []
+        new_codes = []
+
+        changed = False
+[/REPLACE]
+
+pandas/core/indexes/multi.py
+[SEARCH]
+                    lev = lev.take(indexer)
+
+                    # indexer to reorder the level codes
+                    indexer = ensure_platform_int(indexer)
+                    ri = lib.get_reverse_indexer(indexer, len(indexer))
+                    level_codes = algos.take_nd(ri, level_codes)
+[/SEARCH]
+[REPLACE]
+                    lev = lev.take(indexer)
+
+                    # indexer to reorder the level codes
+                    indexer = ensure_platform_int(indexer)
+                    ri = lib.get_reverse_indexer(indexer, len(indexer))
+                    level_codes = algos.take_nd(ri, level_codes)
+                    changed = True
+[/REPLACE]
+
+pandas/core/indexes/multi.py
+[SEARCH]
+            new_levels.append(lev)
+            new_codes.append(level_codes)
+
+        return MultiIndex(
+            new_levels,
+            new_codes,
+            names=self.names,
+            sortorder=self.sortorder,
+            verify_integrity=False,
+        )
+[/SEARCH]
+[REPLACE]
+            new_levels.append(lev)
+            new_codes.append(level_codes)
+
+        if not changed:
+            return self
+
+        return MultiIndex(
+            new_levels,
+            new_codes,
+            names=self.names,
+            sortorder=self.sortorder,
+            verify_integrity=False,
+        )
+[/REPLACE]
+
+pandas/core/sorting.py
+[SEARCH]
+        if codes_given:
+            mask = k == -1
+            codes = k.copy()
+            n = len(codes)
+            mask_n = n
+            # error: Item "ExtensionArray" of "Union[Any, ExtensionArray,
+            # ndarray[Any, Any]]" has no attribute "any"
+            if mask.any():  # type: ignore[union-attr]
+                n -= 1
+[/SEARCH]
+[REPLACE]
+        if codes_given:
+            mask = k == -1
+            codes = k.copy()
+            if len(codes):
+                # number of categories equals max code + 1, ignoring -1
+                max_code = codes.max()
+                if max_code < 0:
+                    n = 0
+                else:
+                    n = int(max_code) + 1
+            else:
+                n = 0
+            # error: Item "ExtensionArray" of "Union[Any, ExtensionArray,
+            # ndarray[Any, Any]]" has no attribute "any"
+            mask_n = n + 1 if mask.any() else n  # type: ignore[union-attr]
+[/REPLACE]

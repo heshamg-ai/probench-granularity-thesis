@@ -1,0 +1,99 @@
+
+
+Looking at the `LinearRegression.fit` method, I can identify several optimization opportunities for the sparse X case:
+
+1. The current `LinearOperator` approach adds function call overhead for each iteration of lsqr
+2. Precomputing the centered sparse matrix directly is more efficient than using matvec/rmatvec
+3. The parallel processing overhead for multi-output can be reduced
+
+Let me create the optimization:
+
+sklearn/linear_model/_base.py
+[SEARCH]
+        elif sp.issparse(X):
+            X_offset_scale = X_offset / X_scale
+
+            def matvec(b):
+                return X.dot(b) - sample_weight_sqrt * b.dot(X_offset_scale)
+
+            def rmatvec(b):
+                return X.T.dot(b) - X_offset_scale * b.dot(sample_weight_sqrt)
+
+            X_centered = sparse.linalg.LinearOperator(
+                shape=X.shape, matvec=matvec, rmatvec=rmatvec
+            )
+
+            if y.ndim < 2:
+                self.coef_ = lsqr(X_centered, y)[0]
+            else:
+                # sparse_lstsq cannot handle y with shape (M, K)
+                outs = Parallel(n_jobs=n_jobs_)(
+                    delayed(lsqr)(X_centered, y[:, j].ravel())
+                    for j in range(y.shape[1])
+                )
+                self.coef_ = np.vstack([out[0] for out in outs])
+[/SEARCH]
+[REPLACE]
+        elif sp.issparse(X):
+            X_offset_scale = X_offset / X_scale
+
+            # Precompute centered matrix directly to avoid LinearOperator overhead
+            # X_centered = X - sample_weight_sqrt[:, np.newaxis] * X_offset_scale
+            # For sparse X, we use diag(sample_weight_sqrt) @ X - diag(sample_weight_sqrt) @ ones(n_samples) @ X_offset_scale
+            # = sample_weight_sqrt[:, np.newaxis] * X - sample_weight_sqrt[:, np.newaxis] * X_offset_scale
+            # = sample_weight_sqrt[:, np.newaxis] * (X - X_offset_scale)
+            if self.fit_intercept:
+                # Compute X - X_offset_scale efficiently for sparse matrix
+                # X - X_offset_scale = X - ones(n_samples, 1) @ X_offset_scale
+                if sp.issparse(y) or y.ndim > 1:
+                    # For multi-output, use LinearOperator to avoid materializing large matrix
+                    def matvec(b):
+                        return X.dot(b) - sample_weight_sqrt * b.dot(X_offset_scale)
+
+                    def rmatvec(b):
+                        return X.T.dot(b) - X_offset_scale * b.dot(sample_weight_sqrt)
+
+                    X_centered = sparse.linalg.LinearOperator(
+                        shape=X.shape, matvec=matvec, rmatvec=rmatvec
+                    )
+                else:
+                    # Single output: materialize centered sparse matrix for better lsqr performance
+                    # Subtract offset from each row efficiently
+                    X_centered = X.copy()
+                    # Scale rows by sample_weight_sqrt and subtract weighted offset
+                    if np.any(sample_weight_sqrt != 1):
+                        # Apply sample_weight_sqrt scaling to rows
+                        X_centered = sp.diags(sample_weight_sqrt).dot(X)
+                        X_centered = X_centered - np.outer(sample_weight_sqrt, X_offset_scale)
+                    else:
+                        X_centered = X_centered - np.outer(sample_weight_sqrt, X_offset_scale)
+
+                    # y is already rescaled by _rescale_data
+                    self.coef_ = lsqr(X_centered, y)[0]
+                    if y.ndim == 1:
+                        self.coef_ = np.ravel(self.coef_)
+                    self._set_intercept(X_offset, y_offset, X_scale)
+                    return self
+
+            if y.ndim < 2:
+                self.coef_ = lsqr(X_centered, y)[0]
+            else:
+                # sparse_lstsq cannot handle y with shape (M, K)
+                # For multi-output with sparse X, use LinearOperator
+                if self.fit_intercept:
+                    def matvec(b):
+                        return X.dot(b) - sample_weight_sqrt * b.dot(X_offset_scale)
+
+                    def rmatvec(b):
+                        return X.T.dot(b) - X_offset_scale * b.dot(sample_weight_sqrt)
+
+                    X_centered = sparse.linalg.LinearOperator(
+                        shape=X.shape, matvec=matvec, rmatvec=rmatvec
+                    )
+
+                outs = Parallel(n_jobs=n_jobs_)(
+                    delayed(lsqr)(X_centered, y[:, j].ravel())
+                    for j in range(y.shape[1])
+                )
+                self.coef_ = np.vstack([out[0] for out in outs])
+[/REPLACE]

@@ -1,0 +1,82 @@
+xarray/core/dataarray.py
+[SEARCH]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/SEARCH]
+[REPLACE]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        # Fast path: if no indexers are DataArrays and drop is False, skip
+        # the round-trip through Dataset to avoid overhead.
+        if not drop and indexers and not any(
+            isinstance(v, DataArray) for v in indexers.values()
+        ):
+            # Validate indexers (raises on disallowed types like DataArray
+            # with coordinates) and convert to a list of (dim, indexer)
+            # pairs just as Dataset.isel would.
+            validated = list(
+                self._to_temp_dataset()._validate_indexers(indexers)
+            )
+            # Build variable indexers for the main variable using only
+            # indexers that match its dims.
+            var_indexers = {
+                k: v for k, v in validated if k in self._variable.dims
+            }
+            # Index the main variable directly.
+            new_variable = self._variable.isel(indexers=var_indexers)
+            # Build new coordinates by indexing each coordinate variable
+            # only against indexers that affect that coordinate.
+            new_coords = {}
+            for name, coord in self._coords.items():
+                coord_indexers = {
+                    k: v for k, v in validated if k in coord.dims
+                }
+                if coord_indexers:
+                    new_coords[name] = coord.isel(indexers=coord_indexers)
+                else:
+                    new_coords[name] = coord.copy(deep=False)
+            # Drop dimensions that became scalars from the coordinate dict
+            # (same behaviour as ``drop=False`` for Dataset.isel).
+            new_dims = {}
+            for d, s in zip(new_variable.dims, new_variable.shape):
+                new_dims[d] = s
+            # Filter out scalar coords that have no dimension.
+            filtered_coords = {
+                n: c
+                for n, c in new_coords.items()
+                if set(c.dims) <= set(new_dims)
+            }
+            return self._replace(
+                variable=new_variable, coords=filtered_coords
+            )
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/REPLACE]

@@ -1,0 +1,10 @@
+{
+  "scenario_id": "pandas-53152",
+  "repo": "pandas-dev/pandas",
+  "seconds": 26.1007080078125,
+  "provider": "minimax",
+  "model": "minimaxai/minimax-m2.7",
+  "temperature": null,
+  "top_p": null,
+  "prompt_dataset_path": "LLMs thesis/dataset/dataset__gran=full_file__tok=minimaxm2.7__max=196608__imports=False__globals=False__sigs=False__changes=False.json"
+}

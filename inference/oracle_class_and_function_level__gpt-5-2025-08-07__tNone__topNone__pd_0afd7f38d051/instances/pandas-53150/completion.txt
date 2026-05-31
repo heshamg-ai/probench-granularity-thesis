@@ -1,0 +1,43 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        if (pa.types.is_string(pa_type) or pa.types.is_binary(pa_type)) and op in [
+            operator.add,
+            roperator.radd,
+        ]:
+            length = self._pa_array.length()
+
+            seps: list[str] | list[bytes]
+            if pa.types.is_string(pa_type):
+                seps = [""] * length
+            else:
+                seps = [b""] * length
+
+            if is_scalar(other):
+                other = [other] * length
+            elif isinstance(other, type(self)):
+                other = other._pa_array
+            if op is operator.add:
+                result = pc.binary_join_element_wise(self._pa_array, other, seps)
+            else:
+                result = pc.binary_join_element_wise(other, self._pa_array, seps)
+            return type(self)(result)
+[/SEARCH]
+[REPLACE]
+        if (pa.types.is_string(pa_type) or pa.types.is_binary(pa_type)) and op in [
+            operator.add,
+            roperator.radd,
+        ]:
+            # Avoid large Python list allocations by using scalar separator
+            sep = "" if pa.types.is_string(pa_type) else b""
+
+            if is_scalar(other):
+                other = pa.scalar(other)
+            elif isinstance(other, type(self)):
+                other = other._pa_array
+
+            if op is operator.add:
+                result = pc.binary_join_element_wise(self._pa_array, other, sep)
+            else:
+                result = pc.binary_join_element_wise(other, self._pa_array, sep)
+            return type(self)(result)
+[/REPLACE]

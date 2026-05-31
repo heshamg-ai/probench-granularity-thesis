@@ -1,0 +1,14 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        names = other.names if how == "right" else self.names
+[/SEARCH]
+[REPLACE]
+        # Reuse input index object when result labels match exactly to retain caches
+        expected_names = other.names if how == "right" else self.names
+        if not join_index.is_(self) and join_index.equals(self) and expected_names == self.names:
+            join_index = self._view()
+        elif not join_index.is_(other) and join_index.equals(other) and expected_names == other.names:
+            join_index = other._view()
+
+        names = other.names if how == "right" else self.names
+[/REPLACE]

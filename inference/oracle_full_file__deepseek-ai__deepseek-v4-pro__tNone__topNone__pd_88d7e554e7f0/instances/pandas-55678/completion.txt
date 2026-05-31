@@ -1,0 +1,149 @@
+```python
+pandas/core/reshape/merge.py
+[SEARCH]
+    def _convert_values_for_libjoin(
+        self, values: AnyArrayLike, side: str
+    ) -> np.ndarray:
+        # we require sortedness and non-null values in the join keys
+        if not Index(values).is_monotonic_increasing:
+            if isna(values).any():
+                raise ValueError(f"Merge keys contain null values on {side} side")
+            raise ValueError(f"{side} keys must be sorted")
+
+        if isinstance(values, ArrowExtensionArray):
+            values = values._maybe_convert_datelike_array()
+
+        if needs_i8_conversion(values.dtype):
+            values = values.view("i8")
+
+        elif isinstance(values, BaseMaskedArray):
+            # we've verified above that no nulls exist
+            values = values._data
+        elif isinstance(values, ExtensionArray):
+            values = values.to_numpy()
+
+        # error: Incompatible return value type (got "Union[ExtensionArray,
+        # Any, ndarray[Any, Any], ndarray[Any, dtype[Any]], Index, Series]",
+        # expected "ndarray[Any, Any]")
+        return values  # type: ignore[return-value]
+[/SEARCH]
+[REPLACE]
+    def _convert_values_for_libjoin(
+        self, values: AnyArrayLike, side: str
+    ) -> np.ndarray:
+        # we require sortedness and non-null values in the join keys
+        if not Index(values).is_monotonic_increasing:
+            if isna(values).any():
+                raise ValueError(f"Merge keys contain null values on {side} side")
+            raise ValueError(f"{side} keys must be sorted")
+
+        if isinstance(values, ArrowExtensionArray):
+            values = values._maybe_convert_datelike_array()
+
+        if needs_i8_conversion(values.dtype):
+            values = values.view("i8")
+
+        elif isinstance(values, BaseMaskedArray):
+            # we've verified above that no nulls exist
+            values = values._data
+        elif isinstance(values, ExtensionArray):
+            values = values.to_numpy()
+
+        # error: Incompatible return value type (got "Union[ExtensionArray,
+        # Any, ndarray[Any, Any], ndarray[Any, dtype[Any]], Index, Series]",
+        # expected "ndarray[Any, Any]")
+        return values  # type: ignore[return-value]
+
+    def _get_join_indexers(self) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+        """return the join indexers"""
+
+        # values to compare
+        left_values = (
+            self.left.index._values if self.left_index else self.left_join_keys[-1]
+        )
+        right_values = (
+            self.right.index._values if self.right_index else self.right_join_keys[-1]
+        )
+
+        # _maybe_require_matching_dtypes already checked for dtype matching
+        assert left_values.dtype == right_values.dtype
+
+        tolerance = self.tolerance
+        if tolerance is not None:
+            if needs_i8_conversion(left_values.dtype):
+                tolerance = Timedelta(tolerance)
+                if left_values.dtype.kind in "mM":
+                    lvs = ensure_wrapped_if_datetimelike(left_values)
+                    tolerance = tolerance.as_unit(lvs.unit)
+
+                tolerance = tolerance._value
+
+        # initial type conversion as needed
+        left_values = self._convert_values_for_libjoin(left_values, "left")
+        right_values = self._convert_values_for_libjoin(right_values, "right")
+
+        # use optimized path when no 'by' columns are specified
+        if self.left_by is not None:
+            # remove 'on' parameter from values if one existed
+            if self.left_index and self.right_index:
+                left_by_values = self.left_join_keys
+                right_by_values = self.right_join_keys
+            else:
+                left_by_values = self.left_join_keys[0:-1]
+                right_by_values = self.right_join_keys[0:-1]
+
+            # get tuple representation of values if more than one
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # Fast path: factorize each 'by' column independently
+                # instead of converting to i8 and building a single group index.
+                lbv, rbv, _ = _factorize_keys(lbv, rbv, sort=False, how="left")
+            else:
+                # We get here with non-ndarrays in test_merge_by_col_tz_aware
+                #  and test_merge_groupby_multiple_column_with_categorical_column
+                mapped = [
+                    _factorize_keys(
+                        left_by_values[n],
+                        right_by_values[n],
+                        sort=False,
+                        how="left",
+                    )
+                    for n in range(len(left_by_values))
+                ]
+                arrs = [np.concatenate(m[:2]) for m in mapped]
+                shape = tuple(m[2] for m in mapped)
+                group_index = get_group_index(
+                    arrs, shape=shape, sort=False, xnull=False
+                )
+                left_len = len(left_by_values[0])
+                lbv = group_index[:left_len]
+                rbv = group_index[left_len:]
+            right_by_values = rbv  # type: ignore[assignment]
+            left_by_values = lbv  # type: ignore[assignment]
+
+            # choose appropriate function by type
+            func = _asof_by_function(self.direction)
+            return func(
+                left_values,
+                right_values,
+                left_by_values,
+                right_by_values,
+                self.allow_exact_matches,
+                tolerance,
+            )
+        else:
+            # choose appropriate function by type
+            func = _asof_by_function(self.direction)
+            return func(
+                left_values,
+                right_values,
+                None,
+                None,
+                self.allow_exact_matches,
+                tolerance,
+                False,
+            )
+[/REPLACE]
+```

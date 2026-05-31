@@ -1,0 +1,19 @@
+pandas/core/internals/managers.py
+[SEARCH]
+        for blk in self.blocks:
+            # Such assignment may incorrectly coerce NaT to None
+            # result[blk.mgr_locs] = blk._slice((slice(None), loc))
+            for i, rl in enumerate(blk.mgr_locs):
+                result[rl] = blk.iget((i, loc))
+[/SEARCH]
+[REPLACE]
+        for blk in self.blocks:
+            if isinstance(dtype, ExtensionDtype) and not immutable_ea:
+                # Fast path: batch assignment into ExtensionArray result avoids per-item overhead
+                result[blk.mgr_locs] = blk._slice((slice(None), loc))
+            else:
+                # Such assignment may incorrectly coerce NaT to None
+                # result[blk.mgr_locs] = blk._slice((slice(None), loc))
+                for i, rl in enumerate(blk.mgr_locs):
+                    result[rl] = blk.iget((i, loc))
+[/REPLACE]

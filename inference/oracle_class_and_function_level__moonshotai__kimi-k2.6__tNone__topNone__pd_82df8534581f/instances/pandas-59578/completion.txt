@@ -1,0 +1,135 @@
+ pandas/core/indexes/multi.py
+[SEARCH]
+    def _set_names(self, names, *, level=None, validate: bool = True) -> None:
+        """
+        Set new names on index. Each name has to be a hashable type.
+
+        Parameters
+        ----------
+        values : str or sequence
+            name(s) to set
+        level : int, level name, or sequence of int/level names (default None)
+            If the index is a MultiIndex (hierarchical), level(s) to set (None
+            for all levels). Otherwise level must be None
+        validate : bool, default True
+            validate that the names match level lengths
+
+        Raises
+        ------
+        TypeError if each name is not hashable.
+
+        Notes
+        -----
+        sets names on levels. WARNING: mutates!
+
+        Note that you generally want to set this *after* changing levels, so
+        that it only acts on copies
+        """
+        # GH 15110
+        # Don't allow a single string for names in a MultiIndex
+        if names is not None and not is_list_like(names):
+            raise ValueError("Names should be list-like for a MultiIndex")
+
+        names = list(names)
+
+        if validate:
+            if level is not None and len(names) != len(level):
+                raise ValueError("Length of names must match length of level.")
+            if level is None and len(names) != self.nlevels:
+                raise ValueError(
+                    "Length of names must match number of levels in MultiIndex."
+                )
+
+        if level is None:
+            level = range(self.nlevels)
+        else:
+            level = (self._get_level_number(lev) for lev in level)
+
+        # set the name
+        for lev, name in zip(level, names):
+            if name is not None:
+                # GH 20527
+                # All items in 'names' need to be hashable:
+                if not is_hashable(name):
+                    raise TypeError(
+                        f"{type(self).__name__}.name must be a hashable type"
+                    )
+            self._names[lev] = name
+
+        # If .levels has been accessed, the names in our cache will be stale.
+        self._reset_cache()
+[/SEARCH]
+[REPLACE]
+    def _set_names(self, names, *, level=None, validate: bool = True) -> None:
+        """
+        Set new names on index. Each name has to be a hashable type.
+
+        Parameters
+        ----------
+        values : str or sequence
+            name(s) to set
+        level : int, level name, or sequence of int/level names (default None)
+            If the index is a MultiIndex (hierarchical), level(s) to set (None
+            for all levels). Otherwise level must be None
+        validate : bool, default True
+            validate that the names match level lengths
+
+        Raises
+        ------
+        TypeError if each name is not hashable.
+
+        Notes
+        -----
+        sets names on levels. WARNING: mutates!
+
+        Note that you generally want to set this *after* changing levels, so
+        that it only acts on copies
+        """
+        # GH 15110
+        # Don't allow a single string for names in a MultiIndex
+        if names is not None and not is_list_like(names):
+            raise ValueError("Names should be list-like for a MultiIndex")
+
+        names = list(names)
+
+        if validate:
+            if level is not None and len(names) != len(level):
+                raise ValueError("Length of names must match length of level.")
+            if level is None and len(names) != self.nlevels:
+                raise ValueError(
+                    "Length of names must match number of levels in MultiIndex."
+                )
+
+        if level is None:
+            # Fast path: validate all names and replace entire list at once
+            for name in names:
+                if name is not None and not is_hashable(name):
+                    raise TypeError(
+                        f"{type(self).__name__}.name must be a hashable type"
+                    )
+            if self._names != names:
+                self._names = list(names)
+                # If .levels has been accessed, the names in our cache will be stale.
+                self._reset_cache()
+            return
+
+        level = (self._get_level_number(lev) for lev in level)
+
+        # set the name
+        names_changed = False
+        for lev, name in zip(level, names):
+            if name is not None:
+                # GH 20527
+                # All items in 'names' need to be hashable:
+                if not is_hashable(name):
+                    raise TypeError(
+                        f"{type(self).__name__}.name must be a hashable type"
+                    )
+            if self._names[lev] != name:
+                self._names[lev] = name
+                names_changed = True
+
+        # If .levels has been accessed, the names in our cache will be stale.
+        if names_changed:
+            self._reset_cache()
+[/REPLACE]

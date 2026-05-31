@@ -1,0 +1,73 @@
+xarray/core/dataset.py
+[SEARCH]
+    def _construct_dataarray(self, name: Hashable) -> "DataArray":
+        """Construct a DataArray by indexing this dataset"""
+        from .dataarray import DataArray
+
+        try:
+            variable = self._variables[name]
+        except KeyError:
+            _, name, variable = _get_virtual_variable(
+                self._variables, name, self._level_coords, self.dims
+            )
+
+        needed_dims = set(variable.dims)
+
+        coords: Dict[Hashable, Variable] = {}
+        for k in self.coords:
+            if set(self.variables[k].dims) <= needed_dims:
+                coords[k] = self.variables[k]
+
+        if self._indexes is None:
+            indexes = None
+        else:
+            indexes = {k: v for k, v in self._indexes.items() if k in coords}
+
+        return DataArray(variable, coords, name=name, indexes=indexes, fastpath=True)
+[/SEARCH]
+[REPLACE]
+    def _construct_dataarray(self, name: Hashable) -> "DataArray":
+        """Construct a DataArray by indexing this dataset"""
+        from .dataarray import DataArray
+
+        try:
+            variable = self._variables[name]
+        except KeyError:
+            _, name, variable = _get_virtual_variable(
+                self._variables, name, self._level_coords, self.dims
+            )
+
+        needed_dims = set(variable.dims)
+
+        coords: Dict[Hashable, Variable] = {}
+        variables = self.variables
+        for k in self.coords:
+            var_k = variables[k]
+            dims_k = var_k.dims
+            ok = True
+            for d in dims_k:
+                if d not in needed_dims:
+                    ok = False
+                    break
+            if ok:
+                coords[k] = var_k
+
+        if self._indexes is None:
+            indexes = None
+        else:
+            idx = self._indexes
+            if coords:
+                remaining = set(coords.keys())
+                items = []
+                for k, v in idx.items():
+                    if k in remaining:
+                        items.append((k, v))
+                        remaining.remove(k)
+                        if not remaining:
+                            break
+                indexes = dict(items)
+            else:
+                indexes = {}
+
+        return DataArray(variable, coords, name=name, indexes=indexes, fastpath=True)
+[/REPLACE]

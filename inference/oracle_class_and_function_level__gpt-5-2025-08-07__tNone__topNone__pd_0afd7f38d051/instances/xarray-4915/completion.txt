@@ -1,0 +1,135 @@
+xarray/core/rolling.py
+[SEARCH]
+    def _numpy_or_bottleneck_reduce(
+        self, array_agg_func, bottleneck_move_func, keep_attrs, **kwargs
+    ):
+        if "dim" in kwargs:
+            warnings.warn(
+                f"Reductions are applied along the rolling dimension(s) "
+                f"'{self.dim}'. Passing the 'dim' kwarg to reduction "
+                f"operations has no effect.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            del kwargs["dim"]
+
+        if (
+            bottleneck_move_func is not None
+            and not is_duck_dask_array(self.obj.data)
+            and len(self.dim) == 1
+        ):
+            # TODO: renable bottleneck with dask after the issues
+            # underlying https://github.com/pydata/xarray/issues/2940 are
+            # fixed.
+            return self._bottleneck_reduce(
+                bottleneck_move_func, keep_attrs=keep_attrs, **kwargs
+            )
+        else:
+            return self.reduce(array_agg_func, keep_attrs=keep_attrs, **kwargs)
+[/SEARCH]
+[REPLACE]
+    def _numpy_or_bottleneck_reduce(
+        self, array_agg_func, bottleneck_move_func, keep_attrs, **kwargs
+    ):
+        if "dim" in kwargs:
+            warnings.warn(
+                f"Reductions are applied along the rolling dimension(s) "
+                f"'{self.dim}'. Passing the 'dim' kwarg to reduction "
+                f"operations has no effect.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            del kwargs["dim"]
+
+        if (
+            bottleneck_move_func is not None
+            and not is_duck_dask_array(self.obj.data)
+            and len(self.dim) == 1
+        ):
+            # TODO: renable bottleneck with dask after the issues
+            # underlying https://github.com/pydata/xarray/issues/2940 are
+            # fixed.
+            return self._bottleneck_reduce(
+                bottleneck_move_func, keep_attrs=keep_attrs, **kwargs
+            )
+
+        # Optimized multi-dimensional rolling mean using bottleneck.move_sum
+        # when possible. Falls back to generic reduce otherwise.
+        try:
+            from . import duck_array_ops  # local import to compare function identity
+        except Exception:
+            duck_array_ops = None
+
+        skipna = kwargs.get("skipna", None)
+        # Only optimize for mean with numpy arrays, no center, skipna != False, and no dtype override
+        if (
+            duck_array_ops is not None
+            and array_agg_func is getattr(duck_array_ops, "mean", None)
+            and not is_duck_dask_array(self.obj.data)
+            and len(self.dim) > 1
+            and all(not c for c in self.center)
+            and getattr(bottleneck, "move_sum", None) is not None
+            and "dtype" not in kwargs
+            and skipna is not False
+        ):
+            import numpy as np
+            from .dataarray import DataArray
+
+            arr = np.asarray(self.obj.data)
+
+            # Only handle numeric/boolean/complex dtypes here; otherwise fallback
+            if not (
+                np.issubdtype(arr.dtype, np.integer)
+                or np.issubdtype(arr.dtype, np.bool_)
+                or np.issubdtype(arr.dtype, np.floating)
+                or np.issubdtype(arr.dtype, np.complexfloating)
+            ):
+                return self.reduce(array_agg_func, keep_attrs=keep_attrs, **kwargs)
+
+            # Determine output dtype consistent with numpy nanmean promotion
+            out_dtype = np.result_type(arr.dtype, np.float64)
+
+            # Valid mask (all True for integer/bool types)
+            if np.issubdtype(arr.dtype, np.floating) or np.issubdtype(
+                arr.dtype, np.complexfloating
+            ):
+                valid = ~np.isnan(arr)
+            else:
+                valid = np.ones(arr.shape, dtype=bool)
+
+            # Prepare sums with NaNs treated as zeros
+            sums = arr.astype(out_dtype, copy=True)
+            if np.issubdtype(arr.dtype, np.floating) or np.issubdtype(
+                arr.dtype, np.complexfloating
+            ):
+                sums = np.where(valid, sums, 0)
+
+            # Prepare counts of valid observations
+            counts = valid.astype(np.int64, copy=False)
+
+            # Apply separable moving sums for each rolling dimension
+            for i, d in enumerate(self.dim):
+                axis = self.obj.get_axis_num(d)
+                w = int(self.window[i])
+                sums = bottleneck.move_sum(sums, window=w, min_count=1, axis=axis)
+                counts = bottleneck.move_sum(counts, window=w, min_count=1, axis=axis)
+
+            # Compute mean safely, leaving NaN where count == 0
+            out = np.empty_like(sums, dtype=out_dtype)
+            if np.issubdtype(out_dtype, np.complexfloating):
+                out[...] = np.nan + 0j
+            else:
+                out[...] = np.nan
+            np.divide(sums, counts, out=out, where=counts > 0)
+
+            # Apply min_periods mask
+            min_count = self.min_periods
+            if min_count is not None:
+                nan_val = np.nan + 0j if np.issubdtype(out_dtype, np.complexfloating) else np.nan
+                out = np.where(counts >= min_count, out, nan_val)
+
+            attrs = self.obj.attrs if keep_attrs else {}
+            return DataArray(out, self.obj.coords, attrs=attrs, name=self.obj.name)
+
+        return self.reduce(array_agg_func, keep_attrs=keep_attrs, **kwargs)
+[/REPLACE]

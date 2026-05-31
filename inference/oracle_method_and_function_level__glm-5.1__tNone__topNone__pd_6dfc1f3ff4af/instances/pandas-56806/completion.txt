@@ -1,0 +1,49 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        indices = ensure_platform_int(indices)
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+
+        # Note: we discard fill_value and use self._na_value, only relevant
+        #  in the case where allow_fill is True and fill_value is not None
+        values = self._values
+        if isinstance(values, np.ndarray):
+            taken = algos.take(
+                values, indices, allow_fill=allow_fill, fill_value=self._na_value
+            )
+        else:
+            # algos.take passes 'axis' keyword which not all EAs accept
+            taken = values.take(
+                indices, allow_fill=allow_fill, fill_value=self._na_value
+            )
+        return self._constructor._simple_new(taken, name=self.name)
+[/SEARCH]
+[REPLACE]
+        indices = ensure_platform_int(indices)
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+
+        # Note: we discard fill_value and use self._na_value, only relevant
+        #  in the case where allow_fill is True and fill_value is not None
+        values = self._values
+        n = len(self)
+        if not allow_fill and n > 0:
+            # Fast path for full-range indices: returns a copy with identical data.
+            # Using np.take is significantly faster than algos.take for this common case.
+            flat_idx = np.asarray(indices).ravel()
+            if flat_idx.size == n and flat_idx[0] == 0 and flat_idx[-1] == n - 1:
+                if isinstance(values, np.ndarray):
+                    taken = values.copy()
+                else:
+                    taken = values.copy()
+                return self._constructor._simple_new(taken, name=self.name)
+
+        if isinstance(values, np.ndarray):
+            taken = algos.take(
+                values, indices, allow_fill=allow_fill, fill_value=self._na_value
+            )
+        else:
+            # algos.take passes 'axis' keyword which not all EAs accept
+            taken = values.take(
+                indices, allow_fill=allow_fill, fill_value=self._na_value
+            )
+        return self._constructor._simple_new(taken, name=self.name)
+[/REPLACE]

@@ -1,0 +1,36 @@
+xarray/core/accessor_dt.py
+[SEARCH]
+    def floor(self, freq: str) -> T_DataArray:
+        """
+        Round timestamps downward to specified frequency resolution.
+
+        Parameters
+        ----------
+        freq : str
+            a freq string indicating the rounding resolution e.g. "D" for daily resolution
+
+        Returns
+        -------
+        floor-ed timestamps : same type as values
+            Array-like of datetime fields accessed for each element in values
+        """
+
+        return self._tslib_round_accessor("floor", freq)
+[/SEARCH]
+[REPLACE]
+    def floor(self, freq: str) -> T_DataArray:
+        """
+        Round timestamps downward to specified frequency resolution.
+
+        Parameters
+        ----------
+        freq : str
+            a freq string indicating the rounding resolution e.g. "D" for daily resolution
+
+        Returns
+        -------
+        floor-ed timestamps : same type as values
+            Array-like of datetime fields accessed for each element in values
+        """
+        return self._tslib_round_accessor("floor", freq)
+[/REPLACE]

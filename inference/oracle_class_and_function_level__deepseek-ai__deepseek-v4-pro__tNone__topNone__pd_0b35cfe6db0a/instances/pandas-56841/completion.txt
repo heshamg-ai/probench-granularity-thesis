@@ -1,0 +1,54 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        if (
+            self.is_monotonic_increasing
+            and other.is_monotonic_increasing
+            and self._can_use_libjoin
+            and other._can_use_libjoin
+            and (self.is_unique or other.is_unique)
+        ):
+            try:
+                return self._join_monotonic(other, how=how)
+            except TypeError:
+                # object dtype; non-comparable objects
+                pass
+        elif not self.is_unique or not other.is_unique:
+            return self._join_non_unique(other, how=how, sort=sort)
+
+        return self._join_via_get_indexer(other, how, sort)
+[/SEARCH]
+[REPLACE]
+        if (
+            self.is_monotonic_increasing
+            and other.is_monotonic_increasing
+            and self._can_use_libjoin
+            and other._can_use_libjoin
+            and (self.is_unique or other.is_unique)
+        ):
+            try:
+                return self._join_monotonic(other, how=how)
+            except TypeError:
+                # object dtype; non-comparable objects
+                pass
+
+        # Fast-path for sorted left join: many:1 (right unique)
+        if how == "left" and other.is_unique and self.is_monotonic_increasing:
+            try:
+                ridx = self._left_indexer_unique(other)
+                return self, None, ridx
+            except (TypeError, ValueError, IncompatibleFrequency):
+                pass
+
+        # Fast-path for sorted right join: 1:many (left unique)
+        if how == "right" and self.is_unique and other.is_monotonic_increasing:
+            try:
+                lidx = other._left_indexer_unique(self)
+                return other, lidx, None
+            except (TypeError, ValueError, IncompatibleFrequency):
+                pass
+
+        if not self.is_unique or not other.is_unique:
+            return self._join_non_unique(other, how=how, sort=sort)
+
+        return self._join_via_get_indexer(other, how, sort)
+[/REPLACE]

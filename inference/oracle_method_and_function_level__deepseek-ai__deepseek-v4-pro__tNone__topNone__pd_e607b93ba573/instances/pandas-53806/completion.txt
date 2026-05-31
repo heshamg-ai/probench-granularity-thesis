@@ -1,0 +1,115 @@
+pandas/core/groupby/ops.py
+[SEARCH]
+def _get_cumcount_array(ids, _mask=None):
+    """
+    For each unique id value, count the number of occurrences up to and
+    including that row (cumulative count), as an array suitable for
+    `take`-based reindexing.
+
+    Parameters
+    ----------
+    ids : np.ndarray (int64)
+        group codes in order of appearance.
+    _mask : np.ndarray[bool] or None
+        optional precomputed mask.
+
+    Returns
+    -------
+    np.ndarray[int64]
+    """
+    N = len(ids)
+    if N == 0:
+        return np.empty(0, dtype=np.int64)
+
+    # Fast path for already-sorted monotonic group codes
+    if np.all(np.diff(ids) >= 0):
+        # monotonic non-decreasing
+        out = np.empty(N, dtype=np.int64)
+        if N == 1:
+            out[0] = 1
+        else:
+            breaks = ids[:-1] != ids[1:]
+            # cumcount for sorted groups: counts reset at each break
+            out[0] = 1
+            np.add.at(out, np.where(breaks)[0] + 1, 1)
+            out = out.cumsum()
+        return out
+
+    if _mask is None:
+        _mask = ids != -1
+
+    masked_ids = ids[_mask]
+    out = np.empty(N, dtype=np.int64)
+    # Count occurrences per value
+    counts = np.bincount(masked_ids)
+    # Cumulative counts per value boundary
+    # For each key, position within its group = current count so far
+    seen = np.zeros(len(counts), dtype=np.int64)
+    cumcount = np.empty(len(masked_ids), dtype=np.int64)
+    for i, val in enumerate(masked_ids):
+        seen[val] += 1
+        cumcount[i] = seen[val]
+    out[_mask] = cumcount
+    out[~_mask] = 0
+    return out
+[/SEARCH]
+[REPLACE]
+def _get_cumcount_array(ids, _mask=None):
+    """
+    For each unique id value, count the number of occurrences up to and
+    including that row (cumulative count), as an array suitable for
+    `take`-based reindexing.
+
+    Parameters
+    ----------
+    ids : np.ndarray (int64)
+        group codes in order of appearance.
+    _mask : np.ndarray[bool] or None
+        optional precomputed mask.
+
+    Returns
+    -------
+    np.ndarray[int64]
+    """
+    N = len(ids)
+    if N == 0:
+        return np.empty(0, dtype=np.int64)
+
+    # Fast path for already-sorted monotonic group codes
+    if N == 1 or np.all(np.diff(ids) >= 0):
+        out = np.empty(N, dtype=np.int64)
+        if N == 1:
+            out[0] = 1
+        else:
+            # Identify where group changes occur
+            boundaries = np.flatnonzero(ids[:-1] != ids[1:])
+            # Group lengths: each boundary index is the last index of a group
+            starts = np.empty(len(boundaries) + 1, dtype=np.intp)
+            starts[0] = 0
+            starts[1:] = boundaries + 1
+            ends = np.empty(len(starts), dtype=np.intp)
+            ends[:-1] = boundaries + 1
+            ends[-1] = N
+            # For each group, create a range(1, group_size+1)
+            for start, end in zip(starts, ends):
+                out[start:end] = np.arange(1, end - start + 1, dtype=np.int64)
+        return out
+
+    if _mask is None:
+        _mask = ids != -1
+
+    masked_ids = ids[_mask]
+    out = np.empty(N, dtype=np.int64)
+    # Count occurrences per value
+    counts = np.bincount(masked_ids)
+    # Cumulative counts per value boundary
+    # For each key, position within its group = current count so far
+    seen = np.zeros(len(counts), dtype=np.int64)
+    cumcount = np.empty(len(masked_ids), dtype=np.int64)
+    for i, val in enumerate(masked_ids):
+        seen[val] += 1
+        cumcount[i] = seen[val]
+    out[_mask] = cumcount
+    out[~_mask] = 0
+    return out
+[/REPLACE]

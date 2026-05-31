@@ -1,0 +1,85 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    _values: np.ndarray
+[/SEARCH]
+[REPLACE]
+    _values: np.ndarray
+
+    def take(self, indices, axis=0, allow_fill=True, fill_value=None, **kwargs):
+        if kwargs:
+            from pandas.util import _validators as nv
+
+            nv.validate_take((), kwargs)
+
+        from pandas._libs.lib import is_scalar as lib_is_scalar
+        from pandas.core.indexers.utils import ensure_platform_int
+
+        if lib_is_scalar(indices):
+            raise TypeError("Expected indices to be array-like")
+
+        indices = ensure_platform_int(indices)
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+
+        n = len(self)
+
+        # In practice for RangeIndex, allow_fill will be False after _maybe_disallow_fill
+        if n == 0:
+            if indices.size == 0:
+                # empty result
+                import numpy as np
+
+                taken = np.array([], dtype=np.int64)
+                from .base import Index
+
+                return Index(taken, name=self.name)
+            # mimic numpy/pandas behavior on empty take with non-empty indices
+            raise IndexError("cannot do a non-empty take from an empty axis.")
+
+        # Fast path without materializing the full RangeIndex values
+        import numpy as np
+
+        idx = np.asarray(indices, dtype=np.intp)
+        if allow_fill:
+            # For RangeIndex this path should generally not be reached; still validate bounds
+            if (idx < -1).any() or (idx >= n).any():
+                raise IndexError("indices are out-of-bounds")
+            # Since RangeIndex cannot hold NAs, _maybe_disallow_fill should have prevented this.
+            # Fallback to building values and delegating to numpy semantics if ever reached.
+            start = self._range.start
+            step = self._range.step
+            pos = idx.copy()
+            mask = pos == -1
+            # temporarily fill -1 with 0 to compute positions
+            if mask.any():
+                pos[mask] = 0
+            out = pos.astype(np.int64, copy=True)
+            out *= np.int64(step)
+            out += np.int64(start)
+            # The presence of mask would imply NA handling which RangeIndex does not support,
+            # but since _maybe_disallow_fill already guarded this, we simply return here.
+            from .base import Index
+
+            return Index(out, name=self.name)
+
+        # allow_fill is False: follow numpy.take semantics with wrap-around for negative indices
+        if (idx >= n).any() or (idx < -n).any():
+            raise IndexError("indices are out-of-bounds")
+
+        # wrap negative indices
+        neg_mask = idx < 0
+        if neg_mask.any():
+            idx = idx.copy()
+            idx[neg_mask] += n
+
+        start = self._range.start
+        step = self._range.step
+
+        out = idx.astype(np.int64, copy=True)
+        # compute values: start + step * position
+        out *= np.int64(step)
+        out += np.int64(start)
+
+        from .base import Index
+
+        return Index(out, name=self.name)
+[/REPLACE]

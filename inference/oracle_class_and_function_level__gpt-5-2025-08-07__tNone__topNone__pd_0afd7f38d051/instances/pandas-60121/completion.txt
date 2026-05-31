@@ -1,0 +1,45 @@
+pandas/core/arrays/numeric.py
+[SEARCH]
+    if mask is None:
+        if values.dtype.kind in "iu":
+            # fastpath
+            mask = np.zeros(len(values), dtype=np.bool_)
+        else:
+            mask = libmissing.is_numeric_na(values)
+    else:
+        assert len(mask) == len(values)
+[/SEARCH]
+[REPLACE]
+    if mask is None:
+        if values.dtype.kind in "iu":
+            # fastpath
+            mask = np.zeros(len(values), dtype=np.bool_)
+        else:
+            # specialize float dtype path for speed
+            if values.dtype.kind == "f":
+                mask = np.isnan(values)
+            else:
+                mask = libmissing.is_numeric_na(values)
+    else:
+        assert len(mask) == len(values)
+[/REPLACE]
+
+pandas/core/arrays/numeric.py
+[SEARCH]
+    # we copy as need to coerce here
+    if mask.any():
+        values = values.copy()
+        values[mask] = dtype_cls._internal_fill_value
+[/SEARCH]
+[REPLACE]
+    # we copy as need to coerce here
+    if mask.any():
+        # for floating dtypes with NaN sentinel, values[mask] are already NaN
+        # so we can avoid an extra copy/assignment
+        if values.dtype.kind == "f" and dtype_cls._internal_fill_value != dtype_cls._internal_fill_value:
+            # NaN sentinel; no need to modify values
+            pass
+        else:
+            values = values.copy()
+            values[mask] = dtype_cls._internal_fill_value
+[/REPLACE]

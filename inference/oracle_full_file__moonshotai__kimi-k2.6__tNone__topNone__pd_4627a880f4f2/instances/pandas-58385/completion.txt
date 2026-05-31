@@ -1,0 +1,23 @@
+ pandas/core/indexes/multi.py
+[SEARCH]
+    # Cannot determine type of "memory_usage"    @doc(Index.memory_usage)  # type: ignore[has-type]
+    def memory_usage(self, deep: bool = False) -> int:
+        # we are overwriting our base class to avoid
+        # computing .values here which could materialize
+        # a tuple representation unnecessarily
+        return self._nbytes(deep)
+[/SEARCH]
+[REPLACE]
+    # Cannot determine type of "memory_usage"    @doc(Index.memory_usage)  # type: ignore[has-type]
+    def memory_usage(self, deep: bool = False) -> int:
+        # we are overwriting our base class to avoid
+        # computing .values here which could materialize
+        # a tuple representation unnecessarily
+        return self._nbytes(deep)
+
+    def _memory_usage(self, deep: bool = False) -> int:
+        # Override to avoid base class chain calling back to memory_usage
+        # via _engine.sizeof, which would create a recursion loop.
+        # The engine hash table is already included in _nbytes.
+        return self._nbytes(deep)
+[/REPLACE]

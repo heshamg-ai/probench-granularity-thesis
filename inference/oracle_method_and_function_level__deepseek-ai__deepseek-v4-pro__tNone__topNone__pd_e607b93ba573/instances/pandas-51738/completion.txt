@@ -1,0 +1,223 @@
+pandas/core/indexes/base.py
+[SEARCH]
+    _engine_types: dict[np.dtype | ExtensionDtype, type[libindex.IndexEngine]] = {
+        np.dtype(np.int8): libindex.Int8Engine,
+        np.dtype(np.int16): libindex.Int16Engine,
+        np.dtype(np.int32): libindex.Int32Engine,
+        np.dtype(np.int64): libindex.Int64Engine,
+        np.dtype(np.uint8): libindex.UInt8Engine,
+        np.dtype(np.uint16): libindex.UInt16Engine,
+        np.dtype(np.uint32): libindex.UInt32Engine,
+        np.dtype(np.uint64): libindex.UInt64Engine,
+        np.dtype(np.float32): libindex.Float32Engine,
+        np.dtype(np.float64): libindex.Float64Engine,
+        np.dtype(np.complex64): libindex.Complex64Engine,
+        np.dtype(np.complex128): libindex.Complex128Engine,
+    }
+[/SEARCH]
+[REPLACE]
+    _engine_types: dict[np.dtype | ExtensionDtype, type[libindex.IndexEngine]] = {
+        np.dtype(np.int8): libindex.Int8Engine,
+        np.dtype(np.int16): libindex.Int16Engine,
+        np.dtype(np.int32): libindex.Int32Engine,
+        np.dtype(np.int64): libindex.Int64Engine,
+        np.dtype(np.uint8): libindex.UInt8Engine,
+        np.dtype(np.uint16): libindex.UInt16Engine,
+        np.dtype(np.uint32): libindex.UInt32Engine,
+        np.dtype(np.uint64): libindex.UInt64Engine,
+        np.dtype(np.float32): libindex.Float32Engine,
+        np.dtype(np.float64): libindex.Float64Engine,
+        np.dtype(np.complex64): libindex.Complex64Engine,
+        np.dtype(np.complex128): libindex.Complex128Engine,
+    }
+    _is_unique: bool | None = None
+[/REPLACE]
+
+pandas/core/indexes/base.py
+[SEARCH]
+    def __getitem__(self, key):
+        """
+        Override numpy.ndarray's __getitem__ method to work as desired.
+
+        This function adds lists and Series as valid boolean indexers
+        (ndarrays only supports ndarray with dtype=bool).
+
+        If resulting ndim != 1, plain ndarray is returned instead of
+        corresponding `Index` subclass.
+
+        """
+        getitem = self._data.__getitem__
+
+        if is_integer(key) or is_float(key):
+            # GH#44051 exclude bool, which would return a 2d ndarray
+            key = com.cast_scalar_indexer(key)
+            return getitem(key)
+
+        if isinstance(key, slice):
+            # This case is separated from the conditional above to avoid
+            # pessimization com.is_bool_indexer and ndim checks.
+            result = getitem(key)
+            # Going through simple_new for performance.
+            return type(self)._simple_new(result, name=self._name)
+
+        if com.is_bool_indexer(key):
+            # if we have list[bools, length=1e5] then doing this check+convert
+            #  takes 166 µs + 2.1 ms and cuts the ndarray.__getitem__
+            #  time below from 3.8 ms to 496 µs
+            # if we already have ndarray[bool], the overhead is 1.4 µs or .25%
+            if is_extension_array_dtype(getattr(key, "dtype", None)):
+                key = key.to_numpy(dtype=bool, na_value=False)
+            else:
+                key = np.asarray(key, dtype=bool)
+
+        result = getitem(key)
+        # Because we ruled out integer above, we always get an arraylike here
+        if result.ndim > 1:
+            disallow_ndim_indexing(result)
+
+        # NB: Using _constructor._simple_new would break if MultiIndex
+        #  didn't override __getitem__
+        return self._constructor._simple_new(result, name=self._name)
+[/SEARCH]
+[REPLACE]
+    def __getitem__(self, key):
+        """
+        Override numpy.ndarray's __getitem__ method to work as desired.
+
+        This function adds lists and Series as valid boolean indexers
+        (ndarrays only supports ndarray with dtype=bool).
+
+        If resulting ndim != 1, plain ndarray is returned instead of
+        corresponding `Index` subclass.
+
+        """
+        getitem = self._data.__getitem__
+
+        if is_integer(key) or is_float(key):
+            # GH#44051 exclude bool, which would return a 2d ndarray
+            key = com.cast_scalar_indexer(key)
+            return getitem(key)
+
+        if isinstance(key, slice):
+            # This case is separated from the conditional above to avoid
+            # pessimization com.is_bool_indexer and ndim checks.
+            result = getitem(key)
+            # GH#52685 - preserve cached is_unique when slicing if we know
+            # the original was unique; slicing a unique index yields a unique index.
+            result_idx = type(self)._simple_new(result, name=self._name)
+            if self._is_unique is True:
+                result_idx._is_unique = True
+            return result_idx
+
+        if com.is_bool_indexer(key):
+            # if we have list[bools, length=1e5] then doing this check+convert
+            #  takes 166 µs + 2.1 ms and cuts the ndarray.__getitem__
+            #  time below from 3.8 ms to 496 µs
+            # if we already have ndarray[bool], the overhead is 1.4 µs or .25%
+            if is_extension_array_dtype(getattr(key, "dtype", None)):
+                key = key.to_numpy(dtype=bool, na_value=False)
+            else:
+                key = np.asarray(key, dtype=bool)
+
+        result = getitem(key)
+        # Because we ruled out integer above, we always get an arraylike here
+        if result.ndim > 1:
+            disallow_ndim_indexing(result)
+
+        # NB: Using _constructor._simple_new would break if MultiIndex
+        #  didn't override __getitem__
+        return self._constructor._simple_new(result, name=self._name)
+[/REPLACE]
+
+pandas/core/indexes/base.py
+[SEARCH]
+    def _getitem_slice(self: _IndexT, slobj: slice) -> _IndexT:
+        """
+        Fastpath for __getitem__ when we know we have a slice.
+        """
+        res = self._data[slobj]
+        return type(self)._simple_new(res, name=self._name)
+[/SEARCH]
+[REPLACE]
+    def _getitem_slice(self: _IndexT, slobj: slice) -> _IndexT:
+        """
+        Fastpath for __getitem__ when we know we have a slice.
+        """
+        res = self._data[slobj]
+        result = type(self)._simple_new(res, name=self._name)
+        if self._is_unique is True:
+            result._is_unique = True
+        return result
+[/REPLACE]
+
+pandas/core/indexes/interval.py
+[SEARCH]
+class IntervalIndex(ExtensionIndex):
+[/SEARCH]
+[REPLACE]
+class IntervalIndex(ExtensionIndex):
+    def _getitem_slice(self: _IndexT, slobj: slice) -> _IndexT:
+        """
+        Fastpath for __getitem__ when we know we have a slice.
+        """
+        res = self._data[slobj]
+        result = type(self)._simple_new(res, name=self._name)
+        if self._is_unique is True:
+            result._is_unique = True
+        return result
+[/REPLACE]
+
+pandas/core/indexes/range.py
+[SEARCH]
+    def __getitem__(self, key):
+        """
+        Conserve RangeIndex type for scalar and slice keys.
+        """
+        if isinstance(key, slice):
+            new_range = self._range[key]
+            return self._simple_new(new_range, name=self._name)
+        elif is_integer(key):
+            new_key = int(key)
+            try:
+                return self._range[new_key]
+            except IndexError as err:
+                raise IndexError(
+                    f"index {key} is out of bounds for axis 0 with size {len(self)}"
+                ) from err
+        elif is_scalar(key):
+            raise IndexError(
+                "only integers, slices (`:`), "
+                "ellipsis (`...`), numpy.newaxis (`None`) "
+                "and integer or boolean "
+                "arrays are valid indices"
+            )
+        return super().__getitem__(key)
+[/SEARCH]
+[REPLACE]
+    def __getitem__(self, key):
+        """
+        Conserve RangeIndex type for scalar and slice keys.
+        """
+        if isinstance(key, slice):
+            new_range = self._range[key]
+            result = self._simple_new(new_range, name=self._name)
+            if self._is_unique is True:
+                result._is_unique = True
+            return result
+        elif is_integer(key):
+            new_key = int(key)
+            try:
+                return self._range[new_key]
+            except IndexError as err:
+                raise IndexError(
+                    f"index {key} is out of bounds for axis 0 with size {len(self)}"
+                ) from err
+        elif is_scalar(key):
+            raise IndexError(
+                "only integers, slices (`:`), "
+                "ellipsis (`...`), numpy.newaxis (`None`) "
+                "and integer or boolean "
+                "arrays are valid indices"
+            )
+        return super().__getitem__(key)
+[/REPLACE]

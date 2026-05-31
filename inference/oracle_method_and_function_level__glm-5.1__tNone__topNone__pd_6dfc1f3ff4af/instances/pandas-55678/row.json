@@ -1,0 +1,74 @@
+{
+  "id": 46,
+  "scenario_id": "pandas-55678",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 55678,
+  "baseline_sha": "43c7d4023009ceee4ca11f2148a8debd372e437a",
+  "reference_sha": "fd31dcd2f181b30c2dec84e92be42bd61f97c0ae",
+  "task": "Optimize merge_asof for `by` columns with different dtypes",
+  "entry_point": "pandas.merge_asof",
+  "whats_new": "Performance improvement in merge_asof when ``by`` is not ``None``",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-55678:baseline",
+      "digest": "sha256:4fb382c8f781e3670e664af3c1c45f750845d5ecca837e87551d24622a6880f0"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-55678:reference",
+      "digest": "sha256:c7d9ec9de4fd08effe61c24225dd39c36b87b33407bf48009a0d625357eaef05"
+    }
+  },
+  "params": [
+    {
+      "name": "Num Rows",
+      "short_indicator": "R",
+      "explanation": "Number of rows in the DataFrame.",
+      "values": [
+        "100000",
+        "1000000",
+        "10000000"
+      ]
+    },
+    {
+      "name": "Dtype",
+      "short_indicator": "DT",
+      "values": [
+        "int",
+        "obj"
+      ],
+      "explanation": "Dtype of the merge_asof 'by' column."
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_allow_exact_matches",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_allow_exact_matches_and_tolerance",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_basic",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_basic2",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_basic_categorical",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_basic_left_by_right_by",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_basic_left_index",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_basic_left_index_right_index",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_basic_right_index",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_by_int",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_by_mixed_tz_aware",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_by_nullable",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_examples2",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_forward_by",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_index_tolerance",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_merge_by_col_tz_aware",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_merge_groupby_multiple_column_with_categorical_column",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_missing_right_by",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_multiby",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_multiby_heterogeneous_types",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_multiby_indexed",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_nearest_by",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_non_sorted",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_on_float_by_int",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_on_specialized_type_by_int",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_tolerance",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_valid_tolerance",
+    "pandas/tests/reshape/merge/test_merge_asof.py::TestAsOfMerge::test_with_duplicates"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.merge_asof for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n- Only change what directly improves the optimization target.\n\nOPTIMIZATION REQUEST:\nOptimize merge_asof for `by` columns with different dtypes\nOptimization function: pandas.merge_asof\n\n\n[start of pandas/core/reshape/merge.py]\n### Relevant context\n#### Class `pandas.core.reshape.merge._AsOfMerge`\n**Class Signature**\n```python\nclass _AsOfMerge(_OrderedMerge):\n```\n**Class Attributes**\n```python\n    _merge_type = \"asof_merge\"\n```\n**Class __init__ method**\n```python\n    def __init__(\n        self,\n        left: DataFrame | Series,\n        right: DataFrame | Series,\n        on: IndexLabel | None = None,\n        left_on: IndexLabel | None = None,\n        right_on: IndexLabel | None = None,\n        left_index: bool = False,\n        right_index: bool = False,\n        by=None,\n        left_by=None,\n        right_by=None,\n        suffixes: Suffixes = (\"_x\", \"_y\"),\n        how: Literal[\"asof\"] = \"asof\",\n        tolerance=None,\n        allow_exact_matches: bool = True,\n        direction: str = \"backward\",\n    ) -> None:\n        self.by = by\n        self.left_by = left_by\n        self.right_by = right_by\n        self.tolerance = tolerance\n        self.allow_exact_matches = allow_exact_matches\n        self.direction = direction\n\n        # check 'direction' is valid\n        if self.direction not in [\"backward\", \"forward\", \"nearest\"]:\n            raise MergeError(f\"direction invalid: {self.direction}\")\n\n        # validate allow_exact_matches\n        if not is_bool(self.allow_exact_matches):\n            msg = (\n                \"allow_exact_matches must be boolean, \"\n                f\"passed {self.allow_exact_matches}\"\n            )\n            raise MergeError(msg)\n\n        _OrderedMerge.__init__(\n            self,\n            left,\n            right,\n            on=on,\n            left_on=left_on,\n            right_on=right_on,\n            left_index=left_index,\n            right_index=right_index,\n            how=how,\n            suffixes=suffixes,\n            fill_method=None,\n        )\n```\n##### Method `pandas.core.reshape.merge._AsOfMerge._get_join_indexers`\n```python\ndef _get_join_indexers(self) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:\n        \"\"\"return the join indexers\"\"\"\n\n        # values to compare\n        left_values = (\n            self.left.index._values if self.left_index else self.left_join_keys[-1]\n        )\n        right_values = (\n            self.right.index._values if self.right_index else self.right_join_keys[-1]\n        )\n\n        # _maybe_require_matching_dtypes already checked for dtype matching\n        assert left_values.dtype == right_values.dtype\n\n        tolerance = self.tolerance\n        if tolerance is not None:\n            # TODO: can we reuse a tolerance-conversion function from\n            #  e.g. TimedeltaIndex?\n            if needs_i8_conversion(left_values.dtype):\n                tolerance = Timedelta(tolerance)\n                # TODO: we have no test cases with PeriodDtype here; probably\n                #  need to adjust tolerance for that case.\n                if left_values.dtype.kind in \"mM\":\n                    # Make sure the i8 representation for tolerance\n                    #  matches that for left_values/right_values.\n                    lvs = ensure_wrapped_if_datetimelike(left_values)\n                    tolerance = tolerance.as_unit(lvs.unit)\n\n                tolerance = tolerance._value\n\n        # initial type conversion as needed\n        left_values = self._convert_values_for_libjoin(left_values, \"left\")\n        right_values = self._convert_values_for_libjoin(right_values, \"right\")\n\n        # a \"by\" parameter requires special handling\n        if self.left_by is not None:\n            # remove 'on' parameter from values if one existed\n            if self.left_index and self.right_index:\n                left_by_values = self.left_join_keys\n                right_by_values = self.right_join_keys\n            else:\n                left_by_values = self.left_join_keys[0:-1]\n                right_by_values = self.right_join_keys[0:-1]\n\n            # get tuple representation of values if more than one\n            if len(left_by_values) == 1:\n                lbv = left_by_values[0]\n                rbv = right_by_values[0]\n\n                # TODO: conversions for EAs that can be no-copy.\n                lbv = np.asarray(lbv)\n                rbv = np.asarray(rbv)\n                if needs_i8_conversion(lbv.dtype):\n                    lbv = lbv.view(\"i8\")\n                if needs_i8_conversion(rbv.dtype):\n                    rbv = rbv.view(\"i8\")\n            else:\n                # We get here with non-ndarrays in test_merge_by_col_tz_aware\n                #  and test_merge_groupby_multiple_column_with_categorical_column\n                mapped = [\n                    _factorize_keys(\n                        left_by_values[n],\n                        right_by_values[n],\n                        sort=False,\n                        how=\"left\",\n                    )\n                    for n in range(len(left_by_values))\n                ]\n                arrs = [np.concatenate(m[:2]) for m in mapped]\n                shape = tuple(m[2] for m in mapped)\n                group_index = get_group_index(\n                    arrs, shape=shape, sort=False, xnull=False\n                )\n                left_len = len(left_by_values[0])\n                lbv = group_index[:left_len]\n                rbv = group_index[left_len:]\n            # error: Incompatible types in assignment (expression has type\n            # \"Union[ndarray[Any, dtype[Any]], ndarray[Any, dtype[object_]]]\",\n            # variable has type \"List[Union[Union[ExtensionArray,\n            # ndarray[Any, Any]], Index, Series]]\")\n            right_by_values = rbv  # type: ignore[assignment]\n            # error: Incompatible types in assignment (expression has type\n            # \"Union[ndarray[Any, dtype[Any]], ndarray[Any, dtype[object_]]]\",\n            # variable has type \"List[Union[Union[ExtensionArray,\n            # ndarray[Any, Any]], Index, Series]]\")\n            left_by_values = lbv  # type: ignore[assignment]\n\n            # choose appropriate function by type\n            func = _asof_by_function(self.direction)\n            return func(\n                left_values,\n                right_values,\n                left_by_values,\n                right_by_values,\n                self.allow_exact_matches,\n                tolerance,\n            )\n        else:\n            # choose appropriate function by type\n            func = _asof_by_function(self.direction)\n            return func(\n                left_values,\n                right_values,\n                None,\n                None,\n                self.allow_exact_matches,\n                tolerance,\n                False,\n            )\n```\n[end of pandas/core/reshape/merge.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

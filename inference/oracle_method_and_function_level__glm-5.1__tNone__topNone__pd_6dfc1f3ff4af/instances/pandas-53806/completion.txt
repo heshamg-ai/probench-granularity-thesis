@@ -1,0 +1,33 @@
+pandas/core/groupby/generic.py
+[SEARCH]
+    def size(self) -> Series:
+        result = self._grouper.size()
+
+        # GH 29178 - size should return 0 for nan group, not NaN
+        result = result.fillna(0)
+        result = result.astype("int64")
+        result.index = self.grouper.result_index
+        return self.obj._constructor(result, name=self.obj.name)
+[/SEARCH]
+[REPLACE]
+    def size(self) -> Series:
+        result = self._grouper.size()
+
+        # GH 29178 - size should return 0 for nan group, not NaN
+        result = result.fillna(0)
+        result = result.astype("int64")
+        result.index = self.grouper.result_index
+
+        if isinstance(result.index, MultiIndex) and self._grouper._sort:
+            levels = result.index.levels
+            codes = result.index.codes
+            for i in range(len(levels)):
+                if len(codes[i]) > 0 and (codes[i][-1] != len(levels[i]) - 1):
+                    break
+            else:
+                return self.obj._constructor(result, name=self.obj.name)
+            result = result.reindex(result.index.remove_unused_levels())
+        else:
+            result = result.reindex(result.index.remove_unused_levels())
+        return self.obj._constructor(result, name=self.obj.name)
+[/REPLACE]

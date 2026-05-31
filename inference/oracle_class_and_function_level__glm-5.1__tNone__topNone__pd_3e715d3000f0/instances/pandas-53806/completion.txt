@@ -1,0 +1,56 @@
+pandas/core/groupby/generic.py
+[SEARCH]
+    def size(self) -> Series:
+        result = self._grouper.size
+
+        # back-compat for GH_42578
+        index = self.obj.index
+        if isinstance(index, MultiIndex):
+            result.index = index.levels[0]
+        else:
+            result.index = index[: len(result)]
+
+        result.name = None
+        result = self._reindex(result, fill_value=0)
+        return self._insert_inaxis_grouper(result)
+[/SEARCH]
+[REPLACE]
+    def size(self) -> Series:
+        # Fast path for sorted MultiIndex grouping on the first level
+        grouper = self._grouper
+        obj = self.obj
+        index = obj.index
+
+        if (
+            grouper.by is not None
+            and len(grouper.by) == 1
+            and isinstance(index, MultiIndex)
+            and grouper.keys is not None
+            and len(grouper.keys) == 1
+            and grouper.keys[0] == index.names[0]
+            and not grouper.as_index
+            and not grouper.sort
+        ):
+            level_vals = index.levels[0]
+            level_codes = index.codes[0]
+            if level_codes.size > 0 and level_codes.is_monotonic_increasing:
+                # Using underlying int8/int16/etc. array avoids upcasting to int64
+                # np.unique handles the sort + counting for sorted arrays efficiently
+                uniques, counts = np.unique(level_codes, return_counts=True)
+                mask = uniques != -1
+                result = Series(counts[mask], index=level_vals, dtype="int64", name=None)
+                result = self._reindex(result, fill_value=0)
+                return self._insert_inaxis_grouper(result)
+
+        result = grouper.size
+
+        # back-compat for GH_42578
+        if isinstance(index, MultiIndex):
+            result.index = index.levels[0]
+        else:
+            result.index = index[: len(result)]
+
+        result.name = None
+        result = self._reindex(result, fill_value=0)
+        return self._insert_inaxis_grouper(result)
+[/REPLACE]

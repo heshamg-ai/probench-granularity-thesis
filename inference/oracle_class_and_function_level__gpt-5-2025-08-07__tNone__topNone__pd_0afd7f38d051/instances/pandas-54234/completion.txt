@@ -1,0 +1,78 @@
+pandas/core/groupby/groupby.py
+[SEARCH]
+            else:
+
+                def func(df):
+                    method = getattr(df, how)
+                    return method(axis=axis, skipna=skipna, numeric_only=numeric_only)
+
+                func.__name__ = how
+                result = self._python_apply_general(
+                    func, self._obj_with_exclusions, not_indexed_same=True
+                )
+[/SEARCH]
+[REPLACE]
+            else:
+                if axis == 0 and numeric_only:
+                    data = self._obj_with_exclusions._get_numeric_data()
+                    # Fastpath only if we have numeric columns to operate on
+                    if data.shape[1] == 0:
+                        # Construct an empty result with correct columns/index
+                        result = data.idxmax(axis=axis, skipna=skipna, numeric_only=True)
+                        result = result.reindex(self.grouper.result_index)
+                        result = result.to_frame().T.iloc[0:0]
+                    else:
+                        ids, _, ngroups = self.grouper.group_info
+                        sorted_index = self.grouper._sort_idx
+                        sorted_ids = self.grouper._sorted_ids
+                        starts, ends = lib.generate_slices(sorted_ids, ngroups)
+                        ncols = data.shape[1]
+                        idxers = np.full((ngroups, ncols), -1, dtype=np.intp)
+                        base_indexer = np.asarray(sorted_index, dtype=np.intp)
+                        # Convert columns to float arrays with NaN for missing to simplify nan handling
+                        col_arrays = [
+                            data.iloc[:, j].to_numpy(dtype=float, na_value=np.nan)
+                            for j in range(ncols)
+                        ]
+                        for g in range(ngroups):
+                            s = starts[g]
+                            e = ends[g]
+                            if e <= s:
+                                continue
+                            seg_pos = base_indexer[s:e]
+                            for j in range(ncols):
+                                seg_vals = col_arrays[j][seg_pos]
+                                if skipna:
+                                    if np.isnan(seg_vals).all():
+                                        continue
+                                    off = np.nanargmax(seg_vals) if how == "idxmax" else np.nanargmin(seg_vals)
+                                else:
+                                    if np.isnan(seg_vals).any():
+                                        continue
+                                    off = np.argmax(seg_vals) if how == "idxmax" else np.argmin(seg_vals)
+                                idxers[g, j] = seg_pos[off]
+                        # Build result using index.take to preserve index dtype
+                        res_dict = {}
+                        index_values = data.index
+                        for j, colname in enumerate(data.columns):
+                            indices = idxers[:, j]
+                            taken = algorithms.take(
+                                index_values._values,
+                                indices,
+                                allow_fill=True,
+                                fill_value=index_values._na_value,
+                            )
+                            res_dict[colname] = taken
+                        result_df = DataFrame(res_dict, index=self.grouper.result_index)
+                        result = self._wrap_aggregated_output(result_df)
+                else:
+
+                def func(df):
+                    method = getattr(df, how)
+                    return method(axis=axis, skipna=skipna, numeric_only=numeric_only)
+
+                func.__name__ = how
+                result = self._python_apply_general(
+                    func, self._obj_with_exclusions, not_indexed_same=True
+                )
+[/REPLACE]

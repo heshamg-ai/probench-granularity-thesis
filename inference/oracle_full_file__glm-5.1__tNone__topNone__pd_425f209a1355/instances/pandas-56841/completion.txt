@@ -1,0 +1,22 @@
+pandas/core/indexes/base.py
+[SEARCH]
+    @final
+    def _left_indexer_unique(self, other: Self) -> npt.NDArray[np.intp]:
+        # Caller is responsible for ensuring other.dtype == self.dtype
+        sv = self._get_join_target()
+        ov = other._get_join_target()
+        # similar but not identical to ov.searchsorted(sv)
+        return libjoin.left_join_indexer_unique(sv, ov)
+[/SEARCH]
+[REPLACE]
+    @final
+    def _left_indexer_unique(self, other: Self) -> npt.NDArray[np.intp]:
+        # Caller is responsible for ensuring other.dtype == self.dtype
+        sv = self._get_join_target()
+        ov = other._get_join_target()
+        # similar but not identical to ov.searchsorted(sv)
+        # For sorted arrays, searchsorted is O(n) vs O(n+m) for libjoin
+        if self.is_monotonic_increasing and other.is_monotonic_increasing:
+            return ov.searchsorted(sv, side="left").astype(np.intp, copy=False)
+        return libjoin.left_join_indexer_unique(sv, ov)
+[/REPLACE]

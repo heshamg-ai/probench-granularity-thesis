@@ -1,0 +1,36 @@
+xarray/core/common.py
+[SEARCH]
+        item_lists = [
+            item
+            for sublist in self._item_sources
+            for item in sublist
+            if isinstance(item, str)
+        ]
+        return list(set(item_lists))
+[/SEARCH]
+[REPLACE]
+        seen = set()
+        for sublist in self._item_sources:
+            for item in sublist:
+                if isinstance(item, str):
+                    seen.add(item)
+        return list(seen)
+[/REPLACE]
+
+xarray/core/dataset.py
+[SEARCH]
+        return [
+            self.data_vars,
+            self.coords,
+            {d: self[d] for d in self.dims},
+            LevelCoordinatesSource(self),
+        ]
+[/SEARCH]
+[REPLACE]
+        return [
+            self.data_vars,
+            self.coords,
+            utils.HybridMappingProxy(self, self.dims),
+            LevelCoordinatesSource(self),
+        ]
+[/REPLACE]

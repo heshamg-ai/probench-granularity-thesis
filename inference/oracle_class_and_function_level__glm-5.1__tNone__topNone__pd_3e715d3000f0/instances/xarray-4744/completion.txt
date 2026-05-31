@@ -1,0 +1,139 @@
+xarray/core/dataset.py
+[SEARCH]
+    def _construct_dataarray(self, name: Hashable) -> "DataArray":
+        """Construct a DataArray by indexing this dataset"""
+        from .dataarray import DataArray
+
+        try:
+            variable = self._variables[name]
+        except KeyError:
+            _, name, variable = _get_virtual_variable(
+                self._variables, name, self._level_coords, self.dims
+            )
+
+        needed_dims = set(variable.dims)
+
+        coords: Dict[Hashable, Variable] = {}
+        for k in self.coords:
+            if set(self.variables[k].dims) <= needed_dims:
+                coords[k] = self.variables[k]
+
+        if self._indexes is None:
+            indexes = None
+        else:
+            indexes = {k: v for k, v in self._indexes.items() if k in coords}
+
+        return DataArray(variable, coords, name=name, indexes=indexes, fastpath=True)
+[/SEARCH]
+[REPLACE]
+    def _construct_dataarray(self, name: Hashable) -> "DataArray":
+        """Construct a DataArray by indexing this dataset"""
+        from .dataarray import DataArray
+
+        try:
+            variable = self._variables[name]
+        except KeyError:
+            _, name, variable = _get_virtual_variable(
+                self._variables, name, self._level_coords, self.dims
+            )
+
+        needed_dims = set(variable.dims)
+
+        coords: Dict[Hashable, Variable] = {}
+        for k in self._coord_names:
+            if k in self._variables:
+                var = self._variables[k]
+                if set(var.dims) <= needed_dims:
+                    coords[k] = var
+
+        if self._indexes is None:
+            indexes = None
+        else:
+            indexes = {k: v for k, v in self._indexes.items() if k in coords}
+
+        return DataArray(variable, coords, name=name, indexes=indexes, fastpath=True)
+[/REPLACE]
+
+xarray/core/dataset.py
+[SEARCH]
+    def _copy_listed(self, names: Iterable[Hashable]) -> "Dataset":
+        """Create a new Dataset with the listed variables from this dataset and
+        the all relevant coordinates. Skips all validation.
+        """
+        variables: Dict[Hashable, Variable] = {}
+        coord_names = set()
+        indexes: Dict[Hashable, pd.Index] = {}
+
+        for name in names:
+            try:
+                variables[name] = self._variables[name]
+            except KeyError:
+                ref_name, var_name, var = _get_virtual_variable(
+                    self._variables, name, self._level_coords, self.dims
+                )
+                variables[var_name] = var
+                if ref_name in self._coord_names or ref_name in self.dims:
+                    coord_names.add(var_name)
+                if (var_name,) == var.dims:
+                    indexes[var_name] = var.to_index()
+
+        needed_dims: Set[Hashable] = set()
+        for v in variables.values():
+            needed_dims.update(v.dims)
+
+        dims = {k: self.dims[k] for k in needed_dims}
+
+        # preserves ordering of coordinates
+        for k in self._variables:
+            if k not in self._coord_names:
+                continue
+
+            if set(self.variables[k].dims) <= needed_dims:
+                variables[k] = self._variables[k]
+                coord_names.add(k)
+                if k in self.indexes:
+                    indexes[k] = self.indexes[k]
+
+        return self._replace(variables, coord_names, dims, indexes=indexes)
+[/SEARCH]
+[REPLACE]
+    def _copy_listed(self, names: Iterable[Hashable]) -> "Dataset":
+        """Create a new Dataset with the listed variables from this dataset and
+        the all relevant coordinates. Skips all validation.
+        """
+        variables: Dict[Hashable, Variable] = {}
+        coord_names = set()
+        indexes: Dict[Hashable, pd.Index] = {}
+
+        for name in names:
+            try:
+                variables[name] = self._variables[name]
+            except KeyError:
+                ref_name, var_name, var = _get_virtual_variable(
+                    self._variables, name, self._level_coords, self.dims
+                )
+                variables[var_name] = var
+                if ref_name in self._coord_names or ref_name in self.dims:
+                    coord_names.add(var_name)
+                if (var_name,) == var.dims:
+                    indexes[var_name] = var.to_index()
+
+        needed_dims: Set[Hashable] = set()
+        for v in variables.values():
+            needed_dims.update(v.dims)
+
+        dims = {k: self._dims[k] for k in needed_dims}
+
+        # preserves ordering of coordinates
+        _indexes = self._indexes
+        for k in self._coord_names:
+            if k in self._variables and k not in variables:
+                var = self._variables[k]
+                if set(var.dims) <= needed_dims:
+                    variables[k] = var
+                    coord_names.add(k)
+                    if _indexes is not None and k in _indexes:
+                        indexes[k] = _indexes[k]
+
+        return self._replace(variables, coord_names, dims, indexes=indexes)
+[/REPLACE]

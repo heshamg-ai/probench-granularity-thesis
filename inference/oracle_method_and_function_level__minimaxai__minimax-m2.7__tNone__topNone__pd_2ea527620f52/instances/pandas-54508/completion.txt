@@ -1,0 +1,79 @@
+
+
+Looking at the code, I need to find the `iloc` implementation in pandas to optimize scalar integer indexing on extension dtypes. Let me search for the relevant indexing code.
+
+pandas/core/indexing.py
+[SEARCH]
+    def _get_value(self, mgr, key):
+        """
+        Return the data for label based integer location.
+
+        Parameters
+        ----------
+        mgr : BlockManager
+        key : tuple of int
+
+        Returns
+        -------
+        scalar
+        """
+        blk = mgr.blocks[self.blocks.iloc[key]]
+        # GH: 43799; if blk is null, return data for missing key
+        if is_empty_indexer(blk):
+            return self._extract_value(key, fill_value=np.nan)
+
+        values = blk.values
+
+        if values.ndim == 1:
+            loc = key
+            # Non-unboxing of ExtensionArrays to scalar
+            # This is achieved by checking if the key is an integer
+            # and if we have a single block. See GH#50780
+            if not isinstance(key, tuple) and len(self.blocks) == 1:
+                return values[key]
+
+            # Unboxing 1D indexers for 1D blocks
+            if not isinstance(key, tuple):
+                loc = self.blocks.iloc[key]
+            return values[loc]
+        else:
+            loc = self.blocks.iloc[key]
+            return values[loc]
+[/SEARCH]
+[REPLACE]
+    def _get_value(self, mgr, key):
+        """
+        Return the data for label based integer location.
+
+        Parameters
+        ----------
+        mgr : BlockManager
+        key : tuple of int
+
+        Returns
+        -------
+        scalar
+        """
+        blk = mgr.blocks[self.blocks.iloc[key]]
+        # GH: 43799; if blk is null, return data for missing key
+        if is_empty_indexer(blk):
+            return self._extract_value(key, fill_value=np.nan)
+
+        values = blk.values
+
+        if values.ndim == 1:
+            loc = key
+            # Non-unboxing of ExtensionArrays to scalar
+            # This is achieved by checking if the key is an integer
+            # and if we have a single block. See GH#50780
+            if not isinstance(key, tuple) and len(self.blocks) == 1:
+                return values[key]
+
+            # Unboxing 1D indexers for 1D blocks
+            if not isinstance(key, tuple):
+                loc = self.blocks.iloc[key]
+            return values[loc]
+        else:
+            loc = self.blocks.iloc[key]
+            return values[loc]
+[/REPLACE]

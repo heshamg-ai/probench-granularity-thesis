@@ -1,0 +1,134 @@
+sklearn/linear_model/_logistic.py
+[SEARCH]
+    if solver == "lbfgs":
+
+        def func(x, *args):
+            return _multinomial_loss_grad(x, *args)[0:2]
+
+    elif solver == "newton-cg":
+
+        def func(x, *args):
+            return _multinomial_loss(x, *args)[0]
+
+        def grad(x, *args):
+            return _multinomial_loss_grad(x, *args)[1]
+
+        hess = _multinomial_grad_hess
+    warm_start_sag = {"coef": w0.T}
+else:
+    target = y_bin
+    if solver == "lbfgs":
+        func = _logistic_loss_and_grad
+    elif solver == "newton-cg":
+        func = _logistic_loss
+
+        def grad(x, *args):
+            return _logistic_loss_and_grad(x, *args)[1]
+
+        hess = _logistic_grad_hess
+    warm_start_sag = {"coef": np.expand_dims(w0, axis=1)}
+[/SEARCH]
+[REPLACE]
+    if solver == "lbfgs":
+        if multi_class == "multinomial":
+            func = _multinomial_loss_grad
+        else:
+            func = _logistic_loss_and_grad
+    elif solver == "newton-cg":
+        if multi_class == "multinomial":
+            def func(x, *args):
+                return _multinomial_loss(x, *args)[0]
+
+            def grad(x, *args):
+                return _multinomial_loss_grad(x, *args)[1]
+
+            hess = _multinomial_grad_hess
+        else:
+            func = _logistic_loss
+
+            def grad(x, *args):
+                return _logistic_loss_and_grad(x, *args)[1]
+
+            hess = _logistic_grad_hess
+    warm_start_sag = {"coef": w0.T}
+else:
+    target = y_bin
+    if solver == "lbfgs":
+        func = _logistic_loss_and_grad
+    elif solver == "newton-cg":
+        func = _logistic_loss
+
+        def grad(x, *args):
+            return _logistic_loss_and_grad(x, *args)[1]
+
+        hess = _logistic_grad_hess
+    warm_start_sag = {"coef": np.expand_dims(w0, axis=1)}
+[/REPLACE]
+
+sklearn/linear_model/_logistic.py
+[SEARCH]
+    if multi_class == "multinomial":
+        # scipy.optimize.minimize and newton-cg accepts only
+        # ravelled parameters.
+        if solver in ["lbfgs", "newton-cg"]:
+            w0 = w0.ravel()
+        target = Y_multi
+        if solver == "lbfgs":
+
+            def func(x, *args):
+                return _multinomial_loss_grad(x, *args)[0:2]
+
+        elif solver == "newton-cg":
+
+            def func(x, *args):
+                return _multinomial_loss(x, *args)[0]
+
+            def grad(x, *args):
+                return _multinomial_loss_grad(x, *args)[1]
+
+            hess = _multinomial_grad_hess
+        warm_start_sag = {"coef": w0.T}
+    else:
+        target = y_bin
+        if solver == "lbfgs":
+            func = _logistic_loss_and_grad
+        elif solver == "newton-cg":
+            func = _logistic_loss
+
+            def grad(x, *args):
+                return _logistic_loss_and_grad(x, *args)[1]
+
+            hess = _logistic_grad_hess
+        warm_start_sag = {"coef": np.expand_dims(w0, axis=1)}
+[/SEARCH]
+[REPLACE]
+    if multi_class == "multinomial":
+        # scipy.optimize.minimize and newton-cg accepts only
+        # ravelled parameters.
+        if solver in ["lbfgs", "newton-cg"]:
+            w0 = w0.ravel()
+        target = Y_multi
+        if solver == "lbfgs":
+            func = _multinomial_loss_grad
+        elif solver == "newton-cg":
+            def func(x, *args):
+                return _multinomial_loss(x, *args)[0]
+
+            def grad(x, *args):
+                return _multinomial_loss_grad(x, *args)[1]
+
+            hess = _multinomial_grad_hess
+        warm_start_sag = {"coef": w0.T}
+    else:
+        target = y_bin
+        if solver == "lbfgs":
+            func = _logistic_loss_and_grad
+        elif solver == "newton-cg":
+            func = _logistic_loss
+
+            def grad(x, *args):
+                return _logistic_loss_and_grad(x, *args)[1]
+
+            hess = _logistic_grad_hess
+        warm_start_sag = {"coef": np.expand_dims(w0, axis=1)}
+[/REPLACE]

@@ -1,0 +1,31 @@
+pandas/core/generic.py
+[SEARCH]
+        elif is_extension_array_dtype(dtype) and self.ndim > 1:
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: use iloc to handle duplicate column names
+            # TODO(EA2D): special case not needed with 2D EAs
+            results = [
+                self.iloc[:, i].astype(dtype, copy=copy)
+                for i in range(len(self.columns))
+            ]
+[/SEARCH]
+[REPLACE]
+        elif is_extension_array_dtype(dtype) and self.ndim > 1:
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: handle duplicate column names via positional access
+            # TODO(EA2D): special case not needed with 2D EAs
+            ncols = len(self.columns)
+            target_dtype = pandas_dtype(dtype)
+            get_col = getattr(self, "_ixs", None)
+            if get_col is not None:
+                results = [
+                    get_col(i, axis=1).astype(target_dtype, copy=copy)
+                    for i in range(ncols)
+                ]
+            else:
+                # Fallback in case _ixs is not available on the instance
+                results = [
+                    self.iloc[:, i].astype(target_dtype, copy=copy)
+                    for i in range(ncols)
+                ]
+[/REPLACE]

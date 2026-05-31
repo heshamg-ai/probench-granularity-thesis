@@ -1,0 +1,50 @@
+xarray/core/dataset.py
+[SEARCH]
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        # Note: we need to preserve the original indexers variable in order to merge the
+        # coords below
+        indexers_list = list(self._validate_indexers(indexers))
+[/SEARCH]
+[REPLACE]
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        # Fast-path for plain integer indexers (no slices/arrays/DataArray). This avoids
+        # validation/list construction and coordinate-merging overhead.
+        try:
+            from .indexing import is_fancy_indexer  # type: ignore
+        except Exception:
+            is_fancy_indexer = None
+        import numbers
+        import numpy as np  # local import to avoid module-level overhead
+        fast_int_only = bool(indexers) and all(
+            isinstance(v, numbers.Integral) and not isinstance(v, (bool, np.bool_)) and (is_fancy_indexer is None or not is_fancy_indexer(v))
+            for v in indexers.values()
+        ) and all(k in self.dims for k in indexers)
+        if fast_int_only:
+            variables: Dict[Hashable, Variable] = {}
+            indexes: Dict[Hashable, pd.Index] = {}
+            for name, var in self.variables.items():
+                var_indexers = {k: indexers[k] for k in var.dims if k in indexers}
+                if drop and name in var_indexers:
+                    continue  # drop this variable
+
+                if name in self.indexes:
+                    new_var, new_index = isel_variable_and_index(
+                        name, var, self.indexes[name], var_indexers
+                    )
+                    if new_index is not None:
+                        indexes[name] = new_index
+                elif var_indexers:
+                    new_var = var.isel(indexers=var_indexers)
+                else:
+                    new_var = var.copy(deep=False)
+
+                variables[name] = new_var
+
+            coord_names = self._coord_names & variables.keys()
+            selected = self._replace_with_new_dims(variables, coord_names, indexes)
+            # No coordinate extraction for plain integer indexers
+            return selected
+        # Note: we need to preserve the original indexers variable in order to merge the
+        # coords below
+        indexers_list = list(self._validate_indexers(indexers))
+[/REPLACE]

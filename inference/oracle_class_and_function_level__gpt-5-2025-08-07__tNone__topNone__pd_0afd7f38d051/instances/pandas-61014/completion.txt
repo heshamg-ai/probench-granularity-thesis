@@ -1,0 +1,54 @@
+pandas/core/generic.py
+[SEARCH]
+        # align the cond to same shape as myself
+        cond = common.apply_if_callable(cond, self)
+        if isinstance(cond, NDFrame):
+[/SEARCH]
+[REPLACE]
+        # align the cond to same shape as myself
+        cond = common.apply_if_callable(cond, self)
+        _cond_fastpath = False
+        if (
+            isinstance(cond, ABCDataFrame)
+            and self.ndim == 2
+            and axis is None
+            and level is None
+            and cond.index.equals(self.index)
+            and cond.columns.equals(self.columns)
+        ):
+            # Fastpath: identical axes, avoid alignment and coercion if already boolean
+            if cond._mgr.any_extension_types or not all(
+                is_bool_dtype(_dt) and not isinstance(_dt, ExtensionDtype) for _dt in cond.dtypes
+            ):
+                _tmp_fill = bool(inplace)
+                arr = cond.to_numpy(dtype=bool, na_value=_tmp_fill)
+                cond = cond._constructor(arr, **cond._construct_axes_dict(), copy=False)
+            _cond_fastpath = True
+        if isinstance(cond, NDFrame) and not _cond_fastpath:
+[/REPLACE]
+
+pandas/core/generic.py
+[SEARCH]
+        # make sure we are boolean
+        fill_value = bool(inplace)
+        cond = cond.fillna(fill_value)
+        cond = cond.infer_objects()
+[/SEARCH]
+[REPLACE]
+        # make sure we are boolean
+        fill_value = bool(inplace)
+        if not _cond_fastpath:
+            cond = cond.fillna(fill_value)
+            cond = cond.infer_objects()
+[/REPLACE]
+
+pandas/core/generic.py
+[SEARCH]
+        cond = -cond if inplace else cond
+        cond = cond.reindex(self._info_axis, axis=self._info_axis_number)
+[/SEARCH]
+[REPLACE]
+        cond = -cond if inplace else cond
+        if not _cond_fastpath:
+            cond = cond.reindex(self._info_axis, axis=self._info_axis_number)
+[/REPLACE]

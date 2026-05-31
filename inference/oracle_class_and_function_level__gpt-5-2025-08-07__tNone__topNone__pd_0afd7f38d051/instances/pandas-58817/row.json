@@ -1,0 +1,109 @@
+{
+  "id": 73,
+  "scenario_id": "pandas-58817",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 58817,
+  "baseline_sha": "64d153d00d5e44e710277c2499f16ceffd0126b5",
+  "reference_sha": "dae1e15f7f6122ab09ab5c912d232d10f492d3b4",
+  "task": "Optimize DataFrame.unstack when using ``future_stack=True`` and the DataFrame does not have a MultiIndex",
+  "entry_point": "pandas.DataFrame.unstack",
+  "whats_new": "Performance improvement in DataFrame.stack when using ``future_stack=True`` and the DataFrame does not have a MultiIndex",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-58817:baseline",
+      "digest": "sha256:7338aa0c3c07133af9924b3aa661e798837ae9874af472a3a770521276e3e4e1"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-58817:reference",
+      "digest": "sha256:bd6453ffeeeaad1ee9003f85ed6042d23dbcd6afcf9fb0a3e4457da30c500203"
+    }
+  },
+  "params": [
+    {
+      "name": "Num Rows",
+      "short_indicator": "R",
+      "explanation": "Number of rows in the DataFrame.",
+      "values": [
+        "1000",
+        "10000",
+        "100000"
+      ]
+    },
+    {
+      "name": "Num Cols",
+      "short_indicator": "C",
+      "explanation": "Number of columns in the DataFrame.",
+      "values": [
+        "10",
+        "100"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/frame/test_stack_unstack.py::TestDataFrameReshape::test_stack_unstack",
+    "pandas/tests/frame/test_stack_unstack.py::TestDataFrameReshape::test_stack_mixed_level",
+    "pandas/tests/frame/test_stack_unstack.py::TestDataFrameReshape::test_unstack_fill",
+    "pandas/tests/frame/test_stack_unstack.py::TestDataFrameReshape::test_stack_ints",
+    "pandas/tests/frame/test_stack_unstack.py::TestDataFrameReshape::test_stack_mixed_levels",
+    "pandas/tests/frame/test_stack_unstack.py::TestDataFrameReshape::test_stack_int_level_names",
+    "pandas/tests/frame/test_stack_unstack.py::TestDataFrameReshape::test_unstack_level_binding",
+    "pandas/tests/frame/test_stack_unstack.py::TestDataFrameReshape::test_unstack_non_unique_index_names",
+    "pandas/tests/frame/test_stack_unstack.py::TestDataFrameReshape::test_stack_datetime_column_multiIndex",
+    "pandas/tests/frame/test_stack_unstack.py::TestDataFrameReshape::test_stack_partial_multiIndex",
+    "pandas/tests/frame/test_stack_unstack.py::TestDataFrameReshape::test_stack_full_multiIndex",
+    "pandas/tests/frame/test_stack_unstack.py::TestDataFrameReshape::test_stack_preserve_categorical_dtype",
+    "pandas/tests/frame/test_stack_unstack.py::TestDataFrameReshape::test_stack_preserve_categorical_dtype_values",
+    "pandas/tests/frame/test_stack_unstack.py::TestDataFrameReshape::test_stack_multi_columns_non_unique_index",
+    "pandas/tests/frame/test_stack_unstack.py::test_stack_timezone_aware_values",
+    "pandas/tests/frame/test_stack_unstack.py::test_stack_empty_frame",
+    "pandas/tests/frame/test_stack_unstack.py::test_stack_unstack_empty_frame",
+    "pandas/tests/frame/test_stack_unstack.py::test_stack_positional_level_duplicate_column_names",
+    "pandas/tests/frame/test_stack_unstack.py::test_stack_sort_false",
+    "pandas/tests/frame/test_stack_unstack.py::test_stack_sort_false_multi_level",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_stack",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_stack_duplicate_index",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_unstack_odd_failure",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_stack_mixed_dtype",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_unstack_bug",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_stack_level_name",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_stack_unstack_preserve_names",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_stack_unstack_multiple",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_stack_names_and_numbers",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_stack_multiple_out_of_bounds",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_stack_multiple_bug",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_stack_dropna",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_unstack_multiple_hierarchical",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_unstack_unobserved_keys",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_stack_order_with_unsorted_levels",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_stack_order_with_unsorted_levels_multi_row",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_stack_order_with_unsorted_levels_multi_row_2",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_stack_unstack_unordered_multiindex",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_unstack_group_index_overflow",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_stack_nan_in_multiindex_columns",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_multi_level_stack_categorical",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_stack_nan_level",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_stack_unsorted",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_stack_nullable_dtype",
+    "pandas/tests/frame/test_stack_unstack.py::TestDataFrameReshape::test_unstack_not_consolidated",
+    "pandas/tests/frame/test_stack_unstack.py::TestDataFrameReshape::test_unstack_to_series",
+    "pandas/tests/frame/test_subclass.py::TestDataFrameSubclassing::test_subclass_unstack",
+    "pandas/tests/apply/test_series_apply.py::test_transform",
+    "pandas/tests/groupby/test_apply.py::test_groupby_apply_to_series_name",
+    "pandas/tests/frame/methods/test_reset_index.py::TestResetIndex::test_reset_index",
+    "pandas/tests/frame/methods/test_reset_index.py::test_reset_index_rename_multiindex",
+    "pandas/tests/frame/methods/test_reset_index.py::test_errorreset_index_rename",
+    "pandas/tests/indexes/multi/test_indexing.py::TestSliceLocs::test_slice_locs",
+    "pandas/tests/indexes/multi/test_integrity.py::test_rangeindex_fallback_coercion_bug",
+    "pandas/tests/indexes/datetimes/test_partial_slicing.py::TestSlicing::test_partial_slicing_with_multiindex_series",
+    "pandas/tests/io/json/test_pandas.py::TestPandasContainer::test_json_multiindex",
+    "pandas/tests/io/json/test_pandas.py::TestPandasContainer::test_to_json_multiindex_escape",
+    "pandas/tests/series/methods/test_reset_index.py::TestResetIndex::test_reset_index",
+    "pandas/tests/groupby/methods/test_describe.py::test_series_describe_single",
+    "pandas/tests/groupby/aggregate/test_cython.py::test_cythonized_aggers",
+    "pandas/tests/extension/test_numpy.py::TestNumpyExtensionArray::test_stack",
+    "pandas/tests/extension/test_sparse.py::TestSparseArray::test_stack",
+    "pandas/tests/extension/test_string.py::TestStringArray::test_stack"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.DataFrame.unstack for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize DataFrame.unstack when using ``future_stack=True`` and the DataFrame does not have a MultiIndex\nOptimization function: pandas.DataFrame.unstack\n\n\n[start of pandas/core/reshape/reshape.py]\n### Relevant context\n#### Function `pandas.core.reshape.reshape.stack_reshape`\n```python\ndef stack_reshape(\n    frame: DataFrame, level: list[int], set_levels: set[int], stack_cols: Index\n) -> Series | DataFrame:\n    \"\"\"Reshape the data of a frame for stack.\n\n    This function takes care of most of the work that stack needs to do. Caller\n    will sort the result once the appropriate index is set.\n\n    Parameters\n    ----------\n    frame: DataFrame\n        DataFrame that is to be stacked.\n    level: list of ints.\n        Levels of the columns to stack.\n    set_levels: set of ints.\n        Same as level, but as a set.\n    stack_cols: Index.\n        Columns of the result when the DataFrame is stacked.\n\n    Returns\n    -------\n    The data of behind the stacked DataFrame.\n    \"\"\"\n    # If we need to drop `level` from columns, it needs to be in descending order\n    drop_levnums = sorted(level, reverse=True)\n\n    # Grab data for each unique index to be stacked\n    buf = []\n    for idx in stack_cols.unique():\n        if len(frame.columns) == 1:\n            data = frame.copy(deep=False)\n        else:\n            if not isinstance(frame.columns, MultiIndex) and not isinstance(idx, tuple):\n                # GH#57750 - if the frame is an Index with tuples, .loc below will fail\n                column_indexer = idx\n            else:\n                # Take the data from frame corresponding to this idx value\n                if len(level) == 1:\n                    idx = (idx,)\n                gen = iter(idx)\n                column_indexer = tuple(\n                    next(gen) if k in set_levels else slice(None)\n                    for k in range(frame.columns.nlevels)\n                )\n            data = frame.loc[:, column_indexer]\n\n        if len(level) < frame.columns.nlevels:\n            data.columns = data.columns._drop_level_numbers(drop_levnums)\n        elif stack_cols.nlevels == 1:\n            if data.ndim == 1:\n                data.name = 0\n            else:\n                data.columns = default_index(len(data.columns))\n        buf.append(data)\n\n    if len(buf) > 0 and not frame.empty:\n        result = concat(buf, ignore_index=True)\n    else:\n        # input is empty\n        if len(level) < frame.columns.nlevels:\n            # concat column order may be different from dropping the levels\n            new_columns = frame.columns._drop_level_numbers(drop_levnums).unique()\n        else:\n            new_columns = [0]\n        result = DataFrame(columns=new_columns, dtype=frame._values.dtype)\n\n    if len(level) < frame.columns.nlevels:\n        # concat column order may be different from dropping the levels\n        desired_columns = frame.columns._drop_level_numbers(drop_levnums).unique()\n        if not result.columns.equals(desired_columns):\n            result = result[desired_columns]\n\n    return result\n```\n#### Function `pandas.core.reshape.reshape.stack_v3`\n```python\ndef stack_v3(frame: DataFrame, level: list[int]) -> Series | DataFrame:\n    if frame.columns.nunique() != len(frame.columns):\n        raise ValueError(\"Columns with duplicate values are not supported in stack\")\n    if not len(level):\n        return frame\n    set_levels = set(level)\n    stack_cols = frame.columns._drop_level_numbers(\n        [k for k in range(frame.columns.nlevels - 1, -1, -1) if k not in set_levels]\n    )\n\n    result = stack_reshape(frame, level, set_levels, stack_cols)\n\n    # Construct the correct MultiIndex by combining the frame's index and\n    # stacked columns.\n    ratio = 0 if frame.empty else len(result) // len(frame)\n\n    index_levels: list | FrozenList\n    if isinstance(frame.index, MultiIndex):\n        index_levels = frame.index.levels\n        index_codes = list(np.tile(frame.index.codes, (1, ratio)))\n    else:\n        codes, uniques = factorize(frame.index, use_na_sentinel=False)\n        index_levels = [uniques]\n        index_codes = list(np.tile(codes, (1, ratio)))\n\n    if len(level) > 1:\n        # Arrange columns in the order we want to take them, e.g. level=[2, 0, 1]\n        sorter = np.argsort(level)\n        assert isinstance(stack_cols, MultiIndex)\n        ordered_stack_cols = stack_cols._reorder_ilevels(sorter)\n    else:\n        ordered_stack_cols = stack_cols\n    ordered_stack_cols_unique = ordered_stack_cols.unique()\n    if isinstance(ordered_stack_cols, MultiIndex):\n        column_levels = ordered_stack_cols.levels\n        column_codes = ordered_stack_cols.drop_duplicates().codes\n    else:\n        column_levels = [ordered_stack_cols_unique]\n        column_codes = [factorize(ordered_stack_cols_unique, use_na_sentinel=False)[0]]\n\n    # error: Incompatible types in assignment (expression has type \"list[ndarray[Any,\n    # dtype[Any]]]\", variable has type \"FrozenList\")\n    column_codes = [np.repeat(codes, len(frame)) for codes in column_codes]  # type: ignore[assignment]\n    result.index = MultiIndex(\n        levels=index_levels + column_levels,\n        codes=index_codes + column_codes,\n        names=frame.index.names + list(ordered_stack_cols.names),\n        verify_integrity=False,\n    )\n\n    # sort result, but faster than calling sort_index since we know the order we need\n    len_df = len(frame)\n    n_uniques = len(ordered_stack_cols_unique)\n    indexer = np.arange(n_uniques)\n    idxs = np.tile(len_df * indexer, len_df) + np.repeat(np.arange(len_df), n_uniques)\n    result = result.take(idxs)\n\n    # Reshape/rename if needed and dropna\n    if result.ndim == 2 and frame.columns.nlevels == len(level):\n        if len(result.columns) == 0:\n            result = Series(index=result.index)\n        else:\n            result = result.iloc[:, 0]\n    if result.ndim == 1:\n        result.name = None\n\n    return result\n```\n[end of pandas/core/reshape/reshape.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

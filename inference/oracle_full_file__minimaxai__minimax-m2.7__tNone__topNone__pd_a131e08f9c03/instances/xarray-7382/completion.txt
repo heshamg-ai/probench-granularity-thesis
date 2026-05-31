@@ -1,0 +1,57 @@
+
+
+Looking at the code, I need to find the `Dataset.assign` method and understand the alignment flow. However, I don't see `Dataset.assign` in the provided context. Let me check what optimization opportunities exist in the alignment code that `Dataset.assign` likely uses.
+
+Based on the request to optimize "alignment between indexed and non-indexed objects of the same shape", the key optimization would be in the `Aligner.align()` method. Currently, even when all objects have matching dimension sizes (which is common when calling `assign` with data of the same shape), the full alignment machinery is invoked unnecessarily.
+
+Let me provide an optimization that adds a fast path when no reindexing is actually needed:
+
+xarray/core/alignment.py
+[SEARCH]
+    def align(self) -> None:
+        if not self.indexes and len(self.objects) == 1:
+            # fast path for the trivial case
+            (obj,) = self.objects
+            self.results = (obj.copy(deep=self.copy),)
+            return
+
+        self.find_matching_indexes()
+        self.find_matching_unindexed_dims()
+        self.assert_no_index_conflict()
+        self.align_indexes()
+        self.assert_unindexed_dim_sizes_equal()
+
+        if self.join == "override":
+            self.override_indexes()
+        else:
+            self.reindex_all()
+[/SEARCH]
+[REPLACE]
+    def align(self) -> None:
+        if not self.indexes and len(self.objects) == 1:
+            # fast path for the trivial case
+            (obj,) = self.objects
+            self.results = (obj.copy(deep=self.copy),)
+            return
+
+        self.find_matching_indexes()
+        self.find_matching_unindexed_dims()
+        self.assert_no_index_conflict()
+        self.align_indexes()
+        self.assert_unindexed_dim_sizes_equal()
+
+        # Fast path: check if any object needs reindexing before doing work
+        # This is a common case (e.g., Dataset.assign with same-shaped data)
+        needs_any_reindex = any(self.reindex.values())
+        if not needs_any_reindex:
+            # No reindexing needed - copy objects directly
+            self.results = tuple(
+                obj.copy(deep=self.copy) for obj in self.objects
+            )
+            return
+
+        if self.join == "override":
+            self.override_indexes()
+        else:
+            self.reindex_all()
+[/REPLACE]

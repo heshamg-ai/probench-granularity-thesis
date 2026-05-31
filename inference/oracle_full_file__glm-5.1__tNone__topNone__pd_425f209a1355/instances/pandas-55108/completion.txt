@@ -1,0 +1,33 @@
+Looking at the `Index.difference` method, I can see that when `_should_compare` returns `False` (meaning the two indexes have non-comparable dtypes, so their intersection is empty), the method currently calls `self.rename(result_name)` and then potentially `result.sort_values()`. The `sort_values()` call on a DatetimeIndex is expensive as it performs a full sort.
+
+For the disjoint case where we know nothing matches, sorting is equivalent to simply checking if the index is already sorted. I can optimize this by checking monotonicity first, which for DatetimeIndex is an O(1) cached property lookup, and only falling back to `sort_values()` if it's not already monotonic.
+
+This preserves exact semantics: if `sort=None` or `sort=True`, the result is sorted (either already sorted via fastpath, or sorted via `sort_values()`). If `sort=False`, no sorting is attempted.
+
+pandas/core/indexes/base.py
+[SEARCH]
+        if not self._should_compare(other):
+            # Nothing matches -> difference is everything
+            result = self.rename(result_name)
+            if sort is True:
+                return result.sort_values()
+            return result
+[/SEARCH]
+[REPLACE]
+        if not self._should_compare(other):
+            # Nothing matches -> difference is everything
+            result = self.rename(result_name)
+            if sort is not False and not result.is_monotonic_increasing:
+                try:
+                    return result.sort_values()
+                except TypeError:
+                    if sort is True:
+                        raise
+                    warnings.warn(
+                        f"unorderable types, sort order is undefined for "
+                        f"incomparable objects.",
+                        RuntimeWarning,
+                        stacklevel=find_stack_level(),
+                    )
+            return result
+[/REPLACE]

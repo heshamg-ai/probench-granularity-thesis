@@ -1,0 +1,100 @@
+pandas/core/algorithms.py
+[SEARCH]
+        values = np.asarray(values)  # convert DTA/TDA/MultiIndex
+
+        if not use_na_sentinel and is_object_dtype(values):
+            # factorize can now handle differentiating various types of null values.
+            # These can only occur when the array has object dtype.
+            # However, for backwards compatibility we only use the null for the
+            # provided dtype. This may be revisited in the future, see GH#48476.
+            null_mask = isna(values)
+            if null_mask.any():
+                na_value = na_value_for_dtype(values.dtype, compat=False)
+                # Don't modify (potentially user-provided) array
+                values = np.where(null_mask, na_value, values)
+
+        codes, uniques = factorize_array(
+            values,
+            use_na_sentinel=use_na_sentinel,
+            size_hint=size_hint,
+        )
+[/SEARCH]
+[REPLACE]
+        values = np.asarray(values)  # convert DTA/TDA/MultiIndex
+
+        # Optimization: for object-dtype arrays without strings and with use_na_sentinel=True,
+        # attempt to cast to a numeric/boolean/complex dtype for faster hashing.
+        _opt_mask = None
+        if use_na_sentinel and is_object_dtype(values):
+            inferred = lib.infer_dtype(values, skipna=True)
+            try:
+                if inferred == "integer":
+                    null_mask = isna(values)
+                    if null_mask.any():
+                        sub = values[~null_mask]
+                        sub_converted = sub.astype(np.int64, copy=False)
+                        temp_arr = np.empty(len(values), dtype=np.int64)
+                        temp_arr[~null_mask] = sub_converted
+                        # Placeholder value for masked positions; ignored via _opt_mask
+                        temp_arr[null_mask] = 0
+                        values = temp_arr
+                        _opt_mask = null_mask.astype("bool")
+                    else:
+                        values = values.astype(np.int64, copy=False)
+                elif inferred == "boolean":
+                    null_mask = isna(values)
+                    if null_mask.any():
+                        sub = values[~null_mask]
+                        sub_converted = sub.astype(np.bool_, copy=False)
+                        temp_arr = np.empty(len(values), dtype=np.bool_)
+                        temp_arr[~null_mask] = sub_converted
+                        temp_arr[null_mask] = False
+                        values = temp_arr
+                        _opt_mask = null_mask.astype("bool")
+                    else:
+                        values = values.astype(np.bool_, copy=False)
+                elif inferred == "floating":
+                    null_mask = isna(values)
+                    if null_mask.any():
+                        sub = values[~null_mask]
+                        sub_converted = sub.astype(np.float64, copy=False)
+                        temp_arr = np.empty(len(values), dtype=np.float64)
+                        temp_arr[~null_mask] = sub_converted
+                        temp_arr[null_mask] = np.nan
+                        values = temp_arr
+                    else:
+                        values = values.astype(np.float64, copy=False)
+                elif inferred == "complex":
+                    null_mask = isna(values)
+                    if null_mask.any():
+                        sub = values[~null_mask]
+                        sub_converted = sub.astype(np.complex128, copy=False)
+                        temp_arr = np.empty(len(values), dtype=np.complex128)
+                        temp_arr[~null_mask] = sub_converted
+                        temp_arr[null_mask] = np.nan + 0j
+                        values = temp_arr
+                    else:
+                        values = values.astype(np.complex128, copy=False)
+            except (TypeError, ValueError, OverflowError):
+                _opt_mask = None
+                # fall back to object dtype path by leaving values unchanged
+                values = np.asarray(original)
+
+        if not use_na_sentinel and is_object_dtype(values):
+            # factorize can now handle differentiating various types of null values.
+            # These can only occur when the array has object dtype.
+            # However, for backwards compatibility we only use the null for the
+            # provided dtype. This may be revisited in the future, see GH#48476.
+            null_mask = isna(values)
+            if null_mask.any():
+                na_value = na_value_for_dtype(values.dtype, compat=False)
+                # Don't modify (potentially user-provided) array
+                values = np.where(null_mask, na_value, values)
+
+        codes, uniques = factorize_array(
+            values,
+            use_na_sentinel=use_na_sentinel,
+            size_hint=size_hint,
+            mask=_opt_mask,
+        )
+[/REPLACE]

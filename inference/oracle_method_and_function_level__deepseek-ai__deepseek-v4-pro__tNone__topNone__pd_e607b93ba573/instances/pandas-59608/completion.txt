@@ -1,0 +1,37 @@
+pandas/io/formats/csvs.py
+[SEARCH]
+        res = df._get_values_for_csv(**self._number_format)
+        data = list(res._iter_column_arrays())
+
+        ix = self.data_index[slicer]._get_values_for_csv(**self._number_format)
+        libwriters.write_csv_rows(
+            data,
+            ix,
+            self.nlevels,
+            self.cols,
+            self.writer,
+        )
+[/SEARCH]
+[REPLACE]
+        res = df._get_values_for_csv(**self._number_format)
+        data = list(res._iter_column_arrays())
+
+        if self.nlevels == 1:
+            # Fast path: single-level index — no need to convert, just pass empty list
+            libwriters.write_csv_rows(
+                data,
+                [],
+                self.nlevels,
+                self.cols,
+                self.writer,
+            )
+        else:
+            ix = self.data_index[slicer]._get_values_for_csv(**self._number_format)
+            libwriters.write_csv_rows(
+                data,
+                ix,
+                self.nlevels,
+                self.cols,
+                self.writer,
+            )
+[/REPLACE]

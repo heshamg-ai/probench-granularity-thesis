@@ -1,0 +1,74 @@
+pandas/core/indexes/api.py
+[SEARCH]
+    indexes, kind = _sanitize_and_check(indexes)
+
+    def _unique_indices(inds, dtype) -> Index:
+        """
+        Concatenate indices and remove duplicates.
+
+        Parameters
+        ----------
+        inds : list of Index or list objects
+        dtype : dtype to set for the resulting Index
+
+        Returns
+        -------
+        Index
+        """
+        if all(isinstance(ind, Index) for ind in inds):
+            result = inds[0].append(inds[1:]).unique()
+            result = result.astype(dtype, copy=False)
+            if sort:
+                result = result.sort_values()
+            return result
+
+        def conv(i):
+            if isinstance(i, Index):
+                i = i.tolist()
+            return i
+
+        return Index(
+            lib.fast_unique_multiple_list([conv(i) for i in inds], sort=sort),
+            dtype=dtype,
+        )
+[/SEARCH]
+[REPLACE]
+    indexes, kind = _sanitize_and_check(indexes)
+
+    def _unique_indices(inds, dtype) -> Index:
+        """
+        Concatenate indices and remove duplicates.
+
+        Parameters
+        ----------
+        inds : list of Index or list objects
+        dtype : dtype to set for the resulting Index
+
+        Returns
+        -------
+        Index
+        """
+        if all(isinstance(ind, Index) for ind in inds):
+            if all(ind.equals(inds[0]) for ind in inds[1:]):
+                result = inds[0]
+                if result.dtype != dtype:
+                    result = result.astype(dtype, copy=False)
+                if sort:
+                    result = result.sort_values()
+                return result
+            result = inds[0].append(inds[1:]).unique()
+            result = result.astype(dtype, copy=False)
+            if sort:
+                result = result.sort_values()
+            return result
+
+        def conv(i):
+            if isinstance(i, Index):
+                i = i.tolist()
+            return i
+
+        return Index(
+            lib.fast_unique_multiple_list([conv(i) for i in inds], sort=sort),
+            dtype=dtype,
+        )
+[/REPLACE]

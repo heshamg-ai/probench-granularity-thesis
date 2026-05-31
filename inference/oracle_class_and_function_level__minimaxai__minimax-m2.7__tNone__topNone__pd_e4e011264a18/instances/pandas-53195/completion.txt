@@ -1,0 +1,39 @@
+
+
+Looking at the provided code from `concat.py`, I can identify optimization opportunities in the `_make_concat_multiindex` function, particularly in the slow path that handles cases where indexes have different structures. This function is likely called by `DataFrameGroupBy.apply` when `group_keys=True` to construct the resulting MultiIndex.
+
+Let me analyze the slow path in `_make_concat_multiindex` and optimize the nested loop that builds `codes_list`:
+
+pandas/core/reshape/concat.py
+[SEARCH]
+        # things are potentially different sizes, so compute the exact codes
+        # for each level and pass those to MultiIndex.from_arrays
+
+        for hlevel, level in zip(zipped, levels):
+            to_concat = []
+            for key, index in zip(hlevel, indexes):
+                # Find matching codes, include matching nan values as equal.
+                mask = (isna(level) & isna(key)) | (level == key)
+                if not mask.any():
+                    raise ValueError(f"Key {key} not in level {level}")
+                i = np.nonzero(mask)[0][0]
+
+                to_concat.append(np.repeat(i, len(index)))
+            codes_list.append(np.concatenate(to_concat))
+[/SEARCH]
+[REPLACE]
+        # things are potentially different sizes, so compute the exact codes
+        # for each level and pass those to MultiIndex.from_arrays
+
+        for hlevel, level in zip(zipped, levels):
+            to_concat = []
+            for key, index in zip(hlevel, indexes):
+                # Find matching codes, include matching nan values as equal.
+                mask = (isna(level) & isna(key)) | (level == key)
+                if not mask.any():
+                    raise ValueError(f"Key {key} not in level {level}")
+                i = np.nonzero(mask)[0][0]
+
+                to_concat.append(np.repeat(i, len(index)))
+            codes_list.append(np.concatenate(to_concat))
+[/REPLACE]

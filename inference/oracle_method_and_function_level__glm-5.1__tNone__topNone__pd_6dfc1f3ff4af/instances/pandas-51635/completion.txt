@@ -1,0 +1,18 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        fill_value = convert_fill_value(value, self._pa_array.type, self.dtype)
+
+        try:
+            if method is None:
+                return type(self)(pc.fill_null(self._pa_array, fill_value=fill_value))
+[/SEARCH]
+[REPLACE]
+        if method is None and self._pa_array.null_count == 0:
+            return self.copy()
+
+        fill_value = convert_fill_value(value, self._pa_array.type, self.dtype)
+
+        try:
+            if method is None:
+                return type(self)(pc.fill_null(self._pa_array, fill_value=fill_value))
+[/REPLACE]

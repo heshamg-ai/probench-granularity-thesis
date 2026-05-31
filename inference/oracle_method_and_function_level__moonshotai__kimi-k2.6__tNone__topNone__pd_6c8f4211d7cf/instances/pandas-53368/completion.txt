@@ -1,0 +1,100 @@
+pandas/core/indexes/base.py
+[SEARCH]
+    def get_indexer_for(self, target: Index, step: int | None = None) -> npt.NDArray[np.intp]:
+        """
+        Return an indexer for the `target` that corresponds to this index.
+
+        This is a version of `get_indexer` that is optimized for the case when
+        the target is an index. It is used internally in many parts of pandas.
+
+        Parameters
+        ----------
+        target : Index
+            The target index to get indexer for.
+        step : int | None, default None
+            The step size to use.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+            The indexer for the target.
+        """
+        if step is not None:
+            # INDENT THIS
+            if isinstance(self, (ABCIntervalIndex, ABCMultiIndex)):
+                return self.get_indexer(target)
+
+        if (
+            isinstance(target, CategoricalIndex)
+            and target._is_monotonic_increasing
+            and target._is_unique
+        ):
+            engine = self._engine
+            target_values = target._get_engine_target()
+            try:
+                return engine.get_indexer(target_values)
+            except TypeError:
+                # Wrap in try except to avoid inspection on get_indexer call
+                #  TypeError: _get_engine_target returned an unexpected type
+                pass
+
+        return self.get_indexer(target)
+[/SEARCH]
+[REPLACE]
+    def get_indexer_for(self, target: Index, step: int | None = None) -> npt.NDArray[np.intp]:
+        """
+        Return an indexer for the `target` that corresponds to this index.
+
+        This is a version of `get_indexer` that is optimized for the case when
+        the target is an index. It is used internally in many parts of pandas.
+
+        Parameters
+        ----------
+        target : Index
+            The target index to get indexer for.
+        step : int | None, default None
+            The step size to use.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+            The indexer for the target.
+        """
+        if step is not None:
+            # INDENT THIS
+            if isinstance(self, (ABCIntervalIndex, ABCMultiIndex)):
+                return self.get_indexer(target)
+
+        if (
+            isinstance(target, CategoricalIndex)
+            and target._is_monotonic_increasing
+            and target._is_unique
+        ):
+            engine = self._engine
+            target_values = target._get_engine_target()
+            try:
+                return engine.get_indexer(target_values)
+            except TypeError:
+                # Wrap in try except to avoid inspection on get_indexer call
+                #  TypeError: _get_engine_target returned an unexpected type
+                pass
+
+        # Fast path for PyArrow-backed timestamp/duration indices:
+        # _engine.get_indexer on object-dtype fallback is very slow for
+        # large indexes. Convert to numpy-backed (keeping i8 values) to
+        # leverage vectorized C engine lookup.
+        if (
+            isinstance(target, type(self))
+            and isinstance(target._values, ArrowExtensionArray)
+            and self.dtype.kind in "mM"
+            and target.dtype.kind in "mM"
+        ):
+            return (
+                self.view("i8")
+                ._engine.get_indexer(
+                    target.view("i8")._get_engine_target()
+                )
+            )
+
+        return self.get_indexer(target)
+[/REPLACE]

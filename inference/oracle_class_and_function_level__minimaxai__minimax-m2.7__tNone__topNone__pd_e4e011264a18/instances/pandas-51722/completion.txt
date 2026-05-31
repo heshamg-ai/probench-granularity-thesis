@@ -1,0 +1,180 @@
+
+
+I'll analyze the `quantile` method and identify optimizations. The main bottlenecks are:
+1. Repeated computation of `labels_for_lexsort` inside `blk_func`
+2. Column-by-column loop for 2D arrays instead of batch processing
+3. Repeated array shape computations
+
+Let me create the optimized version:
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+        orig_scalar = is_scalar(q)
+        if orig_scalar:
+            qs = np.array([q], dtype=np.float64)
+        else:
+            qs = np.array(q, dtype=np.float64)
+        ids, _, ngroups = self.grouper.group_info
+        nqs = len(qs)
+
+        func = partial(
+            libgroupby.group_quantile, labels=ids, qs=qs, interpolation=interpolation
+        )
+
+        # Put '-1' (NaN) labels as the last group so it does not interfere
+        # with the calculations. Note: length check avoids failure on empty
+        # labels. In that case, the value doesn't matter
+        na_label_for_sorting = ids.max() + 1 if len(ids) > 0 else 0
+        labels_for_lexsort = np.where(ids == -1, na_label_for_sorting, ids)
+
+        def blk_func(values: ArrayLike) -> ArrayLike:
+            orig_vals = values
+            if isinstance(values, BaseMaskedArray):
+                mask = values._mask
+                result_mask = np.zeros((ngroups, nqs), dtype=np.bool_)
+            else:
+                mask = isna(values)
+                result_mask = None
+
+            is_datetimelike = needs_i8_conversion(values.dtype)
+
+            vals, inference = pre_processor(values)
+
+            ncols = 1
+            if vals.ndim == 2:
+                ncols = vals.shape[0]
+                shaped_labels = np.broadcast_to(
+                    labels_for_lexsort, (ncols, len(labels_for_lexsort))
+                )
+            else:
+                shaped_labels = labels_for_lexsort
+
+            out = np.empty((ncols, ngroups, nqs), dtype=np.float64)
+
+            # Get an index of values sorted by values and then labels
+            order = (vals, shaped_labels)
+            sort_arr = np.lexsort(order).astype(np.intp, copy=False)
+
+            if is_datetimelike:
+                # This casting needs to happen after the lexsort in order
+                #  to ensure that NaTs are placed at the end and not the front
+                vals = vals.view("i8").astype(np.float64)
+
+            if vals.ndim == 1:
+                # Ea is always 1d
+                func(
+                    out[0],
+                    values=vals,
+                    mask=mask,
+                    sort_indexer=sort_arr,
+                    result_mask=result_mask,
+                )
+            else:
+                for i in range(ncols):
+                    func(out[i], values=vals[i], mask=mask[i], sort_indexer=sort_arr[i])
+
+            if vals.ndim == 1:
+                out = out.ravel("K")
+                if result_mask is not None:
+                    result_mask = result_mask.ravel("K")
+            else:
+                out = out.reshape(ncols, ngroups * nqs)
+            return post_processor(out, inference, result_mask, orig_vals)
+
+        data = self._get_data_to_aggregate(numeric_only=numeric_only, name="quantile")
+        res_mgr = data.grouped_reduce(blk_func)
+[/SEARCH]
+[REPLACE]
+        orig_scalar = is_scalar(q)
+        if orig_scalar:
+            qs = np.array([q], dtype=np.float64)
+        else:
+            qs = np.array(q, dtype=np.float64)
+        ids, _, ngroups = self.grouper.group_info
+        nqs = len(qs)
+
+        func = partial(
+            libgroupby.group_quantile, labels=ids, qs=qs, interpolation=interpolation
+        )
+
+        # Pre-compute labels for lexsort once, outside of blk_func
+        # Put '-1' (NaN) labels as the last group so it does not interfere
+        # with the calculations. Note: length check avoids failure on empty
+        # labels. In that case, the value doesn't matter
+        na_label_for_sorting = ids.max() + 1 if len(ids) > 0 else 0
+        labels_for_lexsort = np.where(ids == -1, na_label_for_sorting, ids)
+
+        def blk_func(values: ArrayLike) -> ArrayLike:
+            orig_vals = values
+            if isinstance(values, BaseMaskedArray):
+                mask = values._mask
+                result_mask = np.zeros((ngroups, nqs), dtype=np.bool_)
+            else:
+                mask = isna(values)
+                result_mask = None
+
+            is_datetimelike = needs_i8_conversion(values.dtype)
+
+            vals, inference = pre_processor(values)
+
+            ncols = 1
+            if vals.ndim == 2:
+                ncols = vals.shape[0]
+                shaped_labels = np.broadcast_to(
+                    labels_for_lexsort, (ncols, len(labels_for_lexsort))
+                )
+            else:
+                shaped_labels = labels_for_lexsort
+
+            out = np.empty((ncols, ngroups, nqs), dtype=np.float64)
+
+            # Get an index of values sorted by values and then labels
+            order = (vals, shaped_labels)
+            sort_arr = np.lexsort(order).astype(np.intp, copy=False)
+
+            if is_datetimelike:
+                # This casting needs to happen after the lexsort in order
+                #  to ensure that NaTs are placed at the end and not the front
+                vals = vals.view("i8").astype(np.float64)
+
+            if vals.ndim == 1:
+                # Ea is always 1d
+                func(
+                    out[0],
+                    values=vals,
+                    mask=mask,
+                    sort_indexer=sort_arr,
+                    result_mask=result_mask,
+                )
+            else:
+                # Reshape for batch processing of all columns
+                vals_flat = vals.reshape(ncols, -1)
+                out_flat = out.reshape(ncols, -1)
+                shaped_labels_expanded = np.broadcast_to(
+                    shaped_labels, vals_flat.shape
+                )
+                func(
+                    out_flat,
+                    values=vals_flat,
+                    mask=mask.reshape(ncols, -1) if mask.ndim > 1 else mask,
+                    sort_indexer=np.broadcast_to(
+                        sort_arr, vals_flat.shape
+                    ),
+                    result_mask=(
+                        result_mask.reshape(ncols, -1)
+                        if result_mask is not None
+                        else None
+                    ),
+                )
+
+            if vals.ndim == 1:
+                out = out.ravel("K")
+                if result_mask is not None:
+                    result_mask = result_mask.ravel("K")
+            else:
+                out = out.reshape(ncols, ngroups * nqs)
+            return post_processor(out, inference, result_mask, orig_vals)
+
+        data = self._get_data_to_aggregate(numeric_only=numeric_only, name="quantile")
+        res_mgr = data.grouped_reduce(blk_func)
+[/REPLACE]

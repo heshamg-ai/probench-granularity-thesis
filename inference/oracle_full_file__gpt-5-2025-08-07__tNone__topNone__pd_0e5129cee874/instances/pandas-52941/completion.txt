@@ -1,0 +1,29 @@
+pandas/core/generic.py
+[SEARCH]
+        if items is not None:
+            name = self._get_axis_name(axis)
+            # error: Keywords must be strings
+            return self.reindex(  # type: ignore[misc]
+                **{name: [r for r in items if r in labels]}  # type: ignore[arg-type]
+            )
+[/SEARCH]
+[REPLACE]
+        if items is not None:
+            name = self._get_axis_name(axis)
+            # Optimize membership checks by vectorized indexer aligned to items order
+            items_index = ensure_index(items)
+            try:
+                indexer = labels.get_indexer_for(items_index)
+                present_mask = indexer != -1
+                if present_mask.any():
+                    filtered = items_index[present_mask]
+                else:
+                    filtered = items_index[:0]
+            except Exception:
+                # Fallback to original behavior on unexpected cases
+                filtered = [r for r in items_index if r in labels]
+            # error: Keywords must be strings
+            return self.reindex(  # type: ignore[misc]
+                **{name: filtered}  # type: ignore[arg-type]
+            )
+[/REPLACE]

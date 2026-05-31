@@ -1,0 +1,21 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+        level_nbytes = sum(i.memory_usage(deep=deep) for i in self.levels)
+        label_nbytes = sum(i.nbytes for i in self.codes)
+        names_nbytes = sum(getsizeof(i, objsize) for i in self.names)
+        result = level_nbytes + label_nbytes + names_nbytes
+
+        # include our engine hashtable
+        result += self._engine.sizeof(deep=deep)
+        return result
+[/SEARCH]
+[REPLACE]
+        level_nbytes = sum(level.memory_usage(deep=deep) for level in self.levels)
+        label_nbytes = sum(code.nbytes for code in self.codes)
+        names_nbytes = sum(getsizeof(name, objsize) for name in self.names)
+        result = level_nbytes + label_nbytes + names_nbytes
+
+        # include our engine hashtable
+        result += self._engine.sizeof(deep=deep)
+        return result
+[/REPLACE]

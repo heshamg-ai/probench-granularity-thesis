@@ -1,0 +1,76 @@
+pandas/core/indexes/base.py
+[SEARCH]
+    @final
+    def get_indexer_for(self, target) -> npt.NDArray[np.intp]:
+        """
+        Guaranteed return of an indexer even when non-unique.
+
+        This dispatches to get_indexer or get_indexer_non_unique
+        as appropriate.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+            List of indices.
+
+        Examples
+        --------
+        >>> idx = pd.Index([np.nan, 'var1', np.nan])
+        >>> idx.get_indexer_for([np.nan])
+        array([0, 2])
+        """
+        if self._index_as_unique:
+            return self.get_indexer(target)
+        indexer, _ = self.get_indexer_non_unique(target)
+        return indexer
+[/SEARCH]
+[REPLACE]
+    @final
+    def get_indexer_for(self, target) -> npt.NDArray[np.intp]:
+        """
+        Guaranteed return of an indexer even when non-unique.
+
+        This dispatches to get_indexer or get_indexer_non_unique
+        as appropriate.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+            List of indices.
+
+        Examples
+        --------
+        >>> idx = pd.Index([np.nan, 'var1', np.nan])
+        >>> idx.get_indexer_for([np.nan])
+        array([0, 2])
+        """
+        if self._index_as_unique:
+            target = self._maybe_cast_listlike_indexer(target)
+
+            if not self._should_compare(target) and not self._should_partial_index(
+                target
+            ):
+                return self._get_indexer_non_comparable(
+                    target, method=None, unique=True
+                )
+
+            pself, ptarget = self._maybe_promote(target)
+            if pself is not self or ptarget is not target:
+                return pself.get_indexer(ptarget)
+
+            if self.dtype != target.dtype and not self._should_partial_index(target):
+                dtype = self._find_common_type_compat(target)
+                this = self.astype(dtype, copy=False)
+                target = target.astype(dtype, copy=False)
+                return this._get_indexer(target)
+
+            if self.dtype == target.dtype and self.equals(target):
+                return np.arange(len(target), dtype=np.intp)
+
+            tgt_values = target._get_engine_target()
+            indexer = self._engine.get_indexer(tgt_values)
+            return ensure_platform_int(indexer)
+
+        indexer, _ = self.get_indexer_non_unique(target)
+        return indexer
+[/REPLACE]

@@ -1,0 +1,138 @@
+
+
+Looking at the code, I need to find the `astype` method implementation in the NDFrame class and optimize the case when dtype is an extension dtype.
+
+Let me first look at the relevant section of the `astype` method:
+
+```python
+elif is_extension_array_dtype(dtype) and self.ndim > 1:
+    # GH 18099/22869: columnwise conversion to extension dtype
+    # GH 24704: use iloc to handle duplicate column names
+    # TODO(EA2D): special case not needed with 2D EAs
+    results = [
+        self.iloc[:, i].astype(dtype, copy=copy)
+        for i in range(len(self.columns))
+    ]
+```
+
+This iterates column-by-column which is slow. Let me also look at the final `else` branch:
+
+```python
+else:
+    # else, only a single dtype is given
+    new_data = self._mgr.astype(dtype=dtype, copy=copy, errors=errors)
+    res = self._constructor_from_mgr(new_data, axes=new_data.axes)
+    return res.__finalize__(self, method="astype")
+```
+
+The optimization I can make is for the case when `is_extension_array_dtype(dtype)` and the DataFrame has multiple columns. Instead of iterating column by column, we can convert the underlying block values directly.
+
+Let me search for the relevant code block:
+
+pandas/core/generic.py
+[SEARCH]
+        elif is_extension_array_dtype(dtype) and self.ndim > 1:
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: use iloc to handle duplicate column names
+            # TODO(EA2D): special case not needed with 2D EAs
+            results = [
+                self.iloc[:, i].astype(dtype, copy=copy)
+                for i in range(len(self.columns))
+            ]
+
+        elif is_extension_array_dtype(dtype) and self.ndim == 1:
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: use iloc to handle duplicate column names
+            # TODO(EA2D): special case not needed with 2D EAs
+            new_data = self._mgr.astype(dtype=dtype, copy=copy, errors=errors)
+            res = self._constructor_from_mgr(new_data, axes=new_data.axes)
+            return res.__finalize__(self, method="astype")
+[/SEARCH]
+[REPLACE]
+        elif is_extension_array_dtype(dtype):
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: use iloc to handle duplicate column names
+            # For 2D (DataFrame), use block-wise conversion if possible
+            if self.ndim > 1 and using_copy_on_write():
+                # CoW: must copy to avoid mutating original
+                new_data = self._mgr.astype(dtype=dtype, copy=True, errors=errors)
+            else:
+                new_data = self._mgr.astype(dtype=dtype, copy=copy, errors=errors)
+            res = self._constructor_from_mgr(new_data, axes=new_data.axes)
+            return res.__finalize__(self, method="astype")
+
+        elif is_extension_array_dtype(dtype):
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: use iloc to handle duplicate column names
+            # TODO(EA2D): special case not needed with 2D EAs
+            new_data = self._mgr.astype(dtype=dtype, copy=copy, errors=errors)
+            res = self._constructor_from_mgr(new_data, axes=new_data.axes)
+            return res.__finalize__(self, method="astype")
+[/REPLACE]
+
+Wait, I made a mistake - the second `elif is_extension_array_dtype` will never be reached since the first one now catches all cases. Let me fix this:
+
+pandas/core/generic.py
+[SEARCH]
+        elif is_extension_array_dtype(dtype):
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: use iloc to handle duplicate column names
+            # For 2D (DataFrame), use block-wise conversion if possible
+            if self.ndim > 1 and using_copy_on_write():
+                # CoW: must copy to avoid mutating original
+                new_data = self._mgr.astype(dtype=dtype, copy=True, errors=errors)
+            else:
+                new_data = self._mgr.astype(dtype=dtype, copy=copy, errors=errors)
+            res = self._constructor_from_mgr(new_data, axes=new_data.axes)
+            return res.__finalize__(self, method="astype")
+
+        elif is_extension_array_dtype(dtype):
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: use iloc to handle duplicate column names
+            # TODO(EA2D): special case not needed with 2D EAs
+            new_data = self._mgr.astype(dtype=dtype, copy=copy, errors=errors)
+            res = self._constructor_from_mgr(new_data, axes=new_data.axes)
+            return res.__finalize__(self, method="astype")
+[/SEARCH]
+[REPLACE]
+[/REPLACE]
+
+Now let me look at the actual current state of the file more carefully to create a correct search/replace block:
+
+Looking at the code again, the actual current state is:
+
+```python
+        elif is_extension_array_dtype(dtype) and self.ndim > 1:
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: use iloc to handle duplicate column names
+            # TODO(EA2D): special case not needed with 2D EAs
+            results = [
+                self.iloc[:, i].astype(dtype, copy=copy)
+                for i in range(len(self.columns))
+            ]
+```
+
+And there's no separate `elif is_extension_array_dtype(dtype) and self.ndim == 1` branch - that code goes through the final `else` block.
+
+Let me correct my understanding and make the proper fix:
+
+pandas/core/generic.py
+[SEARCH]
+        elif is_extension_array_dtype(dtype) and self.ndim > 1:
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: use iloc to handle duplicate column names
+            # TODO(EA2D): special case not needed with 2D EAs
+            results = [
+                self.iloc[:, i].astype(dtype, copy=copy)
+                for i in range(len(self.columns))
+            ]
+[/SEARCH]
+[REPLACE]
+        elif is_extension_array_dtype(dtype):
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # Use block-wise conversion via _mgr.astype instead of column-by-column
+            # This is faster for extension dtypes that support block conversion
+            new_data = self._mgr.astype(dtype=dtype, copy=copy, errors=errors)
+            res = self._constructor_from_mgr(new_data, axes=new_data.axes)
+            return res.__finalize__(self, method="astype")
+[/REPLACE]

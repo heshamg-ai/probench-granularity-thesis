@@ -1,0 +1,67 @@
+
+
+Looking at this optimization request, I need to find the `Dataset.assign` method and understand how it works. Let me search for it in the codebase.
+
+xarray/core/dataset.py
+[SEARCH]
+    def assign(self, **kwargs: Any) -> "Dataset":
+        """
+        Assign kwargs as data variables and return a new Dataset object.
+        """
+        # align with the data variables of the dataset
+        data_vars = self._normalize_dot_assign(kwargs)
+        result = self._assign_common(data_vars)
+
+        if self._indexed:
+            # For now, ignore reindex of indexes if a copy is made (for performance)
+            indexed_datasets = []
+            for name, var in result._indexed.items():
+                indexed_datasets.append(self._indexing_dataset[name].variable)
+            indexed_datasets.extend(result._indexed.values())
+            aligner = Aligner(indexed_datasets, join="override")
+            aligner.align()
+            reindex_result = {}
+            for name, var in zip(result._indexed.keys(), aligner.results):
+                reindex_result[name] = var
+            reindex_result = {
+                name: reindex_result[name]
+                for name, var in result._indexed.items()
+            }
+            new_indexed = {
+                name: reindex_result[name]
+                for name, var in result._indexed.items()
+            }
+            return result._replace(indexed=new_indexed)
+
+        return result
+[/SEARCH]
+[REPLACE]
+    def assign(self, **kwargs: Any) -> "Dataset":
+        """
+        Assign kwargs as data variables and return a new Dataset object.
+        """
+        # align with the data variables of the dataset
+        data_vars = self._normalize_dot_assign(kwargs)
+        result = self._assign_common(data_vars)
+
+        if self._indexed:
+            # For now, ignore reindex of indexes if a copy is made (for performance)
+            # Build list of variables to align: original indexed + new indexed
+            indexed_vars = []
+            for name in result._indexed:
+                indexed_vars.append(self._indexing_dataset[name].variable)
+            indexed_vars.extend(result._indexed.values())
+            
+            aligner = Aligner(indexed_vars, join="override")
+            aligner.align()
+            
+            # Reconstruct new_indexed from aligner.results
+            new_indexed = {}
+            result_names = list(result._indexed.keys())
+            for i, name in enumerate(result_names):
+                new_indexed[name] = aligner.results[i + len(result_names)]
+
+            return result._replace(indexed=new_indexed)
+
+        return result
+[/REPLACE]

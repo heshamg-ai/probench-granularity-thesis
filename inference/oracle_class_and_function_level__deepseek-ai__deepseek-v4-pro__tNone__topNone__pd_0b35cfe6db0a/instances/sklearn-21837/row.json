@@ -1,0 +1,63 @@
+{
+  "id": 82,
+  "scenario_id": "sklearn-21837",
+  "repo": "scikit-learn/scikit-learn",
+  "pr_number": 21837,
+  "baseline_sha": "49043fc769d0affc92e3641d2d5f8f8de2421611",
+  "reference_sha": "9171e6b2b217e7aad66bc808d71c73d4ab8d7ef2",
+  "task": "Optimize chi2 when computing statistics with many unique class labels",
+  "entry_point": "sklearn.feature_selection.chi2",
+  "whats_new": "Reduced memory usage of :func:feature_selection.chi2.",
+  "optimization_target": "Runtime, Memory",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/sklearn-21837:baseline",
+      "digest": "sha256:763a95211e6cb109148f46075545571cc63e3685d8d94e53bf00137a039a4bc9"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/sklearn-21837:reference",
+      "digest": "sha256:01a74e90294e502c946ef2c5f504fa9e48bda5c9db7386650e76c95cb9371d38"
+    }
+  },
+  "params": [
+    {
+      "name": "n_samples",
+      "short_indicator": "n",
+      "explanation": "Number of samples",
+      "values": [
+        "10000",
+        "100000"
+      ]
+    },
+    {
+      "name": "n_features",
+      "short_indicator": "p",
+      "explanation": "Number of features",
+      "values": [
+        "100",
+        "500"
+      ]
+    },
+    {
+      "name": "n_classes",
+      "short_indicator": "c",
+      "explanation": "Number of unique classes",
+      "values": [
+        "10",
+        "100",
+        "1000"
+      ]
+    }
+  ],
+  "core_tests": [
+    "sklearn/feature_selection/tests/test_chi2.py::test_chi2",
+    "sklearn/feature_selection/tests/test_chi2.py::test_chi2_coo",
+    "sklearn/feature_selection/tests/test_chi2.py::test_chi2_unused_feature",
+    "sklearn/feature_selection/tests/test_feature_select.py::test_boundary_case_ch2",
+    "sklearn/feature_selection/tests/test_feature_select.py::test_tied_pvalues",
+    "sklearn/feature_selection/tests/test_feature_select.py::test_scorefunc_multilabel",
+    "sklearn/feature_selection/tests/test_feature_select.py::test_tied_scores",
+    "sklearn/feature_extraction/tests/test_dict_vectorizer.py::test_feature_selection"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize sklearn.feature_selection.chi2 for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize chi2 when computing statistics with many unique class labels\nOptimization function: sklearn.feature_selection.chi2\n\n\n[start of sklearn/feature_selection/_univariate_selection.py]\n### Relevant context\n#### Function `sklearn.feature_selection._univariate_selection.chi2`\n```python\ndef chi2(X, y):\n    \"\"\"Compute chi-squared stats between each non-negative feature and class.\n\n    This score can be used to select the n_features features with the\n    highest values for the test chi-squared statistic from X, which must\n    contain only non-negative features such as booleans or frequencies\n    (e.g., term counts in document classification), relative to the classes.\n\n    Recall that the chi-square test measures dependence between stochastic\n    variables, so using this function \"weeds out\" the features that are the\n    most likely to be independent of class and therefore irrelevant for\n    classification.\n\n    Read more in the :ref:`User Guide <univariate_feature_selection>`.\n\n    Parameters\n    ----------\n    X : {array-like, sparse matrix} of shape (n_samples, n_features)\n        Sample vectors.\n\n    y : array-like of shape (n_samples,)\n        Target vector (class labels).\n\n    Returns\n    -------\n    chi2 : ndarray of shape (n_features,)\n        Chi2 statistics for each feature.\n\n    p_values : ndarray of shape (n_features,)\n        P-values for each feature.\n\n    Notes\n    -----\n    Complexity of this algorithm is O(n_classes * n_features).\n\n    See Also\n    --------\n    f_classif : ANOVA F-value between label/feature for classification tasks.\n    f_regression : F-value between label/feature for regression tasks.\n    \"\"\"\n\n    # XXX: we might want to do some of the following in logspace instead for\n    # numerical stability.\n    X = check_array(X, accept_sparse=\"csr\")\n    if np.any((X.data if issparse(X) else X) < 0):\n        raise ValueError(\"Input X must be non-negative.\")\n\n    Y = LabelBinarizer().fit_transform(y)\n    if Y.shape[1] == 1:\n        Y = np.append(1 - Y, Y, axis=1)\n\n    observed = safe_sparse_dot(Y.T, X)  # n_classes * n_features\n\n    feature_count = X.sum(axis=0).reshape(1, -1)\n    class_prob = Y.mean(axis=0).reshape(1, -1)\n    expected = np.dot(class_prob.T, feature_count)\n\n    return _chisquare(observed, expected)\n```\n[end of sklearn/feature_selection/_univariate_selection.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

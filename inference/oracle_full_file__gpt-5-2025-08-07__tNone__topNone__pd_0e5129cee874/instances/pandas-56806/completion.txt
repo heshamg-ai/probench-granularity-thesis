@@ -1,0 +1,27 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        indices = ensure_platform_int(indices)
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+[/SEARCH]
+[REPLACE]
+        indices = ensure_platform_int(indices)
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+
+        # Fastpath: if indices select the full range [0..n-1] in order, we can
+        # return a cheap view instead of materializing a new array.
+        # Preserve existing RangeIndex semantics by excluding it here.
+        if isinstance(indices, np.ndarray) and indices.ndim == 1 and not isinstance(self, ABCRangeIndex):
+            n = len(self)
+            if len(indices) == n:
+                if n == 0:
+                    return self._view()
+                # Ensure platform-int dtype, monotonic step-1 starting at 0, and no negative fill sentinels
+                if (
+                    indices.dtype == np.intp
+                    and indices[0] == 0
+                    and indices[-1] == n - 1
+                    and (indices[1:] - indices[:-1] == 1).all()
+                    and (not allow_fill or (indices >= 0).all())
+                ):
+                    return self._view()
+[/REPLACE]

@@ -1,0 +1,93 @@
+xarray/core/accessor_dt.py
+[SEARCH]
+    def floor(self, freq: str) -> T_DataArray:
+        """
+        Round timestamps downward to specified frequency resolution.
+
+        Parameters
+        ----------
+        freq : str
+            a freq string indicating the rounding resolution e.g. "D" for daily resolution
+
+        Returns
+        -------
+        floor-ed timestamps : same type as values
+            Array-like of datetime fields accessed for each element in values
+        """
+
+        return self._tslib_round_accessor("floor", freq)
+[/SEARCH]
+[REPLACE]
+    def floor(self, freq: str) -> T_DataArray:
+        """
+        Round timestamps downward to specified frequency resolution.
+
+        Parameters
+        ----------
+        freq : str
+            a freq string indicating the rounding resolution e.g. "D" for daily resolution
+
+        Returns
+        -------
+        floor-ed timestamps : same type as values
+            Array-like of datetime fields accessed for each element in values
+        """
+        obj = self._obj
+        if is_np_datetime_like(obj.dtype):
+            from xarray.coding.times import cftime_to_nptime, encode_cftime
+            import numpy as np
+
+            obj_type = type(obj)
+            result_data = obj.data
+            try:
+                encoded = encode_cftime(cftime_to_nptime(result_data), units=f"nanoseconds since 1970-01-01")
+                result_data = (encoded.values.view("int64") // _freq_to_ns(freq)) * _freq_to_ns(freq)
+                result_data = result_data.view("datetime64[ns]")
+            except (ValueError, OutOfBoundsDatetime):
+                result_data = _round_field(result_data, "floor", freq)
+            return obj_type(result_data, name="floor", coords=obj.coords, dims=obj.dims)
+        else:
+            return self._tslib_round_accessor("floor", freq)
+[/REPLACE]
+
+xarray/core/accessor_dt.py
+[SEARCH]
+def _access_through_cftimeindex(values, name):
+    """Coerce an array of datetime-like values to a CFTimeIndex
+    and access requested datetime component
+    """
+    from xarray.coding.cftimeindex import CFTimeIndex
+
+    values_as_cftimeindex = CFTimeIndex(values.ravel())
+    if name == "season":
+        months = values_as_cftimeindex.month
+        field_values = _season_from_months(months)
+    elif name == "date":
+        raise AttributeError(
+            "'CFTimeIndex' object has no attribute `date`. Consider using the floor method instead, for instance: `.time.dt.floor('D')`."
+        )
+    else:
+        field_values = getattr(values_as_cftimeindex, name)
+    return field_values.reshape(values.shape)
+[/SEARCH]
+[REPLACE]
+def _access_through_cftimeindex(values, name):
+    """Coerce an array of datetime-like values to a CFTimeIndex
+    and access requested datetime component
+    """
+    from xarray.coding.cftimeindex import CFTimeIndex
+
+    values_as_cftimeindex = CFTimeIndex(values.ravel())
+    if name == "season":
+        months = values_as_cftimeindex.month
+        field_values = _season_from_months(months)
+    elif name == "date":
+        raise AttributeError(
+            "'CFTimeIndex' object has no attribute `date`. Consider using the floor method instead, for instance: `.time.dt.floor('D')`."
+        )
+    elif name == "floor":
+        field_values = values_as_cftimeindex.floor
+    else:
+        field_values = getattr(values_as_cftimeindex, name)
+    return field_values.reshape(values.shape)
+[/REPLACE]

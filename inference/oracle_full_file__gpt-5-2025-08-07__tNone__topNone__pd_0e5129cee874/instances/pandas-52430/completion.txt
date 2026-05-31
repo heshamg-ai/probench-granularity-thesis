@@ -1,0 +1,61 @@
+pandas/core/base.py
+[SEARCH]
+        if na_value is not lib.no_default:
+            values = self._values
+            if not can_hold_element(values, na_value):
+                # if we can't hold the na_value asarray either makes a copy or we
+                # error before modifying values. The asarray later on thus won't make
+                # another copy
+                values = np.asarray(values, dtype=dtype)
+            else:
+                values = values.copy()
+
+            values[np.asanyarray(self.isna())] = na_value
+        else:
+            values = self._values
+[/SEARCH]
+[REPLACE]
+        if na_value is not lib.no_default:
+            # Fast-path when converting to float dtype and filling with NaN
+            # Avoids materializing NA mask/assignment; still guarantees a copy.
+            is_float_target = False
+            if dtype is not None:
+                try:
+                    _target_dtype = np.dtype(dtype)
+                    is_float_target = _target_dtype.kind == "f"
+                except Exception:
+                    _target_dtype = None
+            else:
+                _target_dtype = None
+
+            is_nan_na = (na_value is np.nan) or (
+                isinstance(na_value, (float, np.floating)) and np.isnan(na_value)
+            )
+
+            values = self._values
+            if (
+                is_nan_na
+                and is_float_target
+                and isinstance(values, np.ndarray)
+                and values.dtype.kind in ("f", "i", "u", "b")
+            ):
+                # Ensure a copy is returned when na_value is provided
+                if _target_dtype is not None and values.dtype == _target_dtype:
+                    values = values.copy()
+                else:
+                    values = np.asarray(values, dtype=_target_dtype)
+                # For float dtypes, NaNs are already in place; for int/bool dtypes,
+                # pandas NumPy-backed arrays cannot have NAs, so no mask needed.
+            else:
+                if not can_hold_element(values, na_value):
+                    # if we can't hold the na_value asarray either makes a copy or we
+                    # error before modifying values. The asarray later on thus won't make
+                    # another copy
+                    values = np.asarray(values, dtype=dtype)
+                else:
+                    values = values.copy()
+
+                values[np.asanyarray(self.isna())] = na_value
+        else:
+            values = self._values
+[/REPLACE]

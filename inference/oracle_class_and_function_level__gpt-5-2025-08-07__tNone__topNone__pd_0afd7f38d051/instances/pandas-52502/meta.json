@@ -1,0 +1,10 @@
+{
+  "scenario_id": "pandas-52502",
+  "repo": "pandas-dev/pandas",
+  "seconds": 37.214200019836426,
+  "provider": "openai_chat",
+  "model": "gpt-5-2025-08-07",
+  "temperature": null,
+  "top_p": null,
+  "prompt_dataset_path": "prompt_oracle_gpt52_class_and_function_level.json"
+}

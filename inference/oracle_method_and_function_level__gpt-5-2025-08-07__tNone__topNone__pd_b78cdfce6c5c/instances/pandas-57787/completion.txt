@@ -1,0 +1,12 @@
+pandas/core/arrays/categorical.py
+[SEARCH]
+                # we're inferring from values
+                dtype = CategoricalDtype(categories, dtype.ordered)
+[/SEARCH]
+[REPLACE]
+                # preserve original Index type (e.g., RangeIndex) when factorization retains identical categories
+                if isinstance(values, ABCIndex) and categories.equals(values):
+                    categories = values
+                # we're inferring from values
+                dtype = CategoricalDtype(categories, dtype.ordered)
+[/REPLACE]

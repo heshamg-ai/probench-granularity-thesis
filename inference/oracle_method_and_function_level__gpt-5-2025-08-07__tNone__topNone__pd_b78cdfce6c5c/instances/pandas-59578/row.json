@@ -1,0 +1,72 @@
+{
+  "id": 74,
+  "scenario_id": "pandas-59578",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 59578,
+  "baseline_sha": "e1a79b299d4db379d5a36f2376cf6ac00a712aa7",
+  "reference_sha": "931cc7653f66cc27588d14b992a5c7e742057343",
+  "task": "Optimize MultiIndex.names assignment performance",
+  "entry_point": "pandas.MultiIndex.set_names",
+  "whats_new": "Performance improvement in MultiIndex when setting MultiIndex.names doesn't invalidate all cached operations",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-59578:baseline",
+      "digest": "sha256:d2d365f2d08e3375facba91cc84550c08d916f365a293b9ac20a429e2ca87f01"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-59578:reference",
+      "digest": "sha256:c8eee8f6f3d20cc2c06e29673c6ffca792797148b5d203315a27fe99c1387911"
+    }
+  },
+  "params": [
+    {
+      "name": "Num Rows",
+      "short_indicator": "R",
+      "explanation": "Number of rows in the DataFrame.",
+      "values": [
+        "1000",
+        "10000",
+        "100000"
+      ]
+    },
+    {
+      "name": "Num Levels",
+      "short_indicator": "L",
+      "explanation": "Number of levels in the MultiIndex.",
+      "values": [
+        "2",
+        "5"
+      ]
+    },
+    {
+      "name": "Num Cols",
+      "short_indicator": "C",
+      "explanation": "Number of columns in the DataFrame.",
+      "values": [
+        "10",
+        "100"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/indexes/multi/test_get_set.py::test_get_dtypes",
+    "pandas/tests/indexes/multi/test_get_set.py::test_get_dtypes_no_level_name",
+    "pandas/tests/indexes/multi/test_get_set.py::test_get_dtypes_duplicate_level_names",
+    "pandas/tests/indexes/multi/test_constructors.py::test_dtype_representation",
+    "pandas/tests/indexes/multi/test_names.py::test_changing_names",
+    "pandas/tests/indexes/multi/test_names.py::test_names",
+    "pandas/tests/indexes/multi/test_names.py::test_duplicate_level_names_access_raises",
+    "pandas/tests/indexes/multi/test_equivalence.py::test_is_",
+    "pandas/tests/indexes/multi/test_get_set.py::test_get_level_number_integer",
+    "pandas/tests/indexes/multi/test_get_set.py::test_set_name_methods",
+    "pandas/tests/indexes/multi/test_get_set.py::test_set_names_with_nlevel_1",
+    "pandas/tests/indexes/multi/test_get_set.py::test_set_levels_codes_names_bad_input",
+    "pandas/tests/indexes/multi/test_names.py::test_name_mi_with_dict_like",
+    "pandas/tests/indexes/multi/test_names.py::test_name_mi_with_dict_like_duplicate_names",
+    "pandas/tests/indexes/multi/test_equivalence.py::test_identical",
+    "pandas/tests/indexes/multi/test_duplicates.py::test_duplicate_meta_data",
+    "pandas/tests/indexes/multi/test_constructors.py::test_constructor_nonhashable_names"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.MultiIndex.set_names for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize MultiIndex.names assignment performance\nOptimization function: pandas.MultiIndex.set_names\n\n\n[start of pandas/core/indexes/multi.py]\n### Relevant context\n#### Class `pandas.core.indexes.multi.MultiIndex`\n**Class Signature**\n```python\nclass MultiIndex(Index):\n```\n**Class Attributes**\n```python\n    _hidden_attrs = Index._hidden_attrs | frozenset()\n    _typ = \"multiindex\"\n    _names: list[Hashable | None] = []\n    _levels = FrozenList()\n    _codes = FrozenList()\n    _comparables = [\"names\"]\n    sortorder: int | None\n    names = property(\n        fset=_set_names,\n        fget=_get_names,\n        doc=\"\"\"\n        Names of levels in MultiIndex.\n\n        This attribute provides access to the names of the levels in a `MultiIndex`.\n        The names are stored as a `FrozenList`, which is an immutable list-like\n        container. Each name corresponds to a level in the `MultiIndex`, and can be\n        used to identify or manipulate the levels individually.\n\n        See Also\n        --------\n        MultiIndex.set_names : Set Index or MultiIndex name.\n        MultiIndex.rename : Rename specific levels in a MultiIndex.\n        Index.names : Get names on index.\n\n        Examples\n        --------\n        >>> mi = pd.MultiIndex.from_arrays(\n        ...     [[1, 2], [3, 4], [5, 6]], names=['x', 'y', 'z']\n        ... )\n        >>> mi\n        MultiIndex([(1, 3, 5),\n                    (2, 4, 6)],\n                   names=['x', 'y', 'z'])\n        >>> mi.names\n        FrozenList(['x', 'y', 'z'])\n        \"\"\",\n    )\n    _duplicated = duplicated  # type: ignore[misc]\n    rename = Index.set_names  # type: ignore[assignment]\n    __add__ = make_invalid_op(\"__add__\")\n    __radd__ = make_invalid_op(\"__radd__\")\n    __iadd__ = make_invalid_op(\"__iadd__\")\n    __sub__ = make_invalid_op(\"__sub__\")\n    __rsub__ = make_invalid_op(\"__rsub__\")\n    __isub__ = make_invalid_op(\"__isub__\")\n    __pow__ = make_invalid_op(\"__pow__\")\n    __rpow__ = make_invalid_op(\"__rpow__\")\n    __mul__ = make_invalid_op(\"__mul__\")\n    __rmul__ = make_invalid_op(\"__rmul__\")\n    __floordiv__ = make_invalid_op(\"__floordiv__\")\n    __rfloordiv__ = make_invalid_op(\"__rfloordiv__\")\n    __truediv__ = make_invalid_op(\"__truediv__\")\n    __rtruediv__ = make_invalid_op(\"__rtruediv__\")\n    __mod__ = make_invalid_op(\"__mod__\")\n    __rmod__ = make_invalid_op(\"__rmod__\")\n    __divmod__ = make_invalid_op(\"__divmod__\")\n    __rdivmod__ = make_invalid_op(\"__rdivmod__\")\n    __neg__ = make_invalid_op(\"__neg__\")\n    __pos__ = make_invalid_op(\"__pos__\")\n    __abs__ = make_invalid_op(\"__abs__\")\n    __invert__ = make_invalid_op(\"__invert__\")\n```\n##### Method `pandas.core.indexes.multi.MultiIndex._set_names`\n```python\ndef _set_names(self, names, *, level=None, validate: bool = True) -> None:\n        \"\"\"\n        Set new names on index. Each name has to be a hashable type.\n\n        Parameters\n        ----------\n        values : str or sequence\n            name(s) to set\n        level : int, level name, or sequence of int/level names (default None)\n            If the index is a MultiIndex (hierarchical), level(s) to set (None\n            for all levels).  Otherwise level must be None\n        validate : bool, default True\n            validate that the names match level lengths\n\n        Raises\n        ------\n        TypeError if each name is not hashable.\n\n        Notes\n        -----\n        sets names on levels. WARNING: mutates!\n\n        Note that you generally want to set this *after* changing levels, so\n        that it only acts on copies\n        \"\"\"\n        # GH 15110\n        # Don't allow a single string for names in a MultiIndex\n        if names is not None and not is_list_like(names):\n            raise ValueError(\"Names should be list-like for a MultiIndex\")\n        names = list(names)\n\n        if validate:\n            if level is not None and len(names) != len(level):\n                raise ValueError(\"Length of names must match length of level.\")\n            if level is None and len(names) != self.nlevels:\n                raise ValueError(\n                    \"Length of names must match number of levels in MultiIndex.\"\n                )\n\n        if level is None:\n            level = range(self.nlevels)\n        else:\n            level = (self._get_level_number(lev) for lev in level)\n\n        # set the name\n        for lev, name in zip(level, names):\n            if name is not None:\n                # GH 20527\n                # All items in 'names' need to be hashable:\n                if not is_hashable(name):\n                    raise TypeError(\n                        f\"{type(self).__name__}.name must be a hashable type\"\n                    )\n            self._names[lev] = name\n\n        # If .levels has been accessed, the names in our cache will be stale.\n        self._reset_cache()\n```\n##### Method `pandas.core.indexes.multi.MultiIndex.dtypes`\n```python\n@cache_readonly\n    def dtypes(self) -> Series:\n        \"\"\"\n        Return the dtypes as a Series for the underlying MultiIndex.\n\n        See Also\n        --------\n        Index.dtype : Return the dtype object of the underlying data.\n        Series.dtypes : Return the data type of the underlying Series.\n\n        Examples\n        --------\n        >>> idx = pd.MultiIndex.from_product(\n        ...     [(0, 1, 2), (\"green\", \"purple\")], names=[\"number\", \"color\"]\n        ... )\n        >>> idx\n        MultiIndex([(0,  'green'),\n                    (0, 'purple'),\n                    (1,  'green'),\n                    (1, 'purple'),\n                    (2,  'green'),\n                    (2, 'purple')],\n                   names=['number', 'color'])\n        >>> idx.dtypes\n        number     int64\n        color     object\n        dtype: object\n        \"\"\"\n        from pandas import Series\n\n        names = com.fill_missing_names([level.name for level in self.levels])\n        return Series([level.dtype for level in self.levels], index=Index(names))\n```\n[end of pandas/core/indexes/multi.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

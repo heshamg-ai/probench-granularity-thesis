@@ -1,0 +1,910 @@
+Looking at the `astype` method in `pandas/core/generic.py`, I need to optimize `DataFrame.astype` when `dtype` is an extension dtype. Currently, when `is_extension_array_dtype(dtype)` is true and `self.ndim > 1`, it converts column by column using a list comprehension with `self.iloc[:, i].astype(...)`. This can be optimized by using the manager's `astype` method directly for extension dtypes, similar to how non-extension dtypes are handled.
+
+Let me analyze the current code:
+
+```python
+elif is_extension_array_dtype(dtype) and self.ndim > 1:
+    # GH 18099/22869: columnwise conversion to extension dtype
+    # GH 24704: use iloc to handle duplicate column names
+    # TODO(EA2D): special case not needed with 2D EAs
+    results = [
+        self.iloc[:, i].astype(dtype, copy=copy)
+        for i in range(len(self.columns))
+    ]
+```
+
+The issue with the current approach:
+1. It uses `self.iloc[:, i]` which goes through `__getitem__` + iloc for each column
+2. It creates individual Series objects for each column
+3. Then calls `astype` on each Series
+
+The optimization is to use `self._mgr.astype()` directly when we have an extension dtype and ndim > 1. The BlockManager/Built manager can handle this more efficiently. However, looking more carefully, the manager's `astype` should already be able to handle extension dtypes. Let me trace through...
+
+Actually, looking at the code path more carefully:
+
+```python
+else:
+    # else, only a single dtype is given
+    new_data = self._mgr.astype(dtype=dtype, copy=copy, errors=errors)
+    res = self._constructor_from_mgr(new_data, axes=new_data.axes)
+    return res.__finalize__(self, method="astype")
+```
+
+This is the default path for a single dtype. The problem is that before reaching this path, there's a special case for extension dtypes that does column-by-column conversion. But the manager's `astype` should already handle extension dtypes properly. Let me check if there's actually a bug or performance issue here by understanding why the special case exists.
+
+The comment says "GH 18099/22869: columnwise conversion to extension dtype" and "GH 24704: use iloc to handle duplicate column names".
+
+The optimization would be to avoid the column-by-column loop when we can use the manager directly. Looking at the manager code, `BlockManager.astype` iterates over blocks and calls `astype` on each block. For extension dtypes, it should work if we pass the right dtype.
+
+However, the key insight is: instead of creating Series objects and calling astype column-by-column, we can use the manager's `astype` but we need to handle the case where the manager might not handle extension dtypes correctly for all cases.
+
+Actually, let me re-read more carefully. The current code does:
+
+```python
+elif is_extension_array_dtype(dtype) and self.ndim > 1:
+    results = [
+        self.iloc[:, i].astype(dtype, copy=copy)
+        for i in range(len(self.columns))
+    ]
+```
+
+This is done because historically, the BlockManager's astype might not have handled extension dtypes properly when converting an entire DataFrame. But if we look at this, it's creating a list of Series and then using `concat` to combine them.
+
+The fix should be to use the manager's astype method which should now be able to handle extension dtypes. Let me check if we can just remove the special case and let it fall through to `self._mgr.astype(...)`.
+
+Actually, I think the better optimization is: rather than going through `self.iloc[:, i]` which is expensive, we can directly use `self._mgr.astype(dtype, copy=copy, errors=errors)` for extension dtypes too, since the managers have been updated to handle extension dtypes.
+
+Wait, let me look more carefully. The special case might still be needed for some edge cases with duplicate columns or specific extension dtypes. But we can optimize it by avoiding iloc indexing and instead working directly with the manager or using `self.items()` which is faster.
+
+Actually, let me re-look at the code. The key issue is this part:
+
+```python
+results = [
+    self.iloc[:, i].astype(dtype, copy=copy)
+    for i in range(len(self.columns))
+]
+```
+
+Instead of using `self.iloc[:, i]`, we can use `self.items()` to iterate over columns, or even better, we can check if the manager can handle it directly.
+
+Let me think about what the safest and most performant optimization is:
+
+The optimization should be to replace `self.iloc[:, i]` with direct column access. Since we're iterating column by column anyway, using `self.iloc[:, i]` is very slow because it goes through the indexer machinery each time. Instead, we can use a generator that avoids some of this overhead.
+
+But actually, looking at this more, the real optimization is that we should be able to just use `self._mgr.astype()` directly in many cases. Let me check if there's any reason why extension dtypes need special column-by-column treatment...
+
+Looking at GitHub issues mentioned:
+- GH18099, GH22869: columnwise conversion to extension dtype - this was added because extension array astype may not have worked correctly through the block manager
+- GH24704: use iloc to handle duplicate column names
+
+However, the improvements in pandas mean that we can now optimize this. The simplest fix is to check if we can use the manager directly, and if not, optimize the fallback.
+
+Actually, after more thought, I believe the cleanest optimization that preserves behavior is to change from using `self.iloc[:, i]` to a more direct approach. We can use `self._mgr.astype()` and then if the manager doesn't handle it, fall back.
+
+But wait - the safest change is: the current code does `self.iloc[:, i].astype(dtype, copy=copy)` for each column. Instead, we can construct the result more efficiently by using the manager directly when possible.
+
+Let me look at what `is_extension_array_dtype(dtype)` check is protecting against. Looking at the manager code, `Manager.astype()` calls `astype` on blocks. For extension dtypes, the individual blocks should be able to handle conversion to extension types.
+
+I think the right approach is: try to use the manager's astype first, and only fall back to column-by-column if that fails for some reason. But this changes semantics.
+
+Actually, the simplest and safest optimization: instead of using `self.iloc[:, i]`, we can iterate over columns using `self.items()` or simply index by column name. But with duplicate column names, that's why iloc is used.
+
+Hmm, let me re-read: "GH 24704: use iloc to handle duplicate column names"
+
+OK so iloc is needed for duplicate columns. But we can optimize by getting all columns at once rather than one-by-one through iloc.
+
+The improvement: instead of `self.iloc[:, i]` which creates an indexer, we can use `self._ixs(i, axis=1)` which is the internal method for getting a single column as a Series, or we can work with the underlying arrays directly.
+
+Let me look for the most efficient approach. Looking at the code path, we want to convert each column and then combine. 
+
+One optimization: use list comprehension but with faster column access. Another: use the manager more directly.
+
+After more analysis, I think we can optimize by converting the extension dtype handling to use the manager's astype when the manager supports it, which would bypass the column-by-column loop entirely in many cases.
+
+Let me try a different approach: Can we just let the extension dtype case fall through to the normal `self._mgr.astype()` path? The manager should call astype on each block, and the blocks should handle conversion to extension dtypes.
+
+Looking at pandas history, this special case was added because of limitations in older versions. If we test with current pandas, `BlockManager.astype` with an extension dtype should work.
+
+However, to be safe and preserve exact behavior, let's optimize the column access but keep the loop structure for now. The key insight is that `self.iloc[:, i]` is expensive - it goes through `__getitem__` → `__getitem__` on iloc → index parsing → returns a Series. We can optimize by using `self._mgr.iget(i)` to get a single-column manager and construct a Series from it, or use other internal methods.
+
+Actually, the cheapest optimization: use `self.iat` pattern or `self._ixs`.
+
+Looking at the code, I notice that `self.iloc[:, i]` is actually going through `DataFrame.iloc.__getitem__` with a column indexer. This is quite slow. 
+
+But wait - there's an even better optimization. Looking at `DataFrame.astype`, for extension dtypes, we currently do:
+
+```python
+results = [
+    self.iloc[:, i].astype(dtype, copy=copy)
+    for i in range(len(self.columns))
+]
+```
+
+Then later:
+```python
+result = concat(results, axis=1, copy=False)
+```
+
+But `self.iloc[:, i]` returns a Series, we call astype on it, and then concat all together. This is O(n^2) in columns roughly due to concat overhead.
+
+The key optimization: instead of creating n Series and concatenating, we can use a generator with `concat` or better yet, we can use the manager's astype_dtype method or similar.
+
+Let me look at what `_mgr.astype` does. The manager's astype should iterate over blocks and apply astype to each. This is much more efficient than splitting by columns and reassembling.
+
+I believe we can optimize by: when we have an extension dtype and ndim > 1, instead of the column-by-column loop, we can try to use `self._mgr.astype()` and if the result is correct, use it. But to preserve exact behavior with duplicate columns, we might need special handling.
+
+After more thought, I think the safest change with good performance is to note that the `BlockManager.astype` and `ArrayManager.astype` should now handle extension dtypes properly. The special case was a workaround. If we remove the special case and let it fall through to `self._mgr.astype()`, we get the performance improvement.
+
+However, I'm not 100% sure all edge cases are covered. Let me take a more conservative approach: keep the structure but optimize the inner loop to avoid iloc overhead.
+
+Actually, rethinking: The user says "Optimize DataFrame.astype when dtype is an extension dtype". Let me look more carefully at what the bottleneck is.
+
+Current code:
+```python
+elif is_extension_array_dtype(dtype) and self.ndim > 1:
+    # GH 18099/22869: columnwise conversion to extension dtype
+    # GH 24704: use iloc to handle duplicate column names
+    # TODO(EA2D): special case not needed with 2D EAs
+    results = [
+        self.iloc[:, i].astype(dtype, copy=copy)
+        for i in range(len(self.columns))
+    ]
+```
+
+The TODO says "special case not needed with 2D EAs", but for now we still need it.
+
+The issue is: for each column, `self.iloc[:, i]` creates a `Series` from the DataFrame, then `.astype()` is called on it. This involves:
+1. iloc indexing overhead
+2. Series constructor overhead
+3. Series.astype overhead
+
+To optimize, we can directly use `self._ixs(i, axis=1)` which returns a Series more efficiently, or we can use the column values directly with `astype_array` or similar.
+
+Actually, let me look at `_ixs`. This is an internal method that returns a single column as a Series. It should be much faster than `iloc[:, i]`.
+
+Looking at the code for `_ixs` in DataFrame...
+
+Actually, I found an even better optimization. We can avoid creating Series objects entirely and work at the array level, or we can use the fact that `self._mgr` has the columns and we can operate at the block level.
+
+But to preserve behavior exactly, let's use `self._ixs(i, axis=1)` instead of `self.iloc[:, i]`. This avoids the iloc machinery.
+
+Wait, I need to be more careful. Let me check what `_ixs` does... It's defined in DataFrame and returns a Series for a single column. 
+
+Actually, better yet: use `self.iat` equivalent or just get the array directly. But for `.astype()` with `errors` parameter, we need the Series method.
+
+Hmm, let me take yet another approach. Actually, the cleanest and likely working fix is to just fall through to `self._mgr.astype(dtype, copy=copy, errors=errors)` for extension dtypes. Let me verify this by reasoning about what happens:
+
+For a DataFrame with mixed dtypes converting to extension dtype:
+- `self._mgr.astype(dtype='Int64', copy=copy, errors=errors)` 
+- The manager's astype iterates over blocks
+- Each block's astype is called with the new dtype
+- For ExtensionBlock or standard Block, astype with an extension dtype should work
+
+The reason the special case exists is probably historical or for dealing with case-by-case error handling. But looking at the code, the `errors` parameter isn't even used in the extension dtype path! Actually it is: `self.iloc[:, i].astype(dtype, copy=copy)` - wait, no `errors` is passed? Let me check... The signature is `.astype(dtype, copy=copy)` without errors! This is a bug or intentional difference?
+
+Look: `self.iloc[:, i].astype(dtype, copy=copy)` - missing `errors=errors`! The outer method has `errors` parameter but it's not passed in the extension dtype case. This is probably a pre-existing issue.
+
+Actually wait, let me re-read: the Series.astype signature is `astype(self, dtype, copy=True, **kwargs)` - but I'll check if errors is handled. Actually no, in pandas Series.astype, errors is a parameter.
+
+Hmm, but in the code shown: `self.iloc[:, i].astype(dtype, copy=copy)` — no `errors` kwarg. This seems like a bug but we shouldn't change it to preserve exact behavior.
+
+OK so my optimization plan:
+1. The extension dtype path currently doesn't pass `errors`. To preserve exact behavior, I won't add it (or will I? No, preserve exact behavior)
+2. We can optimize by avoiding the expensive `self.iloc[:, i]` and instead use faster column access
+
+Let me find the fastest correct way. Since we need to iterate columns and call `.astype()` on each, we want the fastest way to get a Series for each column.
+
+Options:
+- `self.iloc[:, i]` - slow, goes through iloc
+- `self._ixs(i, axis=1)` - faster, internal method
+- `self[self.columns[i]]` - might be slow for duplicate columns
+- Directly construct from manager: `self._constructor_sliced_from_mgr(self._mgr.iget(i), axes=...)` - complex
+
+Let me use `self._ixs(i, axis=1)` or even better, if we can access the underlying array and construct the Series.
+
+Actually, looking deeper at this, I think the best optimization is to check if we can use manager's astype for extension types and avoid the loop. Let me trace what happens with BlockManager.astype:
+
+In `pandas/core/internals/managers.py`, `BaseBlockManager.astype` does:
+```python
+def astype(self, dtype, copy: bool = False, errors: str = "raise") -> T:
+    ...
+    return self.apply("astype", dtype=dtype, copy=copy, errors=errors)
+```
+
+And `apply` calls astype on each block. For extension dtypes, if the block can handle it, this should work.
+
+When would this not work? The issue might be with consolidation or with blocks not knowing how to convert to arbitrary extension dtypes. But for well-behaved extension dtypes, the block's astype should handle it.
+
+Let me check: `Block.astype` should call `astype_array` or similar, which dispatches to the array's astype. For numpy-backed blocks converting to extension dtype, it should work via `astype_nansafe`.
+
+I think the safest and highest-impact optimization is: when the dtype is an extension dtype and ndim > 1, check if the manager is a single block or if all blocks can be safely astype'd. For a common case, use an optimized path.
+
+Actually, you know what, let me just try the simplest thing: remove the extension dtype special case and use the normal manager path. If tests pass, this is the best optimization. But I'm worried about edge cases.
+
+Let me be more pragmatic. Looking at the special case code again:
+
+```python
+elif is_extension_array_dtype(dtype) and self.ndim > 1:
+    # ...
+    results = [
+        self.iloc[:, i].astype(dtype, copy=copy)
+        for i in range(len(self.columns))
+    ]
+```
+
+Instead of this, what if we use the underlying arrays directly? We can get `self._mgr.arrays` which gives us the arrays for all blocks, but we need to associate them with columns.
+
+Actually, I realize now - the cleanest optimization with guaranteed behavior preservation is to simply replace `self.iloc[:, i]` with a faster column accessor. But what exactly?
+
+Let me look at what methods are available: `self._ixs(i, axis=1)` is the internal method. For axis=1, it returns the i-th column as a Series.
+
+Actually wait, I want to re-examine. Is there a way to vectorize or batch this operation?
+
+Another idea: we can use `self.items()` to iterate. The `items()` method yields (column_name, column_values). But for duplicate columns, we'd still get all columns one by one correctly.
+
+```python
+results = [col.astype(dtype, copy=copy) for _, col in self.items()]
+```
+
+Wait, does this preserve order with duplicate columns? Let me check... `items()` iterates in order, so yes.
+
+Is this faster than `self.iloc[:, i]`? Let's see: `items()` uses `self._info_axis` which is `self.columns`, and for each it does `yield h, self[h]`. Then `self[h]` for columns goes through `__getitem__` with label-based indexing. For duplicate labels, this would return a DataFrame, not a Series!
+
+So for duplicate columns, `self.items()` would not work. That's why `iloc` is used.
+
+Hmm, so we need position-based indexing. Options:
+- `self.iloc[:, i]` - correct but slow
+- `self._ixs(i, axis=1)` - correct and faster (internal)
+
+Let me verify `_ixs` handles duplicates correctly. Looking at DataFrame._ixs...
+
+Actually, I think the best approach is to benchmark or reason about what _ixs does. For axis=1, in a DataFrame, _ixs(i) returns the i-th column as a Series, since it slices on the column axis.
+
+OK I'm going to take a simpler approach. Let me look at what the actual PR/Issue is about this optimization. But since I don't have that info, I'll implement what I think is best.
+
+Final decision: I'll optimize by using the manager's astype directly for extension dtypes, but wrap it to preserve behavior. Actually no - let me remove the special case and use the manager. The commit message or issue might indicate this is safe now.
+
+Wait, I need to be more careful. The extension dtype special case might exist because the block manager doesn't handle extension dtypes correctly in some edge cases, or because of how error handling works.
+
+Let me look at a different approach: Can we keep the loop but optimize how we get each column? Yes - by using `self._mgr.iget(i)` to get a single-column manager, then constructing a Series from it:
+
+```python
+from pandas.core.construction import extract_array
+
+# Fast path: get arrays directly and convert
+results = []
+for i in range(len(self.columns)):
+    # Use _ixs which is faster than iloc
+    col = self._ixs(i, axis=1)
+    results.append(col.astype(dtype, copy=copy))
+```
+
+Or even better, we can work at the array level:
+
+```python
+# Even faster: get the array, astype it, construct Series
+for i in range(len(self.columns)):
+    col = self._ixs(i, axis=1)
+    # col._values is the underlying array
+    new_values = col._values.astype(dtype, copy=copy)
+    results.append(col._constructor(new_values, index=col.index, name=col.name, dtype=dtype))
+```
+
+But this changes behavior because it bypasses Series.astype which may have different logic.
+
+Actually, I think Series.astype for extension dtypes mostly just calls the array's astype with the dtype. So we could optimize at that level.
+
+But let me step back. What's the REAL performance issue? 
+1. `self.iloc[:, i]` is expensive
+2. Creating many Series is expensive  
+3. `concat(results, axis=1)` at the end is expensive
+
+For point 3, can we avoid concat and build the result more efficiently?
+
+Yes! Instead of creating individual Series and concatenating, we can:
+- Get all column arrays after astype
+- Build a new manager from the new arrays
+- Construct the DataFrame from the manager
+
+This avoids the concat overhead which is significant.
+
+But to preserve exact behavior with Series.astype (which handles errors, etc.), we'd need to be careful.
+
+Let me try a middle ground: keep using Series.astype but build the result more efficiently.
+
+```python
+# Instead of list + concat, use a generator approach or build arrays
+arrays = [self.iloc[:, i].astype(dtype, copy=copy)._values for i in range(len(self.columns))]
+# construct new DataFrame from arrays
+```
+
+But wait, we still have the `iloc` overhead.
+
+OK, final FINAL decision. I'll optimize by:
+1. Using `self._ixs(i, axis=1)` instead of `self.iloc[:, i]` for faster column access
+2. If possible, build the result more directly
+
+Actually, let me check if we can just use `self._mgr.astype()` and whether it handles extension dtypes properly now. If it does, that's the cleanest and fastest.
+
+I'm going to check by reasoning: `Block.astype` with an extension dtype should convert the block's values to the new dtype. For numeric extension dtypes like Int64, this should work. For other extension dtypes, it depends on whether the block's astype supports it.
+
+However, the original special case might have been added because Block.astype didn't handle extension dtypes, or because of issues with mixed-type DataFrames.
+
+Given the constraint "Preserve exact semantics", I'm more comfortable keeping the loop but optimizing the column access.
+
+Actually, re-reading the code and comments once more:
+- "GH 18099/22869: columnwise conversion to extension dtype" - this was added as a fix
+- "TODO(EA2D): special case not needed with 2D EAs" - this says when 2D extension arrays are available, this special case won't be needed
+
+The "columnwise conversion" suggests that without this special case, the normal path didn't work. Maybe the BlockManager's astype didn't handle extension dtypes back then, or there was some issue with multi-column blocks and extension dtypes.
+
+If I look at what happens when you have a single numpy block and try to astype to an extension dtype: the block's astype would need to convert the entire 2D numpy array to extension arrays. But extension arrays are 1D, so a 2D numpy block can't directly become a single 2D extension block. This is the fundamental issue!
+
+For numpy dtypes, a 2D block stays 2D. For extension dtypes, which are 1D-only, a 2D block would need to split into multiple 1D blocks (one per column). This is why column-by-column conversion is needed.
+
+But wait - the manager can handle this. If you call `Block.astype` with an extension dtype on a 2D numpy block, it should either:
+1. Fail because the result is 1D and the block is 2D
+2. Split the block into multiple 1D extension blocks
+
+If the manager doesn't do this automatically, then the column-by-column approach is needed.
+
+However, we can still optimize the column-by-column approach:
+1. Use `_ixs(i, axis=1)` or similar fast accessor instead of `iloc[:, i]`
+2. Build the result DataFrame more efficiently from the converted columns
+
+For building the result, instead of:
+```python
+result = concat(results, axis=1, copy=False)
+```
+
+We can construct directly if we have all the arrays.
+
+Actually, let me look at what `concat(results, axis=1)` does. It takes a list of Series and concatenates them along axis=1 (columns). This creates a DataFrame. The result then needs `result.columns = self.columns` to preserve names.
+
+For better performance, we can:
+```python
+# Extract the converted values
+new_mgr_arrays = [result_col._values for result_col in results]
+# But we'd still need to build the manager...
+```
+
+Actually, `concat` with axis=1 is already pretty optimized. The main cost is the `iloc[:, i]` per column and the Series construction.
+
+Let me finalize my approach:
+
+1. Replace `self.iloc[:, i]` with `self._ixs(i, axis=1)` for faster column access
+2. Keep everything else the same to preserve exact behavior
+
+OR, even better: we can inline what `_ixs` does to avoid method call overhead, but that's more code.
+
+Wait, I want to check one more thing. Is `_ixs` public? No, it's internal/protected. And does it handle the duplicate column case correctly for axis=1?
+
+Let me think... For `DataFrame._ixs(self, i: int, axis: int)`:
+- If axis=0, returns the i-th row  
+- If axis=1, returns the i-th column
+
+For axis=1, it should get the i-th column by position, which is what we want.
+
+OK, my actual optimization will be more aggressive. Let me see if I can use a completely different approach.
+
+New idea: since we know we're converting all columns to the same extension dtype, and extension dtypes are 1D, we can:
+1. Get all the data as a 2D numpy array (or object array for mixed types)
+2. Convert each row/column to the extension dtype  
+3. Build blocks
+
+But this is complex. Let me stick with the simpler optimization.
+
+Actually, I now realize there's another issue. The extension dtype conversion creates Series, then concatenates. But `Series.astype` for extension dtypes may go through `pandas_dtype` conversion each time, which is also slow.
+
+Let me see if we can avoid `Series.astype` and use the array's astype directly:
+
+```python
+results = []
+for i in range(len(self.columns)):
+    col = self._ixs(i, axis=1)
+    # Direct array conversion
+    new_arr = col.array.astype(dtype, copy=copy)
+    results.append(pd.Series(new_arr, index=col.index, name=col.name))
+```
+
+Or even more directly, we can construct the new DataFrame from arrays without intermediate Series:
+
+```python
+new_arrays = []
+for i in range(len(self.columns)):
+    col = self._ixs(i, axis=1)
+    new_arr = col.array.astype(dtype, copy=copy)
+    new_arrays.append(new_arr)
+
+# Build DataFrame directly
+result = type(self)._from_arrays(new_arrays, columns=self.columns, index=self.index)
+```
+
+But this changes behavior if `errors` handling is different, or if there are NA handling differences between the array-level and Series-level astype.
+
+OK, I think the safest high-performance optimization is:
+
+**Use `itertuples`-style or direct indexing instead of `iloc`, and try to minimize object construction.**
+
+But honestly, the BEST optimization is to recognize that for many common cases, `_mgr.astype` can handle this. Let me check if modern pandas still needs the special case by looking at what would fail.
+
+For a DataFrame with all-int columns, a single 2D numpy block. `_mgr.astype('Int64')`:
+- Block.astype is called on the 2D int64 block
+- Block.astype calls astype_array with dtype 'Int64'
+- astype_array handles the conversion
+
+Actually, I need to check if 2D numpy arrays can be converted to 1D extension arrays in block.astype...
+
+Looking at pandas internals, when a 2D numpy block is astype'd to an extension dtype, the result needs to be split into multiple 1D blocks or the extension array needs to support 2D. Currently, most extension arrays are 1D only, so this would require special handling.
+
+In recent pandas, `Block.astype` with extension dtype on a 2D block might:
+1. Convert each column separately
+2. Create an ExtensionBlock for each column
+3. Or return a single block with some 2D extension array
+
+If the manager can handle this, we don't need the special case. If not, we do.
+
+Given the TODO comment "special case not needed with 2D EAs", the special case IS needed for 1D EAs (which is the current state). So the column-by-column approach is necessary for correctness.
+
+But we can optimize! Looking at the code flow, the issue is `self.iloc[:, i]` and creating full Series objects.
+
+Actually, looking at this from a different angle: the `TODO(EA2D)` comment suggests that when 2D extension arrays become available, this special case can be removed. But until then, we need it.
+
+So the optimization must preserve the column-by-column approach but make it faster.
+
+Key insight: `self.iloc[:, i]` is slow because:
+1. Creates iloc accessor
+2. Parses slice/indexer
+3. Returns result
+
+For a simple integer column index, we can use `self._ixs(i, axis=1)` which is direct.
+
+But let me try something even better. We can fetch all columns at once and iterate:
+
+```python
+# Fast path: get all columns as a list of arrays, process each
+for i in range(len(self.columns)):
+    # Fast position-based column access
+    col = self._ixs(i, axis=1)
+    results.append(col.astype(dtype, copy=copy))
+```
+
+Actually, I found an issue. `self._ixs(i, axis=1)` returns a Series but it might not preserve behavior exactly the same as `self.iloc[:, i]`. Let me check...
+
+For a regular DataFrame with unique columns:
+- `df.iloc[:, 0]` returns the first column as a Series, label is the column name
+- `df._ixs(0, axis=1)` should also return the first column as a Series
+
+For duplicate columns:
+- `df.iloc[:, i]` returns the i-th column by position, with the column name as the Series name
+- `df._ixs(i, axis=1)` should also return by position
+
+I believe these should be equivalent for axis=1. Let me make this change.
+
+Actually, wait. Let me look at one more thing. There's `_mgr.iget(i)` which returns the i-th column as a single-column manager. This is even lower level and potentially faster.
+
+```python
+# Using mgr.iget for fast single-column manager access
+for i in range(len(self.columns)):
+    mgr = self._mgr.iget(i)
+    col = self._constructor_sliced_from_mgr(mgr, axes=[self.index, self.columns[i]])
+    results.append(col.astype(dtype, copy=copy))
+```
+
+Hmm, but this is complex and might not be correct. The `_constructor_sliced_from_mgr` might need different axes.
+
+Let me look up how `_ixs` is implemented to verify it's correct and optimal.
+
+Actually, for the purpose of this optimization, I think using `self._ixs(i, axis=1)` is the right balance of safety and performance. If pandas developers thought `iloc` was needed for the special case, they might have considered `_ixs`.
+
+But actually, `iloc` was used not because it was the only way, but because it correctly handles all edge cases and is the public API. For an optimization, we can use internal APIs.
+
+Let me also consider this: for a DataFrame with many columns, the loop overhead itself is a problem. Can we vectorize?
+
+For extension dtypes that support it, we might be able to convert a 2D numpy array to multiple 1D extension arrays more efficiently. But this requires changes to the extension dtype infrastructure, not just astype.
+
+OK, I'm going to implement two optimizations:
+1. Use `self._ixs(i, axis=1)` instead of `self.iloc[:, i]` for faster access
+2. If possible, pre-allocate or optimize the result construction
+
+Actually, let me just do the simplest meaningful optimization: fall through to the normal path since the TODO says this special case isn't needed. If tests pass, great. But since I don't know if all tests pass, I'll be more conservative.
+
+Wait, I re-read the TODO: "special case not needed with 2D EAs". This means "when we have 2D EAs, this special case won't be needed". But we DON'T have 2D EAs yet. So the special case IS needed.
+
+OK final decision: I'll optimize by replacing `self.iloc[:, i]` with `self._ixs(i, axis=1)` and also optimize the concat/result construction.
+
+Hmm, but actually, does `Series.astype` internally do anything different for extension vs non-extension? Not really - it ends up calling the array's astype.
+
+Let me look at what `_ixs` does in terms of copy behavior, since `copy` parameter matters.
+
+Actually, I had another idea. What if we use `self.values` or `self.to_numpy()` and then astype? No, that loses type information and doesn't work for extension source types.
+
+OK, I'm going to search for if there's an already-optimized path I should use.
+
+After more research in my knowledge: In more recent pandas versions, the `DataFrame.astype` for extension types was indeed optimized. One key insight is that `self._mgr.astype` can now handle extension dtypes by using `astype_array_safe` or similar on the blocks, and the block manager will split blocks as needed.
+
+So the actual fix might be: check if the block manager's `astype` can handle the extension dtype, and if so, use it directly.
+
+In fact, looking at pandas issue history, there was indeed a PR to optimize this by reducing the overhead of the extension dtype path.
+
+Given the constraint of "Preserve exact semantics", I need to be careful. But the fact that `errors` is not passed in the extension dtype path suggests the special case might have slightly different behavior intentionally or due to oversight.
+
+Let me check if `errors` matters: in the non-extension path, `self._mgr.astype(dtype=dtype, copy=copy, errors=errors)` passes `errors`. In the extension path, `self.iloc[:, i].astype(dtype, copy=copy)` doesn't pass `errors`. This means extension dtype conversions always act like `errors="raise"`. If I change to use the manager path, I'd start passing `errors`, which could change behavior!
+
+Wait, `Series.astype` signature: `astype(self, dtype, copy=True, errors='raise', **kwargs)`. So `errors` defaults to 'raise'. When the extension path does `col.astype(dtype, copy=copy)`, it uses the default `errors='raise'`. In the non-extension path, `self._mgr.astype(..., errors=errors)` uses whatever was passed. If the user passes `errors='ignore'`, the non-extension path respects it but the extension path doesn't!
+
+This is a pre-existing inconsistency. To preserve the exact current behavior of the extension path, I should not pass `errors='ignore'` behavior to the extension case. So I can't simply fall through to the manager path.
+
+For the optimization, I'll keep the column-by-column approach but optimize the access. The `errors` inconsistency is existing behavior, not something I should fix.
+
+Alright, here's my final, concrete optimization:
+
+Replace `self.iloc[:, i]` with a faster accessor. Since we don't want to change behavior at all:
+
+Option A: `self._ixs(i, axis=1)` - fast, direct
+Option B: Use arrays directly
+
+I'll go with Option A for safety. Let me write the code:
+
+```python
+results = [
+    self._ixs(i, axis=1).astype(dtype, copy=copy) 
+    for i in range(len(self.columns))
+]
+```
+
+Wait, but then for the `errors='ignore'` case, should I pass `errors=errors`? No, to preserve exact behavior, don't pass it.
+
+Hmm actually, I should double check: does `Series.astype` without `errors` use the same default as the current behavior? Yes, both default to `'raise'`. So for the normal case, behavior is the same.
+
+But wait - the original code doesn't pass `errors`. If I use a different path that doesn't change the Series.astype call, behavior is preserved.
+
+Hmm, I just realized I should check how `_ixs` is implemented. Let me reason about it:
+- `_ixs(i, axis=1)` on DataFrame gets the i-th column
+- It likely returns a view or copy depending on internal data
+- The column returned has the column name set
+
+This should be faster than `iloc[:, i]` which goes through:
+1. `DataFrame.__getitem__('iloc')` -> returns _iLocIndexer
+2. `_iLocIndexer.__getitem__((slice(None), i))` -> parses tuple, gets row slice and column indexer
+3. Returns Series
+
+`_ixs` skips all this indirection.
+
+Actually, I want to check one more thing. Is there a way to avoid creating Series entirely and work with arrays?
+
+Yes:
+```python
+results = []
+for i in range(len(self.columns)):
+    col = self._ixs(i, axis=1)
+    # We only need the values and index
+    arr = col._values
+    new_arr = arr.astype(dtype)  # But how to handle copy and errors?
+```
+
+The issue is that `ExtensionArray.astype` and `numpy.ndarray.astype` have different signatures. The `astype_array` utility in pandas handles this, but `DataFrame.astype` should use `Series.astype` to preserve all behavior.
+
+OK, I'll stick with `_ixs`.
+
+But actually, there's another option. Let me look at whether I can bulk-extract the columns and process them:
+
+```python
+# Extract all column arrays
+col_arrays = [self._ixs(i, axis=1) for i in range(len(self.columns))]
+# Process each
+results = [col.astype(dtype, copy=copy) for col in col_arrays]
+```
+
+This is same as doing it inline. No real saving.
+
+Hmm, but what about the concat at the end? Is there a faster way to construct a DataFrame from a list of Series with the same index?
+
+`concat(results, axis=1)` is already implemented efficiently. It builds the block manager from all the input arrays. The main cost is iterating over all the Series to extract arrays and build the new manager.
+
+Actually wait - I realize there's an even more fundamental optimization. Instead of `concat` which needs to re-align everything, we know all Series have the same index. We can directly construct a DataFrame:
+
+```python
+# After getting results = [Series, Series, ...]
+# Faster path:
+result = type(self)({i: s for i, s in enumerate(results)})
+result.columns = self.columns
+```
+
+No, `DataFrame.__init__` with a dict also has overhead.
+
+Or:
+```python
+# Stack the arrays directly
+new_blocks = [result._values for result in results]  # Each is an extension array
+# Build manager and DataFrame directly... complex
+```
+
+This gets complicated. The `concat` is reasonably optimized already.
+
+Let me focus on the one obvious win: replace `iloc[:, i]` with `_ixs(i, axis=1)`.
+
+One more thing: I want to check if the `copy` parameter is respected. The original code passes `copy=copy` to each `astype`. With `_ixs`, does it return a view or copy? For the Series we call `astype` on, the copy parameter of `astype` controls whether a new array is allocated. The `_ixs` return value doesn't matter for `copy` because `astype` will create a new array (or not) based on its own copy parameter.
+
+But wait - `self.iloc[:, i]` might return a view in some cases, while `_ixs` might return a copy? No, for both cases, we're creating a Series to then immediately astype it. The `astype` on an ExtensionDtype always returns a new array (since it's a different dtype). For matching dtypes, `copy` parameter of astype matters.
+
+Actually for extension dtypes being cast to the same extension dtype, `copy` matters. But in this code path, we're converting TO an extension dtype, so the source is unlikely to be the same extension dtype. The `copy` is mostly ignored since a conversion is happening.
+
+OK, I'll implement the optimization now. Let me also check: is there a faster way to iterate all columns? 
+
+Actually, another idea: use `np.apply_along_axis` or similar? No, that doesn't work well with extension dtypes.
+
+What about `DataFrame.apply` with axis=0? That's also slow due to function call overhead per column.
+
+OK, my plan:
+1. Replace the extension dtype special case to use `_ixs` instead of `iloc`
+2. Consider if we can fall through to block manager for some cases
+
+Let me write the actual code change:
+
+```python
+        elif is_extension_array_dtype(dtype) and self.ndim > 1:
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: use iloc to handle duplicate column names
+            # TODO(EA2D): special case not needed with 2D EAs
+            results = [
+                self._ixs(i, axis=1).astype(dtype, copy=copy)
+                for i in range(len(self.columns))
+            ]
+```
+
+Hmm, but I realize I should verify that `_ixs(0, axis=1)` is actually faster than `iloc[:, 0]`. It is, because:
+- `iloc[:, 0]` goes through: `__getitem__('iloc')` → `_iLocIndexer.__getitem__((slice(None), 0))` → `_getitem_tuple((slice(None), 0))` → ... many steps
+- `_ixs(0, axis=1)` goes directly to internal implementation
+
+However, I want to double-check something. Should I also avoid calling `astype` on each Series and instead directly apply `astype` at the array level? This would avoid any Series-level overhead.
+
+```python
+results = [
+    self._ixs(i, axis=1)._values.astype(dtype, copy=copy)
+    for i in range(len(self.columns))
+]
+# Then need to wrap in Series for concat...
+```
+
+No, `ExtensionArray.astype` signature might differ. Let me not go there.
+
+Actually, I just realized: instead of `_ixs`, there might be an even faster internal method. Look at how DataFrame iterates in `items()`:
+
+```python
+def items(self):
+    for h in self._info_axis:
+        yield h, self[h]
+```
+
+For columns, this does `self[h]` which goes through `__getitem__`. For unique columns this is fine, for duplicates it returns a DataFrame.
+
+What about `iteritems()` or similar? Same thing.
+
+I'll proceed with `_ixs`.
+
+But wait, I also want to think about this: can we use the manager directly for extension dtypes to avoid the Series creation entirely? The answer is: yes, if we do it correctly.
+
+When we `self._mgr.astype(dtype='Int64')`, the manager will:
+1. Iterate through blocks
+2. For each block, call `block.astype(dtype='Int64')`  
+3. For a 2D numpy block, this should convert to 2D first, but since 'Int64' is 1D, the block might need to be split
+
+If the block's `astype` is implemented correctly, it handles this. Let me assume it is (since basic tests pass). If so, we can fall through for extension dtypes too!
+
+The risk: behavior might not be identical, especially for `copy` and `errors` handling.
+
+Given that the existing code doesn't pass `errors` in the extension path, and the normal path does, falling through would change behavior when `errors='ignore'` is passed. But arguably that's a bug fix... however the user said "Preserve exact semantics", so I should not change this.
+
+Hmm, but actually, for performance, could I fall through only when `errors='raise'` which is the default?
+
+```python
+elif is_extension_array_dtype(dtype) and self.ndim > 1:
+    if errors == 'raise':
+        # Fast path: use manager directly
+        new_data = self._mgr.astype(dtype=dtype, copy=copy, errors=errors)
+        res = self._constructor_from_mgr(new_data, axes=new_data.axes)
+        return res.__finalize__(self, method="astype")
+    else:
+        # Slow path: column by column to match existing behavior
+        results = [
+            self.iloc[:, i].astype(dtype, copy=copy)
+            for i in range(len(self.columns))
+        ]
+```
+
+This adds a fast path for the common case (errors='raise') while preserving exact behavior for errors='ignore'. But the user said "Preserve exact semantics" without qualifications, so I shouldn't change behavior even for errors='ignore'.
+
+Let me just stick with replacing `iloc[:, i]` with the faster `_ixs(i, axis=1)` and call it a day. That's a clean, safe optimization.
+
+Actually, hold on. I want to see if there's a function in pandas that already does fast column iteration. Looking at `DataFrame._iter_column_arrays()` or similar...
+
+There's no great public API. OK, final answer with `_ixs`:
+
+Wait, actually let me look at this even more carefully. Is there something even simpler? What if we can avoid the Python loop entirely?
+
+For extension dtypes, since we need to convert each column separately (because extension arrays are 1D), we can't easily avoid a loop. But the loop body can be made faster.
+
+Here's yet another idea: use `DataFrame.apply` with `axis=0` and a lambda. No, that's also slow due to function call overhead.
+
+OK, I'm confident that `_ixs` is the right approach. Let me finalize.
+
+Hmm, actually, I just realized I should re-check: in the original code, `self.iloc[:, i]` is used, but for DataFrames with `MultiIndex` columns or duplicate names, does `_ixs` also work the same? Let me think...
+
+For `df.iloc[:, i]`:
+- `i` is an integer position
+- Returns the column at position `i` regardless of column names
+- Returns a Series (since scalar integer indexer for columns)
+
+For `df._ixs(i, axis=1)`:
+- Should also return the column at position `i`
+- Should return a Series
+
+I believe these are equivalent. Let me verify by considering axis=1 specifically.
+
+Looking at a typical `_ixs` implementation for DataFrame:
+```python
+def _ixs(self, i, axis=0):
+    # axis=1 means columns, so i is a column index
+    # Returns the i-th column as a Series
+```
+
+Yes, this should work correctly.
+
+Now let me also consider: is there any case where `iloc[:, i]` has different behavior from `_ixs(i, axis=1)`? Perhaps with SparseArray or other specialized types? I think the end result would be the same.
+
+One more consideration: what about the `copy` behavior? `_ixs` might return a view or a copy, while `iloc` might do the opposite. But since we call `.astype(dtype, copy=copy)` on the result, and `astype` handles its own copying, the intermediate Series being a view or copy shouldn't matter.
+
+Actually, there is a subtlety: if `copy=False` and the source and target dtypes are the same, then `astype` might return a view. But in this code path, we're converting to an extension dtype, so the dtypes are different (extension vs non-extension, or different extension). Thus, a new array is always allocated. The `copy` parameter in our case mainly determines whether to copy when dtype is unchanged, which isn't the case here.
+
+Wait, one more edge case: what if someone does `df.astype(df.dtypes[0])` where the DataFrame already has an extension dtype? The `is_extension_array_dtype(dtype)` would be true, we'd enter the special case, and try to convert each column to the same extension dtype. In this case, `copy` DOES matter. If `copy=False`, should we return a view? The `_ixs` vs `iloc` difference might matter.
+
+For `iloc[:, i]` with the same extension dtype, does it return a view? For ExtensionArrays, `iloc` typically returns values, not views. `_ixs` might also return values. I think both would behave similarly.
+
+OK, I'm going to finalize with this change. But wait - let me also check if maybe the original PR for this issue had a different, more comprehensive fix. In some pandas versions, this was optimized by making the block manager handle extension types better.
+
+Given all this analysis, my SEARCH/REPLACE will be:
+
+pandas/core/generic.py
+[SEARCH]
+        elif is_extension_array_dtype(dtype) and self.ndim > 1:
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: use iloc to handle duplicate column names
+            # TODO(EA2D): special case not needed with 2D EAs
+            results = [
+                self.iloc[:, i].astype(dtype, copy=copy)
+                for i in range(len(self.columns))
+            ]
+[/SEARCH]
+[REPLACE]
+        elif is_extension_array_dtype(dtype) and self.ndim > 1:
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: use iloc to handle duplicate column names
+            # TODO(EA2D): special case not needed with 2D EAs
+            results = [
+                self._ixs(i, axis=1).astype(dtype, copy=copy)
+                for i in range(len(self.columns))
+            ]
+[/REPLACE]
+
+This changes only `self.iloc[:, i]` to `self._ixs(i, axis=1)`, which is a faster way to get a single column by position.
+
+However, I want to also consider if there's an even faster path we can add. Let me check if using the manager directly works for the case where all blocks can be converted...
+
+Actually, I just had another thought. Looking at the code more carefully:
+
+```python
+# else, only a single dtype is given
+new_data = self._mgr.astype(dtype=dtype, copy=copy, errors=errors)
+res = self._constructor_from_mgr(new_data, axes=new_data.axes)
+return res.__finalize__(self, method="astype")
+```
+
+If we call `self._mgr.astype(dtype)` where dtype is an extension dtype, what happens? Let me trace through for a simple case:
+
+DataFrame with one int64 block (2D numpy array shape n x m). `_mgr.astype('Int64')`:
+- Manager apply calls `block.astype(dtype='Int64')`
+- Block.astype for numpy block with extension target:
+  - Calls `astype_array_safe` or similar
+  - This might convert the 2D array... but extension types are 1D
+  
+Actually, for a 2D numpy array, there's no direct way to create a 2D ExtensionArray because ExtensionArrays are 1D. So the conversion must either:
+1. Fail
+2. Convert to something else (like object dtype with extension arrays inside - not good)
+3. The block splits into multiple 1D extension blocks
+
+If pandas supports case 3, then mgr.astype works. If not, it fails or misbehaves.
+
+I believe modern pandas DOES handle this by having the Block's astype create multiple blocks or using a different approach. But I'm not 100% sure, and since the tests must pass, I'll be conservative.
+
+Wait, but what if I add a fast path that tries mgr.astype first, and falls back to the column loop only if needed? Like:
+
+```python
+elif is_extension_array_dtype(dtype) and self.ndim > 1:
+    # Try fast path through manager
+    try:
+        new_data = self._mgr.astype(dtype=dtype, copy=copy, errors=errors)
+        res = self._constructor_from_mgr(new_data, axes=new_data.axes)
+        return res.__finalize__(self, method="astype")
+    except (ValueError, TypeError):
+        pass
+    
+    # Fall back to column-by-column
+    results = [...]
+```
+
+But this changes semantics because:
+1. `errors` from callsite is now respected in the fast path (previously ignored)
+2. Exceptions that were previously not caught now trigger fallback
+
+Actually, the original code doesn't pass `errors`, so `errors` is always treated as 'raise' in the extension path. To preserve semantics in the fast path, I should only take it if `errors == 'raise'`.
+
+But even then, if the fast path raises when it wouldn't before (e.g., because a column can't be converted), the original code would also raise (on that specific column's astype). So exception behavior should match for `errors='raise'`.
+
+However, there could be edge cases where `_mgr.astype` raises but the column-by-column succeeds, or vice versa. To be safe, I won't do the try/except.
+
+Let me also think about: is there a case where _mgr.astype is WORSE than column-by-column? Only if it has a bug or limitation not present in the Series path. Since the special case exists, there probably was such a limitation. But maybe it's been fixed.
+
+Actually, I recall now. The special case exists because when you have a DataFrame with columns of different numpy dtypes (e.g., int and float), and you try to astype to an extension dtype, the BlockManager has multiple blocks. Each block's astype to extension dtype should work, but the issue is that the result of block.astype with extension dtype is an ExtensionBlock (1D per column), and the BlockManager might need to handle reorganizing from multiple 2D blocks to many 1D ExtensionBlocks. This reorganization was historically buggy or slow.
+
+OK, I'm now sufficiently confident that I should keep the column-by-column approach but optimize the column access. Let me produce the final answer.
+
+Wait, one more thing. I want to check if there's any other optimization possible in the result construction. Currently:
+
+```python
+result = concat(results, axis=1, copy=False)
+# GH#40810 retain subclass
+result = self._constructor(result)
+result.columns = self.columns
+result = result.__finalize__(self, method="astype")
+```
+
+Could we avoid `concat` and build directly? If all results are Series with the same index, we can do:
+
+```python
+# Extract arrays and construct directly?
+arrays = [ser.array for ser in results]
+# But then we need to build a BlockManager with 1D extension arrays per column
+```
+
+This is actually what `concat` does internally. But `concat` also handles re-alignment, which we don't need. The overhead is mostly in checking things we know are true.
+
+However, constructing a DataFrame from 1D extension arrays is non-trivial because you need the right block structure. `concat` knows how to do this. There's `DataFrame._from_arrays` or similar internal methods, but they might not handle all edge cases.
+
+Actually, looking at this more, I think `pd.DataFrame(dict(zip(self.columns, results)))` or using the DataFrame constructor with a dict of Series is also viable, but `concat` is already optimized and the cost of concat for N Series to 1 DataFrame is O(N) which is acceptable compared to the O(N) column conversions we're doing anyway.
+
+The real win is avoiding `iloc[:, i]` per column, which is O(1) but with high constant factor due to indexer machinery.
+
+Let me produce my answer now.
+
+Actually, one last check. Is `axis=1` definitely correct for `_ixs` in DataFrame? Looking at pandas source convention:
+- `axis=0` means slice along index (get rows)  
+- `axis=1` means slice along columns (get columns)
+
+For `df._ixs(i, axis=1)`, we're saying "get the i-th element along axis 1", which means the i-th column. Yes, this is correct.
+
+And is `_ixs` available on both DataFrame and Series? The `astype` method is on NDFrame. In the extension path, we check `self.ndim > 1` which means DataFrame. So we're calling `_ixs` on a DataFrame, which has it.
+
+OK, I'm done analyzing. Here's my final answer.
+
+pandas/core/generic.py
+[SEARCH]
+        elif is_extension_array_dtype(dtype) and self.ndim > 1:
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: use iloc to handle duplicate column names
+            # TODO(EA2D): special case not needed with 2D EAs
+            results = [
+                self.iloc[:, i].astype(dtype, copy=copy)
+                for i in range(len(self.columns))
+            ]
+[/SEARCH]
+[REPLACE]
+        elif is_extension_array_dtype(dtype) and self.ndim > 1:
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: use iloc to handle duplicate column names
+            # TODO(EA2D): special case not needed with 2D EAs
+            results = [
+                self._ixs(i, axis=1).astype(dtype, copy=copy)
+                for i in range(len(self.columns))
+            ]
+[/REPLACE]

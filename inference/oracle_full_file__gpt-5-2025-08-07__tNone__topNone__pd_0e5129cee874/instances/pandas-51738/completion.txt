@@ -1,0 +1,37 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        if isinstance(key, slice):
+            # This case is separated from the conditional above to avoid
+            # pessimization com.is_bool_indexer and ndim checks.
+            result = getitem(key)
+            # Going through simple_new for performance.
+            return type(self)._simple_new(result, name=self._name)
+[/SEARCH]
+[REPLACE]
+        if isinstance(key, slice):
+            # This case is separated from the conditional above to avoid
+            # pessimization com.is_bool_indexer and ndim checks.
+            return self._getitem_slice(key)
+[/REPLACE]
+
+pandas/core/indexes/base.py
+[SEARCH]
+    def _getitem_slice(self: _IndexT, slobj: slice) -> _IndexT:
+        """
+        Fastpath for __getitem__ when we know we have a slice.
+        """
+        res = self._data[slobj]
+        return type(self)._simple_new(res, name=self._name)
+[/SEARCH]
+[REPLACE]
+    def _getitem_slice(self: _IndexT, slobj: slice) -> _IndexT:
+        """
+        Fastpath for __getitem__ when we know we have a slice.
+        """
+        res = self._data[slobj]
+        out = type(self)._simple_new(res, name=self._name)
+        if self.is_unique:
+            # Propagate uniqueness cache when slicing a unique index
+            out.__dict__["is_unique"] = True
+        return out
+[/REPLACE]

@@ -1,0 +1,33 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+    elif isinstance(lk, ExtensionArray) and lk.dtype == rk.dtype:
+        if not isinstance(lk, BaseMaskedArray) and not (
+            # exclude arrow dtypes that would get cast to object
+            isinstance(lk.dtype, ArrowDtype)
+            and is_numeric_dtype(lk.dtype.numpy_dtype)
+        ):
+            lk, _ = lk._values_for_factorize()
+
+            # error: Item "ndarray" of "Union[Any, ndarray]" has no attribute
+            # "_values_for_factorize"
+            rk, _ = rk._values_for_factorize()  # type: ignore[union-attr]
+[/SEARCH]
+[REPLACE]
+    elif isinstance(lk, ExtensionArray) and lk.dtype == rk.dtype:
+        if not isinstance(lk, BaseMaskedArray) and not (
+            # exclude arrow dtypes that would get cast to object
+            isinstance(lk.dtype, ArrowDtype)
+            and is_numeric_dtype(lk.dtype.numpy_dtype)
+        ):
+            if needs_i8_conversion(lk.dtype):
+                # Fast path for datetime-like columns: use i8 values
+                # directly for factorization, avoiding conversion to object
+                lk = lk._ndarray
+                rk = rk._ndarray
+            else:
+                lk, _ = lk._values_for_factorize()
+
+                # error: Item "ndarray" of "Union[Any, ndarray]" has no attribute
+                # "_values_for_factorize"
+                rk, _ = rk._values_for_factorize()  # type: ignore[union-attr]
+[/REPLACE]

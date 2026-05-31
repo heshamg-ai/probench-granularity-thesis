@@ -1,0 +1,136 @@
+pandas/core/groupby/groupby.py
+[SEARCH]
+        try:
+            if self.obj.ndim == 1:
+                result = self._op_via_apply(how, skipna=skipna)
+            else:
+[/SEARCH]
+[REPLACE]
+        # fastpath for DataFrameGroupBy with many groups on axis=0 and numpy-backed
+        if (
+            axis == 0
+            and getattr(self.obj, "ndim", None) == 2
+        ):
+            data = self._obj_with_exclusions
+            if numeric_only:
+                data = data._get_numeric_data()
+            # proceed only if we have at least one column and all are NumPy dtypes
+            if data.shape[1] > 0:
+                from pandas.core.dtypes.common import is_extension_array_dtype
+                dtypes = data.dtypes
+                safe_cols = [
+                    col
+                    for col, dt in zip(data.columns, dtypes)
+                    if (not is_extension_array_dtype(dt)) and (dt.kind in "iufb")
+                ]
+                if len(safe_cols) == data.shape[1]:
+                    # vectorized computation using numpy reduces (O(n) per column)
+                    comp_ids = self.grouper.group_info[0]
+                    # ignore dropped NA groups
+                    valid_mask = comp_ids >= 0
+                    if valid_mask.any():
+                        comp = comp_ids[valid_mask]
+                        pos = np.nonzero(valid_mask)[0]
+                        ngroups = len(self.grouper.result_index)
+                        nrows = len(comp_ids)
+                        idx_labels = data.index.to_numpy()
+                        res_data: dict = {}
+                        for col in safe_cols:
+                            v = data[col].to_numpy()
+                            kind = v.dtype.kind
+                            arr = v[valid_mask]
+                            if kind == "f":
+                                if skipna:
+                                    nanmask = np.isnan(arr)
+                                    if nanmask.any():
+                                        arr_work = arr.copy()
+                                        fill = -np.inf if how == "idxmax" else np.inf
+                                        arr_work[nanmask] = fill
+                                    else:
+                                        arr_work = arr
+                                else:
+                                    nanmask = np.isnan(arr)
+                                    arr_work = arr
+                            elif kind in "iu":
+                                arr_work = arr
+                                nanmask = None
+                            else:
+                                # bool
+                                arr_work = arr.astype(np.uint8, copy=False)
+                                nanmask = None
+
+                            if how == "idxmax":
+                                if kind == "f":
+                                    extremes = np.full(ngroups, -np.inf, dtype=arr_work.dtype)
+                                    np.maximum.at(extremes, comp, arr_work)
+                                elif kind in "iu":
+                                    extremes = np.full(ngroups, np.iinfo(arr_work.dtype).min, dtype=arr_work.dtype)
+                                    np.maximum.at(extremes, comp, arr_work)
+                                else:
+                                    extremes = np.zeros(ngroups, dtype=arr_work.dtype)
+                                    np.maximum.at(extremes, comp, arr_work)
+                            else:
+                                if kind == "f":
+                                    extremes = np.full(ngroups, np.inf, dtype=arr_work.dtype)
+                                    np.minimum.at(extremes, comp, arr_work)
+                                elif kind in "iu":
+                                    extremes = np.full(ngroups, np.iinfo(arr_work.dtype).max, dtype=arr_work.dtype)
+                                    np.minimum.at(extremes, comp, arr_work)
+                                else:
+                                    extremes = np.ones(ngroups, dtype=arr_work.dtype)
+                                    np.minimum.at(extremes, comp, arr_work)
+
+                            # per-group NA handling
+                            if skipna:
+                                if nanmask is not None:
+                                    has_non_na = np.zeros(ngroups, dtype=bool)
+                                    np.logical_or.at(has_non_na, comp, ~nanmask)
+                                else:
+                                    has_non_na = np.zeros(ngroups, dtype=bool)
+                                    np.logical_or.at(has_non_na, comp, True)
+                                need_na = ~has_non_na
+                            else:
+                                if nanmask is not None:
+                                    any_na = np.zeros(ngroups, dtype=bool)
+                                    np.logical_or.at(any_na, comp, nanmask)
+                                else:
+                                    any_na = np.zeros(ngroups, dtype=bool)
+                                need_na = any_na
+
+                            # first index position equal to extreme
+                            idxpos = np.full(ngroups, nrows, dtype=np.intp)
+                            equals = arr_work == extremes[comp]
+                            tmp = np.where(equals, pos, nrows)
+                            np.minimum.at(idxpos, comp, tmp)
+
+                            # groups with NA result
+                            if need_na.any():
+                                # mark NA groups with sentinel nrows to avoid bad indexing
+                                idxpos[need_na] = nrows
+
+                            # map positions to index labels
+                            out_values = np.empty(ngroups, dtype=idx_labels.dtype)
+                            valid_out = idxpos != nrows
+                            if valid_out.any():
+                                out_values[valid_out] = idx_labels[idxpos[valid_out]]
+                            if (~valid_out).any():
+                                # fill with placeholder; will be masked to NaN in Series
+                                if nrows:
+                                    out_values[~valid_out] = idx_labels[0]
+                                else:
+                                    out_values[~valid_out] = None
+                            s = self.obj._constructor_sliced(out_values, index=self.grouper.result_index, copy=False)
+                            if (~valid_out).any():
+                                s = s.mask(~valid_out, other=np.nan)
+                            res_data[col] = s
+
+                        result = type(self.obj)(res_data, index=self.grouper.result_index, columns=safe_cols)
+                        return result
+                    else:
+                        # no valid rows after dropping NA groups
+                        return type(self.obj)(index=self.grouper.result_index, columns=data.columns)
+        try:
+            if self.obj.ndim == 1:
+                result = self._op_via_apply(how, skipna=skipna)
+            else:
+[/REPLACE]

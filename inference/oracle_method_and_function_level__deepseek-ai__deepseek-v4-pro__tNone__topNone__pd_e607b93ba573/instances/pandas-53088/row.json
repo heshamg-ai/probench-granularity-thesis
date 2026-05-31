@@ -1,0 +1,64 @@
+{
+  "id": 23,
+  "scenario_id": "pandas-53088",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 53088,
+  "baseline_sha": "86a4ee01c7899ef454d35b95cde11e9593921c9d",
+  "reference_sha": "4c09f31f21cee79e0b7e4e4a768fec80cc761450",
+  "task": "Optimize DataFrameGroupBy.groups execution",
+  "entry_point": "pandas.core.groupby.DataFrameGroupBy.groups",
+  "whats_new": "Performance improvement in .DataFrameGroupBy.groups",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-53088:baseline",
+      "digest": "sha256:65ade0c8d36cac7343880239b70f9b4ec4406643aa095200595d753bd41bc889"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-53088:reference",
+      "digest": "sha256:3308527d71c8e04b601b916d08a38c7d6a97d938a99885bc77fb9dba20cda529"
+    }
+  },
+  "params": [
+    {
+      "name": "Rows",
+      "short_indicator": "R",
+      "explanation": "Number of rows",
+      "values": [
+        "100000",
+        "500000",
+        "1000000"
+      ]
+    },
+    {
+      "name": "Groups",
+      "short_indicator": "G",
+      "explanation": "Number of groups",
+      "values": [
+        "50",
+        "100"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/groupby/test_categorical.py::test_observed_groups",
+    "pandas/tests/groupby/test_categorical.py::test_observed_groups_with_nan",
+    "pandas/tests/groupby/test_groupby.py::test_frame_groupby",
+    "pandas/tests/groupby/test_groupby.py::test_groupby_groups_in_BaseGrouper",
+    "pandas/tests/groupby/test_groupby.py::test_groupby_nat_exclude",
+    "pandas/tests/groupby/test_groupby.py::test_groups_repr_truncates",
+    "pandas/tests/groupby/test_grouping.py::TestGetGroup::test_get_group",
+    "pandas/tests/groupby/test_grouping.py::TestGetGroup::test_get_group_grouped_by_tuple_with_lambda",
+    "pandas/tests/groupby/test_grouping.py::TestGrouping::test_groupby_multiindex_tuple",
+    "pandas/tests/groupby/test_grouping.py::TestGrouping::test_groupby_with_datetime_key",
+    "pandas/tests/groupby/test_grouping.py::TestGrouping::test_list_grouper_with_nat",
+    "pandas/tests/groupby/test_grouping.py::TestGrouping::test_multiindex_columns_empty_level",
+    "pandas/tests/groupby/test_grouping.py::TestIteration::test_groupby_with_small_elem",
+    "pandas/tests/groupby/test_grouping.py::TestIteration::test_groups",
+    "pandas/tests/groupby/test_grouping.py::test_grouper_groups",
+    "pandas/tests/groupby/test_raises.py::test_groupby_raises_category_on_category",
+    "pandas/tests/groupby/test_timegrouper.py::TestGroupBy::test_groupby_groups_datetimeindex",
+    "pandas/tests/groupby/test_timegrouper.py::TestGroupBy::test_groupby_with_timegrouper_methods"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.core.groupby.DataFrameGroupBy.groups for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize DataFrameGroupBy.groups execution\nOptimization function: pandas.core.groupby.DataFrameGroupBy.groups\n\n\n[start of pandas/core/groupby/ops.py]\n### Relevant context\n#### Class `pandas.core.groupby.ops.BaseGrouper`\n**Class Signature**\n```python\nclass BaseGrouper:\n```\n**Class Attributes**\n```python\n    axis: Index\n```\n**Class __init__ method**\n```python\n    def __init__(\n        self,\n        axis: Index,\n        groupings: Sequence[grouper.Grouping],\n        sort: bool = True,\n        dropna: bool = True,\n    ) -> None:\n        assert isinstance(axis, Index), axis\n\n        self.axis = axis\n        self._groupings: list[grouper.Grouping] = list(groupings)\n        self._sort = sort\n        self.dropna = dropna\n```\n##### Method `pandas.core.groupby.ops.BaseGrouper.groups`\n```python\n@cache_readonly\n    def groups(self) -> dict[Hashable, np.ndarray]:\n        \"\"\"dict {group name -> group labels}\"\"\"\n        if len(self.groupings) == 1:\n            return self.groupings[0].groups\n        else:\n            to_groupby = zip(*(ping.grouping_vector for ping in self.groupings))\n            index = Index(to_groupby)\n            return self.axis.groupby(index)\n```\n[end of pandas/core/groupby/ops.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

@@ -1,0 +1,33 @@
+pandas/core/frame.py
+[SEARCH]
+            else:
+                # We have other EAs with the same dtype. We preserve dtype in transpose.
+                dtyp = dtypes[0]
+                arr_typ = dtyp.construct_array_type()
+                values = self.values
+                new_values = [arr_typ._from_sequence(row, dtype=dtyp) for row in values]
+[/SEARCH]
+[REPLACE]
+            else:
+                # We have other EAs with the same dtype. We preserve dtype in transpose.
+                dtyp = dtypes[0]
+                # Try optimized path for homogeneous Arrow-backed EAs
+                new_values = None
+                try:
+                    from pandas.core.arrays.arrow.dtype import ArrowDtype
+                    if isinstance(dtyp, ArrowDtype):
+                        if isinstance(self._mgr, ArrayManager):
+                            arrow_arrays = self._mgr.arrays
+                        else:
+                            arrow_arrays = list(self._iter_column_arrays())
+                        from pandas.core.arrays.arrow.array import (
+                            transpose_homogeneous_pyarrow,
+                        )
+                        new_values = transpose_homogeneous_pyarrow(arrow_arrays)
+                except Exception:
+                    new_values = None
+                if new_values is None:
+                    arr_typ = dtyp.construct_array_type()
+                    values = self.values
+                    new_values = [arr_typ._from_sequence(row, dtype=dtyp) for row in values]
+[/REPLACE]

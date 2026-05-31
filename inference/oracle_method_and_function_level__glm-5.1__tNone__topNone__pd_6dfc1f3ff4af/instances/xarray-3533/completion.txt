@@ -1,0 +1,52 @@
+xarray/core/dataarray.py
+[SEARCH]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/SEARCH]
+[REPLACE]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        # Fast path for simple integer indexing on a single dimension.
+        # Avoids the overhead of converting to a Dataset and back.
+        if not drop and len(indexers) == 1:
+            dim, indexer = next(iter(indexers.items()))
+            if isinstance(indexer, int):
+                variable = self._variable.isel(indexers=indexers)
+                coords = {}
+                for k, v in self._coords.items():
+                    if dim in v.dims:
+                        coords[k] = v.isel(indexers={dim: indexer})
+                    else:
+                        coords[k] = v
+                return self._replace(variable=variable, coords=coords)
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/REPLACE]

@@ -1,0 +1,96 @@
+
+
+Looking at this problem, I need to optimize `DataFrame.sort_index` for MultiIndex-indexed DataFrames. The key bottleneck is in `lexsort_indexer` in `pandas/core/sorting.py`.
+
+The main optimization opportunities:
+1. Avoid unnecessary array copy when there are no NA values
+2. For the no-NA case with descending order, avoid the overhead of `np.where` and compute directly
+3. For the no-NA case with ascending order, avoid any transformation entirely
+
+Let me create the optimization:
+
+pandas/core/sorting.py
+[SEARCH]
+        if codes_given:
+            mask = k == -1
+            codes = k.copy()
+            n = len(codes)
+            mask_n = n
+            if mask.any():
+                n -= 1
+
+        else:
+            cat = Categorical(k, ordered=True)
+            n = len(cat.categories)
+            codes = cat.codes.copy()
+            mask = cat.codes == -1
+            if mask.any():
+                mask_n = n + 1
+            else:
+                mask_n = n
+
+        if order:  # ascending
+            if na_position == "last":
+                codes = np.where(mask, n, codes)
+            elif na_position == "first":
+                codes += 1
+        else:  # not order means descending
+            if na_position == "last":
+                codes = np.where(
+                    mask, n, n - codes - 1
+                )
+            elif na_position == "first":
+                codes = np.where(mask, 0, n - codes)
+[/SEARCH]
+[REPLACE]
+        if codes_given:
+            mask = k == -1
+            n = len(k)
+            if not mask.any():
+                # Fast path: no NA values
+                codes = k
+                mask_n = n
+                if not order:
+                    # Descending without NA: direct computation avoids np.where overhead
+                    codes = n - codes - 1
+            else:
+                # Slow path: has NA values
+                n -= 1
+                codes = k.copy()
+                mask_n = n
+                if order:  # ascending
+                    if na_position == "last":
+                        codes = np.where(mask, n, codes)
+                    elif na_position == "first":
+                        codes = np.where(mask, n + 1, codes)
+                        codes += 1
+                else:  # descending
+                    if na_position == "last":
+                        codes = np.where(mask, 0, n - codes)
+                    elif na_position == "first":
+                        codes = np.where(mask, 0, n - codes - 1)
+
+        else:
+            cat = Categorical(k, ordered=True)
+            n = len(cat.categories)
+            codes = cat.codes.copy()
+            mask = cat.codes == -1
+            if mask.any():
+                mask_n = n + 1
+            else:
+                mask_n = n
+
+        if not codes_given:
+            if order:  # ascending
+                if na_position == "last":
+                    codes = np.where(mask, n, codes)
+                elif na_position == "first":
+                    codes += 1
+            else:  # not order means descending
+                if na_position == "last":
+                    codes = np.where(
+                        mask, n, n - codes - 1
+                    )
+                elif na_position == "first":
+                    codes = np.where(mask, 0, n - codes)
+[/REPLACE]

@@ -1,0 +1,24 @@
+pandas/core/arrays/masked.py
+[SEARCH]
+        self._mask = mask
+[/SEARCH]
+[REPLACE]
+        self._mask = mask
+
+    def _hash_pandas_object(
+        self, *, encoding: str, hash_key: str, categorize: bool
+    ) -> npt.NDArray[np.uint64]:
+        from pandas.core.util.hashing import hash_array
+
+        # Fastpath: no missing values, hash underlying data directly
+        if not self._mask.any():
+            return hash_array(
+                self._data, encoding=encoding, hash_key=hash_key, categorize=categorize
+            )
+
+        # Fallback to the default ExtensionArray implementation, which
+        # materializes values with the appropriate NA sentinel
+        return super()._hash_pandas_object(
+            encoding=encoding, hash_key=hash_key, categorize=categorize
+        )
+[/REPLACE]

@@ -1,0 +1,97 @@
+sklearn/linear_model/_base.py
+[SEARCH]
+        elif sp.issparse(X):
+            X_offset_scale = X_offset / X_scale
+
+            def matvec(b):
+                return X.dot(b) - sample_weight_sqrt * b.dot(X_offset_scale)
+
+            def rmatvec(b):
+                return X.T.dot(b) - X_offset_scale * b.dot(sample_weight_sqrt)
+
+            X_centered = sparse.linalg.LinearOperator(
+                shape=X.shape, matvec=matvec, rmatvec=rmatvec
+            )
+
+            if y.ndim < 2:
+                self.coef_ = lsqr(X_centered, y)[0]
+            else:
+                # sparse_lstsq cannot handle y with shape (M, K)
+                outs = Parallel(n_jobs=n_jobs_)(
+                    delayed(lsqr)(X_centered, y[:, j].ravel())
+                    for j in range(y.shape[1])
+                )
+                self.coef_ = np.vstack([out[0] for out in outs])
+[/SEARCH]
+[REPLACE]
+        elif sp.issparse(X):
+            X_offset_scale = X_offset / X_scale
+
+            if y.ndim < 2:
+                def matvec(b):
+                    return X.dot(b) - sample_weight_sqrt * b.dot(X_offset_scale)
+
+                def rmatvec(b):
+                    return X.T.dot(b) - X_offset_scale * b.dot(sample_weight_sqrt)
+
+                X_centered = sparse.linalg.LinearOperator(
+                    shape=X.shape, matvec=matvec, rmatvec=rmatvec
+                )
+                self.coef_ = lsqr(X_centered, y)[0]
+            else:
+                if sp.issparse(y):
+                    y_dense = y.toarray()
+                else:
+                    y_dense = y
+
+                n_targets = y_dense.shape[1]
+
+                # Precompute Gram matrix A = X_centered.T @ X_centered efficiently
+                # A = (X^T S)(S X) - X_offset_scale X_offset_scale^T
+                XtS = X.T.dot(sw_matrix)
+                A = XtS.dot(XtS.T)
+                A -= np.outer(X_offset_scale, X_offset_scale)
+
+                # Precompute X_centered.T @ y for all targets
+                # B = (X^T S)(S y) - X_offset_scale (y^T S sqrt(w))
+                Xty = XtS.dot(sw_matrix.dot(y_dense))
+                y_offset_scaled = y_offset.ravel() * sample_weight_sqrt.sum()
+                B = Xty - X_offset_scale[:, np.newaxis] * y_offset_scaled
+
+                # Solve normal equations for each target
+                self.coef_ = linalg.solve(A, B, assume_a="sym").T
+[/REPLACE]
+
+sklearn/linear_model/_base.py
+[SEARCH]
+    n_samples = X.shape[0]
+    sample_weight = np.asarray(sample_weight)
+    if sample_weight.ndim == 0:
+        sample_weight = np.full(n_samples, sample_weight, dtype=sample_weight.dtype)
+    sample_weight_sqrt = np.sqrt(sample_weight)
+    sw_matrix = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples))
+    X = safe_sparse_dot(sw_matrix, X)
+    y = safe_sparse_dot(sw_matrix, y)
+    return X, y, sample_weight_sqrt
+[/SEARCH]
+[REPLACE]
+    n_samples = X.shape[0]
+    sample_weight = np.asarray(sample_weight)
+    if sample_weight.ndim == 0:
+        sample_weight = np.full(n_samples, sample_weight, dtype=sample_weight.dtype)
+    sample_weight_sqrt = np.sqrt(sample_weight)
+    sw_matrix = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples))
+    X = safe_sparse_dot(sw_matrix, X)
+    y = safe_sparse_dot(sw_matrix, y)
+    return X, y, sample_weight_sqrt, sw_matrix
+[/REPLACE]
+
+sklearn/linear_model/_base.py
+[SEARCH]
+        # Sample weight can be implemented via a simple rescaling.
+        X, y, sample_weight_sqrt = _rescale_data(X, y, sample_weight)
+[/SEARCH]
+[REPLACE]
+        # Sample weight can be implemented via a simple rescaling.
+        X, y, sample_weight_sqrt, sw_matrix = _rescale_data(X, y, sample_weight)
+[/REPLACE]

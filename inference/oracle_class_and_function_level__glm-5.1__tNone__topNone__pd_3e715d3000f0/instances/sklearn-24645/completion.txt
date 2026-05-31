@@ -1,0 +1,27 @@
+sklearn/neighbors/_nearest_centroid.py
+[SEARCH]
+        check_is_fitted(self)
+
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        return self.classes_[
+            pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)
+        ]
+[/SEARCH]
+[REPLACE]
+        check_is_fitted(self)
+
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        # For the default "euclidean" metric, argmin of squared Euclidean
+        # distances is identical but avoids a costly sqrt on the full
+        # (n_samples, n_classes) distance matrix.
+        if self.metric == "euclidean":
+            X2 = X.multiply(X).sum(axis=1) if sp.issparse(X) else np.einsum("ij,ij->i", X, X)
+            C2 = np.einsum("ij,ij->i", self.centroids_, self.centroids_)
+            XC = X @ self.centroids_.T
+            dists = X2[:, np.newaxis] + C2[np.newaxis, :] - 2.0 * XC
+            return self.classes_[np.argmin(dists, axis=1)]
+
+        return self.classes_[
+            pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)
+        ]
+[/REPLACE]

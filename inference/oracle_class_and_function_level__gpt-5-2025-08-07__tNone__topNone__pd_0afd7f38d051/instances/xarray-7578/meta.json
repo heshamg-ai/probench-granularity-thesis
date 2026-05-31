@@ -1,0 +1,10 @@
+{
+  "scenario_id": "xarray-7578",
+  "repo": "pydata/xarray",
+  "seconds": 70.90058898925781,
+  "provider": "openai_chat",
+  "model": "gpt-5-2025-08-07",
+  "temperature": null,
+  "top_p": null,
+  "prompt_dataset_path": "prompt_oracle_gpt52_class_and_function_level.json"
+}

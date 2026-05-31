@@ -1,0 +1,11 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+            labels = list(string.ascii_lowercase[: len(xs)])
+            dtypes = [x.dtype for x in xs]
+            labeled_dtypes = list(zip(labels, dtypes))
+            return np.array(list(zip(*xs)), labeled_dtypes)
+[/SEARCH]
+[REPLACE]
+            # Fast path: directly build object-dtype array of tuples
+            return np.array(list(zip(*xs)), dtype=object)
+[/REPLACE]

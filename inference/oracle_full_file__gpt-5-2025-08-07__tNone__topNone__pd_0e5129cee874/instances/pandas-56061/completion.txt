@@ -1,0 +1,94 @@
+pandas/core/groupby/generic.py
+[SEARCH]
+        if self.axis != 0:
+            # see test_groupby_crash_on_nunique
+            return self._python_apply_general(
+                lambda sgb: sgb.nunique(dropna), self._obj_with_exclusions, is_agg=True
+            )
+
+        return self._apply_to_column_groupbys(lambda sgb: sgb.nunique(dropna))
+[/SEARCH]
+[REPLACE]
+        if self.axis != 0:
+            # see test_groupby_crash_on_nunique
+            return self._python_apply_general(
+                lambda sgb: sgb.nunique(dropna), self._obj_with_exclusions, is_agg=True
+            )
+
+        # Optimized path: compute per-column nunique without constructing
+        # intermediary SeriesGroupBy objects.
+        obj = self._obj_with_exclusions
+        ri = self.grouper.result_index
+        columns = obj.columns
+
+        ngroups = len(ri)
+        ncols = len(columns)
+
+        # Handle empty frame fast-path
+        if ncols == 0:
+            res_df = DataFrame([], columns=columns, index=ri)
+            if not self.as_index:
+                res_df.index = default_index(len(res_df))
+                res_df = self._insert_inaxis_grouper(res_df)
+            return res_df
+
+        ids_all, _, _ = self.grouper.group_info
+        # Preallocate result data
+        result_data = np.zeros((ngroups, ncols), dtype="int64")
+
+        for j, (colname, ser) in enumerate(obj.items()):
+            val = ser._values
+            codes, _ = algorithms.factorize(val, sort=False)
+
+            if len(ids_all) == 0:
+                # no rows; leave zeros
+                continue
+
+            sorter = np.lexsort((codes, ids_all))
+            codes_s = codes[sorter]
+            ids_s = ids_all[sorter]
+
+            # group boundaries are where group ids change
+            # unique observations are where sorted values change
+            idx = np.r_[0, 1 + np.nonzero(ids_s[1:] != ids_s[:-1])[0]]
+            inc = np.r_[1, codes_s[1:] != codes_s[:-1]]
+
+            # 1st item of each group is a new unique observation
+            mask = codes_s == -1
+            if dropna:
+                inc[idx] = 1
+                inc[mask] = 0
+            else:
+                inc[mask & np.r_[False, mask[:-1]]] = 0
+                inc[idx] = 1
+
+            out = np.add.reduceat(inc, idx).astype("int64", copy=False)
+            if len(ids_s):
+                # NaN/NaT group exists if the head of ids is -1,
+                # so remove it from res and exclude its index from idx
+                if ids_s[0] == -1:
+                    res = out[1:]
+                    idx_mapped = idx[np.flatnonzero(idx)]
+                else:
+                    res = out
+                    idx_mapped = idx
+            else:
+                res = out[1:]
+                idx_mapped = idx
+
+            # we might have duplications among the bins
+            if len(res) != ngroups:
+                # align to full result index length
+                res_full = np.zeros(ngroups, dtype=out.dtype)
+                if len(ids_s) > 0:
+                    res_full[ids_s[idx_mapped]] = res
+                res = res_full
+
+            result_data[:, j] = res
+
+        res_df = self.obj._constructor(result_data, columns=columns, index=ri)
+        if not self.as_index:
+            res_df.index = default_index(len(res_df))
+            res_df = self._insert_inaxis_grouper(res_df)
+        return res_df
+[/REPLACE]

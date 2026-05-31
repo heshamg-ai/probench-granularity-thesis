@@ -1,0 +1,46 @@
+xarray/core/indexes.py
+[SEARCH]
+    indexes = [e[0] for e in elements]
+    same_type = all(type(indexes[0]) is type(other_idx) for other_idx in indexes[1:])
+    if same_type:
+        try:
+            not_equal = any(
+                not indexes[0].equals(other_idx) for other_idx in indexes[1:]
+            )
+        except NotImplementedError:
+            not_equal = check_variables()
+    else:
+        not_equal = check_variables()
+
+    return not not_equal
+[/SEARCH]
+[REPLACE]
+    indexes = [e[0] for e in elements]
+
+    # Fast path: identical objects (common when aligning the same dataset with itself)
+    if len(indexes) == 2 and indexes[0] is indexes[1]:
+        # Index objects are the same; still must check index variables
+        vars0 = elements[0][1]
+        vars1 = elements[1][1]
+        if vars0 is vars1:
+            return True
+        if len(vars0) != len(vars1):
+            return False
+        for k in vars0:
+            if k not in vars1 or not vars0[k].equals(vars1[k]):
+                return False
+        return True
+
+    same_type = all(type(indexes[0]) is type(other_idx) for other_idx in indexes[1:])
+    if same_type:
+        try:
+            not_equal = any(
+                not indexes[0].equals(other_idx) for other_idx in indexes[1:]
+            )
+        except NotImplementedError:
+            not_equal = check_variables()
+    else:
+        not_equal = check_variables()
+
+    return not not_equal
+[/REPLACE]

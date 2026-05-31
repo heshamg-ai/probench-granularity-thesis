@@ -1,0 +1,66 @@
+pandas/core/methods/selectn.py
+[SEARCH]
+        if n <= 0:
+            return self.obj[[]]
+
+        dropped = self.obj.dropna()
+        nan_index = self.obj.drop(dropped.index)
+
+        # slow method
+        if n >= len(self.obj):
+            ascending = method == "nsmallest"
+            return self.obj.sort_values(ascending=ascending).head(n)
+[/SEARCH]
+[REPLACE]
+        if n <= 0:
+            return self.obj[[]]
+
+        # slow method
+        if n >= len(self.obj):
+            ascending = method == "nsmallest"
+            return self.obj.sort_values(ascending=ascending).head(n)
+
+        dropped = self.obj.dropna()
+[/REPLACE]
+
+pandas/core/methods/selectn.py
+[SEARCH]
+        if self.keep != "all":
+            inds = inds[:n]
+            findex = nbase
+        else:
+            if len(inds) < nbase <= len(nan_index) + len(inds):
+                findex = len(nan_index) + len(inds)
+            else:
+                findex = len(inds)
+
+        if self.keep == "last":
+            # reverse indices
+            inds = narr - 1 - inds
+
+        return concat([dropped.iloc[inds], nan_index]).iloc[:findex]
+[/SEARCH]
+[REPLACE]
+        need_nans = len(inds) < nbase
+
+        if self.keep != "all":
+            inds = inds[:n]
+
+        if self.keep == "last":
+            # reverse indices
+            inds = narr - 1 - inds
+
+        if self.keep != "all":
+            if need_nans:
+                nan_index = self.obj[self.obj.isna()]
+                return concat([dropped.iloc[inds], nan_index]).iloc[:nbase]
+            else:
+                return dropped.iloc[inds]
+        else:
+            if need_nans:
+                nan_index = self.obj[self.obj.isna()]
+                findex = len(self.obj)
+                return concat([dropped.iloc[inds], nan_index]).iloc[:findex]
+            else:
+                return dropped.iloc[inds]
+[/REPLACE]

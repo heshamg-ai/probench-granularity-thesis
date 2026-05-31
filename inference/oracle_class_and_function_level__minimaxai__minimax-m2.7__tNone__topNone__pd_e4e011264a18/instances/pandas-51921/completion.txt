@@ -1,0 +1,80 @@
+
+
+Looking at the code, the `_check_object_for_strings` function calls the relatively expensive `lib.infer_dtype()` on every object array. For object columns that are not strings (the majority of cases), this is wasteful.
+
+I'll optimize this by adding a fast-path check that samples a few values first to quickly determine if the column is likely NOT a string type, avoiding the expensive `infer_dtype` call in most cases.
+
+pandas/core/algorithms.py
+[SEARCH]
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+    return ndtype
+[/SEARCH]
+[REPLACE]
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+
+        # Fast path: sample first 100 non-null values to check for string type
+        # This avoids the expensive infer_dtype call for non-string object arrays
+        n = len(values)
+        sample_size = min(100, n)
+        if sample_size > 0:
+            sample_indices = []
+            seen_null = 0
+            for i in range(n):
+                v = values[i]
+                if v is None or (hasattr(v, '__float__') and not isinstance(v, str)):
+                    # Likely not a string (None or numeric-like)
+                    pass
+                elif isinstance(v, str):
+                    sample_indices.append(i)
+                    if len(sample_indices) >= sample_size:
+                        break
+                else:
+                    # Non-string, non-numeric object
+                    seen_null += 1
+                    if seen_null > sample_size:
+                        break
+                if len(sample_indices) + seen_null >= sample_size:
+                    break
+
+            # If most sampled values are not strings, skip infer_dtype
+            if len(sample_indices) < sample_size // 2:
+                return ndtype
+
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+    return ndtype
+[/REPLACE]

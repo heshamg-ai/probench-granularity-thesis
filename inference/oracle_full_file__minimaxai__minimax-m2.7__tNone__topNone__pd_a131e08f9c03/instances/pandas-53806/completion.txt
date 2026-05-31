@@ -1,0 +1,139 @@
+
+
+```python
+pandas/core/groupby/groupby.py
+[SEARCH]
+    @final
+    @doc(_sh_see_also_doc)
+    def size(self) -> Series:
+        """
+        Return the size of each group.
+
+        >>> data = pd.DataFrame(
+        ...     {
+        ...         "A": ["foo", "foo", "foo", "bar", "bar", "bar"],
+        ...         "B": ["one", "one", "two", "one", "two", "two"],
+        ...         "C": [1, 2, 3, 4, 5, 6],
+        ...     },
+        ...     index=pd.Int64Index([1, 1, 2, 1, 1, 2], name="idx"),
+        ... )
+        ...
+        >>> data.groupby(["A", "B"]).size()
+        A    B
+        bar  one    2
+             two    2
+        foo  one    2
+             two    1
+        dtype: int64
+
+        Returns
+        -------
+        Series
+            The size of each group.
+        """
+        result = self._data.to_series().groupby(self._grouper).size()
+        return self._wrap_applied_output_files(
+            result,sonly=True)
+[/SEARCH]
+[REPLACE]
+    @final
+    @doc(_sh_see_also_doc)
+    def size(self) -> Series:
+        """
+        Return the size of each group.
+
+        >>> data = pd.DataFrame(
+        ...     {
+        ...         "A": ["foo", "foo", "foo", "bar", "bar", "bar"],
+        ...         "B": ["one", "one", "two", "one", "two", "two"],
+        ...         "C": [1, 2, 3, 4, 5, 6],
+        ...     },
+        ...     index=pd.Int64Index([1, 1, 2, 1, 1, 2], name="idx"),
+        ... )
+        ...
+        >>> data.groupby(["A", "B"]).size()
+        A    B
+        bar  one    2
+             two    2
+        foo  one    2
+             two    1
+        dtype: int64
+
+        Returns
+        -------
+        Series
+            The size of each group.
+        """
+        # Fast path for already-sorted MultiIndex levels
+        # Check if we have a DataFrameGroupBy with MultiIndex keys that are sorted
+        if (
+            hasattr(self, "_grouper")
+            and hasattr(self._grouper, "keys")
+            and self._grouper.keys is not None
+            and len(self._grouper.keys) > 0
+        ):
+            from pandas.core.indexes.multi import MultiIndex
+            from pandas.core.groupby.groupby import DataFrameGroupBy
+
+            # Get the object being grouped
+            obj = self._data.to_series()
+            
+            if isinstance(self, DataFrameGroupBy):
+                keys = self._grouper.keys
+                if isinstance(obj.index, MultiIndex):
+                    # Check if all keys are sorted levels of the MultiIndex
+                    all_sorted = True
+                    for key in keys:
+                        if key in obj.index.names:
+                            level_number = obj.index._get_level_number(key)
+                            if not obj.index._is_lexsorted(limit=level_number + 1):
+                                all_sorted = False
+                                break
+                    else:
+                        # Fast path: use counting sort-like approach for sorted data
+                        if all_sorted and len(obj) > 0:
+                            from pandas.core.algorithms import unique_counts
+                            
+                            # Get the codes for the MultiIndex levels used as keys
+                            codes = [obj.index.codes[obj.index._get_level_number(k)] for k in keys]
+                            
+                            # Use stable sort to get group boundaries efficiently
+                            n = len(obj)
+                            labels = np.column_stack(codes)
+                            
+                            # Get group index with sorting
+                            from pandas.core.sorting import get_group_index, compress_group_index
+                            shape = [obj.index.nlevels for _ in codes]
+                            group_index = get_group_index(list(codes), tuple(shape), sort=True, xnull=False)
+                            comp_ids, obs_ids = compress_group_index(group_index, sort=True)
+                            
+                            # Compute counts using bincount
+                            if len(obs_ids) > 0:
+                                counts = np.bincount(comp_ids, minlength=len(obs_ids))
+                                
+                                # Build result index from obs_ids
+                                from pandas.core.indexes.base import Index
+                                if len(keys) == 1:
+                                    key_values = obj.index.get_level_values(keys[0])
+                                else:
+                                    key_values = obj.index[["key"]]
+                                    arrays = [obj.index.get_level_values(k) for k in keys]
+                                    key_values = MultiIndex.from_arrays(arrays)
+                                
+                                # Use observed values directly for index
+                                result_index = obj.index[[0]]
+                                for i in range(len(obs_ids)):
+                                    idxr = unique_label_indices(comp_ids, i)
+                                    if len(idxr) > 0:
+                                        for idx in idxr:
+                                            result_index = result_index.append(obj.index[idx:idx+1])
+                                
+                                result = Series(counts, index=result_index[1:])
+                                return self._wrap_applied_output_files(
+                                    result, sonly=True)
+
+        result = self._data.to_series().groupby(self._grouper).size()
+        return self._wrap_applied_output_files(
+            result, sonly=True)
+[/REPLACE]
+```

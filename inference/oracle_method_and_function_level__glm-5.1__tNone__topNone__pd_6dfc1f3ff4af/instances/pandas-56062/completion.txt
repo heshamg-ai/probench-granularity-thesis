@@ -1,0 +1,82 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+    def get_loc(self, key):
+        if not isinstance(key, tuple):
+            # Note: key is not necessarily hashable, but that's handled below
+            return self._get_level_indexer(key, level=0)
+[/SEARCH]
+[REPLACE]
+    def get_loc(self, key):
+        if not isinstance(key, tuple):
+            # Note: key is not necessarily hashable, but that's handled below
+            # Fast path: try hash-based lookup for a scalar key on level 0
+            try:
+                return self._engine.get_loc(key)
+            except KeyError:
+                return self._get_level_indexer(key, level=0)
+[/REPLACE]
+
+pandas/core/indexing.py
+[SEARCH]
+        if not isinstance(key, tuple):
+            # Note: key is not necessarily hashable, but that's handled below
+            return self._get_level_indexer(key, level=0)
+[/SEARCH]
+[REPLACE]
+        if not isinstance(key, tuple):
+            # Note: key is not necessarily hashable, but that's handled below
+            # Fast path: try hash-based lookup for a scalar key on level 0
+            try:
+                return self._engine.get_loc(key)
+            except KeyError:
+                return self._get_level_indexer(key, level=0)
+[/REPLACE]
+
+pandas/core/indexing.py
+[SEARCH]
+    def _getitem_tuple(self, tup: tuple):
+        try:
+            return self._getitem_tuple_same_dim(tup)
+        except IndexingError:
+            return self._getitem_tuple_diff_dim(tup)
+[/SEARCH]
+[REPLACE]
+    def _getitem_tuple(self, tup: tuple):
+        # Optimization: fast path for MultiIndex scalar lookups
+        # Avoids expensive general-purpose tuple indexing path
+        if (
+            len(tup) == self.ndim
+            and self.obj.index._is_multi
+            and all(is_scalar(x) for x in tup)
+        ):
+            # Attempt direct hash-based lookup for each dimension
+            try:
+                indexer = self.obj.index.get_loc(tup)
+                if isinstance(indexer, int):
+                    return self.obj._ixs(indexer, axis=0)
+            except (KeyError, TypeError):
+                pass  # Fall through to standard path
+
+        try:
+            return self._getitem_tuple_same_dim(tup)
+        except IndexingError:
+            return self._getitem_tuple_diff_dim(tup)
+[/REPLACE]
+
+pandas/core/indexes/multi.py
+[SEARCH]
+    def _get_level_indexer(
+        self, key, level: int = 0, indexer_cls: type | None = None
+    ):
+[/SEARCH]
+[REPLACE]
+    def _get_level_indexer(
+        self, key, level: int = 0, indexer_cls: type | None = None
+    ):
+        # Fast path: hash-based lookup for scalar keys on level 0
+        if level == 0 and is_scalar(key):
+            try:
+                return self._engine.get_loc(key)
+            except (KeyError, TypeError):
+                pass  # Fall through to standard path
+[/REPLACE]

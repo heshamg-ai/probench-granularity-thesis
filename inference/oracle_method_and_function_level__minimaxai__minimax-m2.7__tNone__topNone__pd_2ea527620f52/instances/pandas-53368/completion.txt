@@ -1,0 +1,161 @@
+
+
+Looking at the code context, I need to find `get_indexer_for` and optimize it for PyArrow-backed timestamp/duration dtypes. Let me search for this method in the codebase.
+
+Based on the context provided, the key optimization opportunity is in how the engine is obtained for PyArrow-backed arrays. The current `_get_engine_target` method converts ArrowExtensionArray to object dtype, which is inefficient. Let me check for the method and provide optimizations.
+
+Let me look for the `get_indexer_for` method:
+
+pandas/core/indexes/base.py
+[SEARCH]
+    @cache_readonly
+    def _engine(
+        self,
+    ) -> libindex.IndexEngine | libindex.ExtensionEngine | libindex.MaskedIndexEngine:
+        # For base class (object dtype) we get ObjectEngine
+        target_values = self._get_engine_target()
+        if isinstance(target_values, ExtensionArray):
+            if isinstance(target_values, (BaseMaskedArray, ArrowExtensionArray)):
+                try:
+                    return _masked_engines[target_values.dtype.name](target_values)
+                except KeyError:
+                    # Not supported yet e.g. decimal
+                    pass
+            elif self._engine_type is libindex.ObjectEngine:
+                return libindex.ExtensionEngine(target_values)
+
+        target_values = cast(np.ndarray, target_values)
+        # to avoid a reference cycle, bind `target_values` to a local variable, so
+        # `self` is not passed into the lambda.
+        if target_values.dtype == bool:
+            return libindex.BoolEngine(target_values)
+        elif target_values.dtype == np.complex64:
+            return libindex.Complex64Engine(target_values)
+        elif target_values.dtype == np.complex128:
+            return libindex.Complex128Engine(target_values)
+        elif needs_i8_conversion(self.dtype):
+            # We need to keep M8/m8 dtype when initializing the Engine,
+            #  but don't want to change _get_engine_target bc it is used
+            #  elsewhere
+            # error: Item "ExtensionArray" of "Union[ExtensionArray,
+            # ndarray[Any, Any]]" has no attribute "_ndarray"  [union-attr]
+            target_values = self._data._ndarray  # type: ignore[union-attr]
+
+        # error: Argument 1 to "ExtensionEngine" has incompatible type
+        # "ndarray[Any, Any]"; expected "ExtensionArray"
+        return self._engine_type(target_values)  # type: ignore[arg-type]
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def _engine(
+        self,
+    ) -> libindex.IndexEngine | libindex.ExtensionEngine | libindex.MaskedIndexEngine:
+        # For base class (object dtype) we get ObjectEngine
+        target_values = self._get_engine_target()
+        if isinstance(target_values, ExtensionArray):
+            if isinstance(target_values, (BaseMaskedArray, ArrowExtensionArray)):
+                try:
+                    return _masked_engines[target_values.dtype.name](target_values)
+                except KeyError:
+                    # Not supported yet e.g. decimal
+                    pass
+            elif self._engine_type is libindex.ObjectEngine:
+                return libindex.ExtensionEngine(target_values)
+
+        target_values = cast(np.ndarray, target_values)
+        # to avoid a reference cycle, bind `target_values` to a local variable, so
+        # `self` is not passed into the lambda.
+        if target_values.dtype == bool:
+            return libindex.BoolEngine(target_values)
+        elif target_values.dtype == np.complex64:
+            return libindex.Complex64Engine(target_values)
+        elif target_values.dtype == np.complex128:
+            return libindex.Complex128Engine(target_values)
+        elif needs_i8_conversion(self.dtype):
+            # We need to keep M8/m8 dtype when initializing the Engine,
+            #  but don't want to change _get_engine_target bc it is used
+            #  elsewhere
+            # error: Item "ExtensionArray" of "Union[ExtensionArray,
+            # ndarray[Any, Any]]" has no attribute "_ndarray"  [union-attr]
+            target_values = self._data._ndarray  # type: ignore[union-attr]
+
+        # error: Argument 1 to "ExtensionEngine" has incompatible type
+        # "ndarray[Any, Any]"; expected "ExtensionArray"
+        return self._engine_type(target_values)  # type: ignore[arg-type]
+
+    @cache_readonly
+    def _engine_for_pyarrow_temporal(
+        self,
+    ) -> libindex.IndexEngine | libindex.ExtensionEngine | libindex.MaskedIndexEngine | None:
+        """
+        Get an optimized engine for PyArrow-backed timestamp/duration types.
+
+        For timestamp/duration types backed by PyArrow, we can use the underlying
+        PyArrow array directly for more efficient lookups.
+        """
+        if isinstance(self._data, ArrowExtensionArray):
+            pa_dtype = self._data._pa_dtype
+            if pa.types.is_timestamp(pa_dtype) or pa.types.is_duration(pa_dtype):
+                return self._engine_type(self._data)
+        return None
+[/REPLACE]
+
+Now let me add the optimization in `_get_engine_target` to avoid unnecessary object conversion for PyArrow temporal types:
+
+pandas/core/indexes/base.py
+[SEARCH]
+    def _get_engine_target(self) -> ArrayLike:
+        """
+        Get the ndarray or ExtensionArray that we can pass to the IndexEngine
+        constructor.
+        """
+        vals = self._values
+        if isinstance(vals, StringArray):
+            # GH#45652 much more performant than ExtensionEngine
+            return vals._ndarray
+        if (
+            type(self) is Index
+            and isinstance(self._values, ExtensionArray)
+            and not isinstance(self._values, BaseMaskedArray)
+            and not (
+                isinstance(self._values, ArrowExtensionArray)
+                and is_numeric_dtype(self.dtype)
+                # Exclude decimal
+                and self.dtype.kind != "O"
+            )
+        ):
+            # TODO(ExtensionIndex): remove special-case, just use self._values
+            return self._values.astype(object)
+        return vals
+[/SEARCH]
+[REPLACE]
+    def _get_engine_target(self) -> ArrayLike:
+        """
+        Get the ndarray or ExtensionArray that we can pass to the IndexEngine
+        constructor.
+        """
+        vals = self._values
+        if isinstance(vals, StringArray):
+            # GH#45652 much more performant than ExtensionEngine
+            return vals._ndarray
+        if isinstance(vals, ArrowExtensionArray):
+            pa_dtype = vals._pa_dtype
+            if pa.types.is_timestamp(pa_dtype) or pa.types.is_duration(pa_dtype):
+                # For PyArrow-backed timestamp/duration types, use the
+                # ExtensionArray directly to avoid expensive conversions
+                return vals
+        if (
+            type(self) is Index
+            and isinstance(self._values, ExtensionArray)
+            and not isinstance(self._values, BaseMaskedArray)
+            and not (
+                isinstance(self._values, ArrowExtensionArray)
+                and is_numeric_dtype(self.dtype)
+                # Exclude decimal
+                and self.dtype.kind != "O"
+            )
+        ):
+            # TODO(ExtensionIndex): remove special-case, just use self._values
+            return self._values.astype(object)
+        return vals
+[/REPLACE]

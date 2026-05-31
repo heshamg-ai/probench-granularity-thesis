@@ -1,0 +1,59 @@
+ pandas/io/formats/csvs.py [SEARCH]
+    @property
+    def nlevels(self) -> int:
+        if self.index:
+            return getattr(self.data_index, "nlevels", 1)
+        else:
+            return 0
+[/SEARCH] [REPLACE]
+    @property
+    def nlevels(self) -> int:
+        if self.index:
+            return getattr(self.data_index, "nlevels", 1)
+        else:
+            if isinstance(self.obj.index, ABCMultiIndex):
+                return self.obj.index.nlevels
+            return 0
+[/REPLACE]
+
+pandas/io/formats/csvs.py [SEARCH]
+    def _save_chunk(self, start_i: int, end_i: int) -> None:
+        # create the data for a chunk
+        slicer = slice(start_i, end_i)
+        df = self.obj.iloc[slicer]
+        res = df._get_values_for_csv(**self._number_format)
+        data = list(res._iter_column_arrays())
+        ix = self.data_index[slicer]._get_values_for_csv(**self._number_format)
+
+        libwriters.write_csv_rows(
+            data,
+            ix,
+            self.nlevels,
+            self.cols,
+            self.writer,
+        )
+[/SEARCH] [REPLACE]
+    def _save_chunk(self, start_i: int, end_i: int) -> None:
+        # create the data for a chunk
+        slicer = slice(start_i, end_i)
+        df = self.obj.iloc[slicer]
+        res = df._get_values_for_csv(**self._number_format)
+        data = list(res._iter_column_arrays())
+
+        if self.index:
+            ix = self.data_index[slicer]._get_values_for_csv(**self._number_format)
+        else:
+            if self.nlevels > 1:
+                # MultiIndex with index=False: create empty array with correct shape
+                ix = np.empty((end_i - start_i, 0), dtype=object)
+            else:
+                ix = self.data_index[slicer]._get_values_for_csv(**self._number_format)
+
+        libwriters.write_csv_rows(
+            data,
+            ix,
+            self.nlevels,
+            self.cols,
+            self.writer,
+        )
+[/REPLACE]

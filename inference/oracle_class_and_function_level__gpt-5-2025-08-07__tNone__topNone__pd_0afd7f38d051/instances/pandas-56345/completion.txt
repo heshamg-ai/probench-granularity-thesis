@@ -1,0 +1,47 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        left_idx, right_idx = get_join_indexers(
+            [self._values], [other._values], how=how, sort=sort
+        )
+[/SEARCH]
+[REPLACE]
+        if isinstance(self.dtype, CategoricalDtype) and not self.dtype.ordered:
+            # Fastpath for unordered CategoricalIndex: operate on integer codes
+            left_codes = np.asarray(self._values.codes, dtype=np.intp)
+            right_codes = np.asarray(other._values.codes, dtype=np.intp)
+            left_idx, right_idx = get_join_indexers(
+                [left_codes], [right_codes], how=how, sort=sort
+            )
+        else:
+            left_idx, right_idx = get_join_indexers(
+                [self._values], [other._values], how=how, sort=sort
+            )
+[/REPLACE]
+
+pandas/core/indexes/base.py
+[SEARCH]
+        mask = left_idx == -1
+
+        join_idx = self.take(left_idx)
+        right = other.take(right_idx)
+        join_index = join_idx.putmask(mask, right)
+[/SEARCH]
+[REPLACE]
+        if isinstance(self.dtype, CategoricalDtype) and not self.dtype.ordered:
+            mask = left_idx == -1
+            lc = self._values.codes
+            rc = other._values.codes
+            out_codes = np.empty(left_idx.shape, dtype=lc.dtype)
+            if out_codes.size:
+                not_mask = ~mask
+                out_codes[not_mask] = lc[left_idx[not_mask]]
+                out_codes[mask] = rc[right_idx[mask]]
+            new_values = Categorical.from_codes(out_codes, self._values.categories, ordered=False)
+            join_index = type(self)(new_values, name=self.name)
+        else:
+            mask = left_idx == -1
+
+            join_idx = self.take(left_idx)
+            right = other.take(right_idx)
+            join_index = join_idx.putmask(mask, right)
+[/REPLACE]

@@ -1,0 +1,69 @@
+pandas/core/indexes/base.py
+[SEARCH]
+    @final
+    def get_indexer_for(self, target) -> npt.NDArray[np.intp]:
+        """
+        Guaranteed return of an indexer even when non-unique.
+
+        This dispatches to get_indexer or get_indexer_non_unique
+        as appropriate.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+            List of indices.
+
+        Examples
+        --------
+        >>> idx = pd.Index([np.nan, 'var1', np.nan])
+        >>> idx.get_indexer_for([np.nan])
+        array([0, 2])
+        """
+        if self._index_as_unique:
+            return self.get_indexer(target)
+        indexer, _ = self.get_indexer_non_unique(target)
+        return indexer
+[/SEARCH]
+[REPLACE]
+    @final
+    def get_indexer_for(self, target) -> npt.NDArray[np.intp]:
+        """
+        Guaranteed return of an indexer even when non-unique.
+
+        This dispatches to get_indexer or get_indexer_non_unique
+        as appropriate.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+            List of indices.
+
+        Examples
+        --------
+        >>> idx = pd.Index([np.nan, 'var1', np.nan])
+        >>> idx.get_indexer_for([np.nan])
+        array([0, 2])
+        """
+        if self._index_as_unique:
+            return self.get_indexer(target)
+        indexer, _ = self.get_indexer_non_unique(target)
+        return indexer
+
+    @final
+    def _get_indexer_for_pyarrow(self, target: Index) -> npt.NDArray[np.intp]:
+        """
+        Fast path for PyArrow-backed timestamp/duration dtypes.
+
+        Uses optimized search paths that avoid materializing
+        into numpy for timestamp/timedelta types.
+        """
+        # We know self._data is an ArrowExtensionArray
+        # and we have matching timestamp or duration dtype.
+        # Dispatch to ArrowExtensionArray's optimized take/indexer.
+        from pandas.core.arrays import ArrowExtensionArray
+
+        engine = self._engine
+        tgt_values = target._get_engine_target()
+        indexer = engine.get_indexer(tgt_values)
+        return ensure_platform_int(indexer)
+[/REPLACE]

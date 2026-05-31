@@ -1,0 +1,103 @@
+Looking at the optimization target: `Index.is_unique` after slicing.
+
+When an `Index` is sliced, the result is a new `Index` object whose `_cache` is empty. When `is_unique` is accessed (a `@cache_readonly` property), it delegates to `self._engine.is_unique`. The `_engine` is also `@cache_readonly`, so it must be built first. Building the engine involves creating a hash table of all index values, which is O(n) time and memory — and for the purpose of checking uniqueness, we can do better.
+
+The key insight: for most index types, we can check uniqueness without building the full engine. We can short-circuit with a much cheaper check:
+- If the underlying data is a numpy array, compare its length to the number of unique values (using `algos.unique` which is faster than building the engine, and can early-exit conceptually via `len(set())` for object types).
+- For empty or single-element indices, uniqueness is trivially true.
+- For numeric dtypes, `len(algos.unique(values)) == len(values)` is very fast.
+- For `RangeIndex` (which already overrides `is_unique` to always return `True`), no change needed.
+- For `IntervalIndex` (which has its own override), no change needed.
+
+This avoids materializing the `_engine` (and its hash table) when `is_unique` is the first thing checked on a sliced index.
+
+```python
+pandas/core/indexes/base.py
+[SEARCH]
+    @cache_readonly
+    def is_unique(self) -> bool:
+        """
+        Return if the index has unique values.
+
+        Returns
+        -------
+        bool
+
+        See Also
+        --------
+        Index.has_duplicates : Inverse method that checks if it has duplicate values.
+
+        Examples
+        --------
+        >>> idx = pd.Index([1, 5, 7, 7])
+        >>> idx.is_unique
+        False
+
+        >>> idx = pd.Index([1, 5, 7])
+        >>> idx.is_unique
+        True
+
+        >>> idx = pd.Index(["Watermelon", "Orange", "Apple",
+        ...                 "Watermelon"]).astype("category")
+        >>> idx.is_unique
+        False
+
+        >>> idx = pd.Index(["Orange", "Apple",
+        ...                 "Watermelon"]).astype("category")
+        >>> idx.is_unique
+        True
+        """
+        return self._engine.is_unique
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def is_unique(self) -> bool:
+        """
+        Return if the index has unique values.
+
+        Returns
+        -------
+        bool
+
+        See Also
+        --------
+        Index.has_duplicates : Inverse method that checks if it has duplicate values.
+
+        Examples
+        --------
+        >>> idx = pd.Index([1, 5, 7, 7])
+        >>> idx.is_unique
+        False
+
+        >>> idx = pd.Index([1, 5, 7])
+        >>> idx.is_unique
+        True
+
+        >>> idx = pd.Index(["Watermelon", "Orange", "Apple",
+        ...                 "Watermelon"]).astype("category")
+        >>> idx.is_unique
+        False
+
+        >>> idx = pd.Index(["Orange", "Apple",
+        ...                 "Watermelon"]).astype("category")
+        >>> idx.is_unique
+        True
+        """
+        # Fast path: avoid building the engine (and its hash table) just to
+        # check uniqueness. This is especially beneficial after slicing, where
+        # the new index has an empty cache and would otherwise pay the full
+        # O(n) cost of engine construction.
+        if len(self) <= 1:
+            return True
+
+        values = self._values
+        if isinstance(values, np.ndarray):
+            # For ndarray-backed indexes, use algos.unique which is cheaper
+            # than building the full index engine hash table.
+            return len(algos.unique(values)) == len(self)
+
+        # For ExtensionArray-backed indexes (other than ndarray subclasses),
+        # fall back to the engine which handles them correctly.
+        return self._engine.is_unique
+[/REPLACE]
+```

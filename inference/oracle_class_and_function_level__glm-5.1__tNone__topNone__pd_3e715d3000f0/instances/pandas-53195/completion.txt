@@ -1,0 +1,169 @@
+pandas/core/groupby/groupby.py
+[SEARCH]
+        if isinstance(func, str):
+            return self._string_function(func, *args, **kwargs)
+
+        if func.__module__ is not None and func.__module__.startswith("numpy"):
+            return self._numpy_function(func, *args, **kwargs)
+
+        # dict of the form {name: func}
+        if isinstance(func, dict):
+            result = self._python_apply_general(func, *args, **kwargs)
+            if self.keys == "index":
+                pass  # pragma: no cover
+            return result
+
+        func = com.get_callable_name(func)
+
+        # If we have a named function, and this is called on a DataFrame,
+        # we can potentially skip the slow path
+        f = com.get_cython_func(func)
+        if f is not None:
+            return self._cython_transform(
+                f, *args, **kwargs, requires=cython_cast_blacklist
+            )
+[/SEARCH]
+[REPLACE]
+        if isinstance(func, str):
+            return self._string_function(func, *args, **kwargs)
+
+        if func.__module__ is not None and func.__module__.startswith("numpy"):
+            return self._numpy_function(func, *args, **kwargs)
+
+        # dict of the form {name: func}
+        if isinstance(func, dict):
+            result = self._python_apply_general(func, *args, **kwargs)
+            if self.keys == "index":
+                pass  # pragma: no cover
+            return result
+
+        # If we have a named function, and this is called on a DataFrame,
+        # we can potentially skip the slow path
+        f = com.get_cython_func(func)
+        if f is not None:
+            return self._cython_transform(
+                f, *args, **kwargs, requires=cython_cast_blacklist
+            )
+[/REPLACE]
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+        else:
+            # DataFrame
+            if self.axis == 1:
+                return self._python_apply_general(f, *args, **kwargs)
+            elif not self.obj.index.is_unique:
+                return self._python_apply_general(f, *args, **kwargs)
+            elif isinstance(self.obj.index, MultiIndex):
+                return self._python_apply_general(f, *args, **kwargs)
+            elif self.grouper.is_builtin:
+                # Optimization: Fast path for many groups with group_keys=True.
+                # Avoids the expensive concat of individual DataFrames by
+                # slicing, applying, and concatenating in a single pass.
+                if self.keys:
+                    return self._apply_fast_with_group_keys(f, *args, **kwargs)
+                return self._python_apply_general(f, *args, **kwargs)
+            else:
+                return self._python_apply_general(f, *args, **kwargs)
+[/SEARCH]
+[REPLACE]
+        else:
+            # DataFrame
+            if self.axis == 1:
+                return self._python_apply_general(f, *args, **kwargs)
+            elif not self.obj.index.is_unique:
+                return self._python_apply_general(f, *args, **kwargs)
+            elif isinstance(self.obj.index, MultiIndex):
+                return self._python_apply_general(f, *args, **kwargs)
+            else:
+                return self._python_apply_general(f, *args, **kwargs)
+[/REPLACE]
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+    def _python_apply_general(
+        self, f, *args, **kwargs
+    ) -> DataFrame | Series:
+[/SEARCH]
+[REPLACE]
+    def _apply_fast_with_group_keys(self, f, *args, **kwargs):
+        """
+        Optimized path for DataFrame GroupBy.apply with many groups and group_keys=True.
+
+        Avoids the overhead of concatting individual DataFrames with MultiIndex
+        by fetching all group slices, applying the function, and building the
+        final BlockManager and MultiIndex in one pass.
+        """
+        obj = self.obj
+        group_indices = self.grouper.indices
+
+        # Pre-allocate lists for the block manager concatenation
+        mgrs_indexers = []
+        keys = []
+
+        # Construct the MultiIndex levels and codes simultaneously
+        group_names = list(group_indices.keys())
+        level_values = Index(group_names, name=self.grouper.names[0])
+        level_codes = []
+        original_index_codes = []
+
+        # Get the columns / other axis once
+        new_axes = list(obj.axes)
+        columns = new_axes[1]
+
+        for name in group_names:
+            indices = group_indices[name]
+            group_df = obj.iloc[indices]
+
+            res = f(group_df, *args, **kwargs)
+            if isinstance(res, ABCSeries):
+                res = res.to_frame()
+            elif not isinstance(res, ABCDataFrame):
+                # Fall back to slow path if the function doesn't return a DataFrame
+                return self._python_apply_general(f, *args, **kwargs)
+
+            # Track the group key codes
+            code = level_values.get_loc(name)
+            level_codes.extend([code] * len(res))
+
+            # Track the original index codes
+            original_index_codes.extend(res.index)
+
+            # Prepare the block manager for concatenation
+            mgrs_indexers.append((res._mgr, {}))
+            keys.append(name)
+
+        # Build the MultiIndex
+        original_index = Index(original_index_codes)
+        if isinstance(obj.index, MultiIndex):
+            # Combine the new level with the existing MultiIndex levels
+            new_levels = [level_values] + list(obj.index.levels)
+            new_codes = [np.array(level_codes, dtype=np.intp)] + [
+                np.tile(lab, len(group_indices)) for lab in obj.index.codes
+            ]
+            new_names = [self.grouper.names[0]] + list(obj.index.names)
+            final_index = MultiIndex(
+                levels=new_levels, codes=new_codes, names=new_names, verify_integrity=False
+            )
+        else:
+            final_index = MultiIndex.from_arrays(
+                [level_values.take(level_codes), original_index],
+                names=[self.grouper.names[0], obj.index.name],
+            )
+
+        new_axes[0] = final_index
+
+        # Perform a fast concatenation of the BlockManagers
+        from pandas.core.internals.concat import concatenate_managers
+
+        new_data = concatenate_managers(
+            mgrs_indexers, new_axes, concat_axis=0, copy=True
+        )
+
+        result = self.obj._constructor(new_data)
+        return result.__finalize__(self, method="apply")
+
+    def _python_apply_general(
+        self, f, *args, **kwargs
+    ) -> DataFrame | Series:
+[/REPLACE]

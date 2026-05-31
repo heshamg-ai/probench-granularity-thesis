@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2025, Siemens AG
+
+FROM python:3.10-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential git pkg-config \
+        libhdf5-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade \
+        numpy==1.26 \
+        meson-python==0.19.0 \
+        ninja==1.13.0 \
+        psutil==7.2.2 \
+        codecarbon==3.2.2 \
+        pytest-json-report==1.5.0 \
+        pytest-cov==7.0.0 \
+        coverage==7.13.4
+
+# ── Per-build layers  ─────────────────────
+ARG REPO_URL
+ARG SHA
+ARG PR_NUMBER
+ARG VARIANT
+ENV LIB_NAME=pandas
+ENV REPO_DIR=/repos/${LIB_NAME}
+
+RUN git clone --filter=blob:none ${REPO_URL} ${REPO_DIR}
+
+WORKDIR ${REPO_DIR}
+
+RUN git fetch origin pull/${PR_NUMBER}/head:refs/remotes/origin/pr/${PR_NUMBER} && \
+    git checkout ${SHA}
+
+COPY /docker/filter_requirements.py /utils/filter_requirements.py
+
+RUN python /utils/filter_requirements.py \
+  --in ${REPO_DIR}/requirements-dev.txt \
+  --out ${REPO_DIR}/requirements-light.txt \
+  --exclude " pyqt, qt, gui "
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r ${REPO_DIR}/requirements-light.txt
+
+RUN python -m pip uninstall -y ${LIB_NAME} || true
+
+RUN COMMIT_DATE=$(git show -s --format=%ci ${SHA} | cut -d' ' -f1) && \
+  if [ "$COMMIT_DATE" \< "2023-05-09" ]; then \
+      echo "[INFO] Using setuptools install" && \
+      python setup.py develop; \
+  else \
+      echo "[INFO] Using meson-python install" && \
+      python -m pip install -ve . --no-build-isolation --config-settings editable-verbose=true; \
+  fi
+
+WORKDIR /app
+
+LABEL repo_url=${REPO_URL} \
+      library=${LIB_NAME} \
+      pr_number=${PR_NUMBER} \
+      variant=${VARIANT} \
+      sha=${SHA}
+
+CMD ["bash"]

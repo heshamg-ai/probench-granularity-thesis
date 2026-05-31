@@ -1,0 +1,33 @@
+
+
+Looking at the code, I need to find where `DataFrameGroupBy.groups` is defined. Let me search for this in the provided file. I see `BaseGrouper.groups` which is likely the core implementation used by `DataFrameGroupBy`. Let me examine it more closely and also look at the `Grouping` class to understand the full picture.
+
+Let me check the grouper module to understand the structure better. Looking at the imports, I see `from pandas.core.groupby import grouper`, which suggests I need to look at that module for the `Grouping` class.
+
+Let me provide optimizations for the `BaseGrouper.groups` property:
+
+pandas/core/groupby/ops.py
+[SEARCH]
+    @cache_readonly
+    def groups(self) -> dict[Hashable, np.ndarray]:
+        """dict {group name -> group labels}"""
+        if len(self.groupings) == 1:
+            return self.groupings[0].groups
+        else:
+            to_groupby = zip(*(ping.grouping_vector for ping in self.groupings))
+            index = Index(to_groupby)
+            return self.axis.groupby(index)
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def groups(self) -> dict[Hashable, np.ndarray]:
+        """dict {group name -> group labels}"""
+        if len(self.groupings) == 1:
+            return self.groupings[0].groups
+        else:
+            # Build groups dict directly without creating intermediate Index
+            # This avoids the overhead of Index construction for multi-groupby
+            codes_list = [ping.codes for ping in self.groupings]
+            keys = [ping.group_index for ping in self.groupings]
+            return get_indexer_dict(codes_list, keys)
+[/REPLACE]

@@ -1,0 +1,47 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        if isinstance(key, slice):
+            # This case is separated from the conditional above to avoid
+            # pessimization com.is_bool_indexer and ndim checks.
+            result = getitem(key)
+            # Going through simple_new for performance.
+            return type(self)._simple_new(result, name=self._name)
+[/SEARCH]
+[REPLACE]
+        if isinstance(key, slice):
+            # This case is separated from the conditional above to avoid
+            # pessimization com.is_bool_indexer and ndim checks.
+            result = getitem(key)
+            # Going through simple_new for performance.
+            obj = type(self)._simple_new(result, name=self._name)
+            # Propagate known uniqueness cheaply:
+            # - any length 0 or 1 index is unique
+            # - if the parent had a cached True is_unique, any slice remains unique
+            if len(obj) <= 1 or self.__dict__.get("is_unique", False) is True:
+                obj.__dict__["is_unique"] = True
+            return obj
+[/REPLACE]
+
+pandas/core/indexes/base.py
+[SEARCH]
+    def _getitem_slice(self: _IndexT, slobj: slice) -> _IndexT:
+        """
+        Fastpath for __getitem__ when we know we have a slice.
+        """
+        res = self._data[slobj]
+        return type(self)._simple_new(res, name=self._name)
+[/SEARCH]
+[REPLACE]
+    def _getitem_slice(self: _IndexT, slobj: slice) -> _IndexT:
+        """
+        Fastpath for __getitem__ when we know we have a slice.
+        """
+        res = self._data[slobj]
+        obj = type(self)._simple_new(res, name=self._name)
+        # Propagate known uniqueness cheaply:
+        # - any length 0 or 1 index is unique
+        # - if the parent had a cached True is_unique, any slice remains unique
+        if len(obj) <= 1 or self.__dict__.get("is_unique", False) is True:
+            obj.__dict__["is_unique"] = True
+        return obj
+[/REPLACE]

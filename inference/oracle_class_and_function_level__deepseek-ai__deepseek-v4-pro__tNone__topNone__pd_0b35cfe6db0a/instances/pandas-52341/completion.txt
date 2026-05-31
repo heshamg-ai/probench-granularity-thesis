@@ -1,0 +1,216 @@
+pandas/core/nanops.py
+[SEARCH]
+def nanany(
+    values: np.ndarray,
+    *,
+    axis: AxisInt | None = None,
+    skipna: bool = True,
+    mask: npt.NDArray[np.bool_] | None = None,
+) -> bool:
+    """
+    Check if any elements along an axis evaluate to True.
+
+    Parameters
+    ----------
+    values : ndarray
+    axis : int, optional
+    skipna : bool, default True
+    mask : ndarray[bool], optional
+        nan-mask if known
+
+    Returns
+    -------
+    result : bool
+
+    Examples
+    --------
+    >>> from pandas.core import nanops
+    >>> s = pd.Series([1, 2])
+    >>> nanops.nanany(s.values)
+    True
+
+    >>> from pandas.core import nanops
+    >>> s = pd.Series([np.nan])
+    >>> nanops.nanany(s.values)
+    False
+    """
+    if needs_i8_conversion(values.dtype) and values.dtype.kind != "m":
+        # GH#34479
+        warnings.warn(
+            "'any' with datetime64 dtypes is deprecated and will raise in a "
+            "future version. Use (obj != pd.Timestamp(0)).any() instead.",
+            FutureWarning,
+            stacklevel=find_stack_level(),
+        )
+
+    values, _, _, _, _ = _get_values(values, skipna, fill_value=False, mask=mask)
+
+    # For object type, any won't necessarily return
+    # boolean values (numpy/numpy#4352)
+    if is_object_dtype(values):
+        values = values.astype(bool)
+
+    # error: Incompatible return value type (got "Union[bool_, ndarray]", expected
+    # "bool")
+    return values.any(axis)  # type: ignore[return-value]
+[/SEARCH]
+[REPLACE]
+def nanany(
+    values: np.ndarray,
+    *,
+    axis: AxisInt | None = None,
+    skipna: bool = True,
+    mask: npt.NDArray[np.bool_] | None = None,
+) -> bool:
+    """
+    Check if any elements along an axis evaluate to True.
+
+    Parameters
+    ----------
+    values : ndarray
+    axis : int, optional
+    skipna : bool, default True
+    mask : ndarray[bool], optional
+        nan-mask if known
+
+    Returns
+    -------
+    result : bool
+
+    Examples
+    --------
+    >>> from pandas.core import nanops
+    >>> s = pd.Series([1, 2])
+    >>> nanops.nanany(s.values)
+    True
+
+    >>> from pandas.core import nanops
+    >>> s = pd.Series([np.nan])
+    >>> nanops.nanany(s.values)
+    False
+    """
+    if needs_i8_conversion(values.dtype) and values.dtype.kind != "m":
+        # GH#34479
+        warnings.warn(
+            "'any' with datetime64 dtypes is deprecated and will raise in a "
+            "future version. Use (obj != pd.Timestamp(0)).any() instead.",
+            FutureWarning,
+            stacklevel=find_stack_level(),
+        )
+
+    # Fast-path: for boolean dtypes with skipna=True, compute directly without
+    # calling _get_values to avoid unnecessary copies and mask computations.
+    if (
+        skipna
+        and mask is None
+        and is_bool_dtype(values.dtype)
+        and axis is None
+    ):
+        return bool(values.any())  # type: ignore[return-value]
+
+    values, _, _, _, _ = _get_values(values, skipna, fill_value=False, mask=mask)
+
+    # Fast-path: for pre-cast boolean values with single axis, use direct .any()
+    if (
+        axis is None
+        and (is_bool_dtype(values.dtype) or is_integer_dtype(values.dtype))
+        and mask is None
+    ):
+        return bool(values.any())  # type: ignore[return-value]
+
+    # For object type, any won't necessarily return
+    # boolean values (numpy/numpy#4352)
+    if is_object_dtype(values):
+        values = values.astype(bool)
+
+    # error: Incompatible return value type (got "Union[bool_, ndarray]", expected
+    # "bool")
+    return values.any(axis)  # type: ignore[return-value]
+[/REPLACE]
+
+pandas/core/series.py
+[SEARCH]
+    def _reduce(
+        self,
+        op,
+        name: str,
+        *,
+        axis: Axis = 0,
+        skipna: bool = True,
+        numeric_only: bool = False,
+        filter_type=None,
+        **kwds,
+    ):
+        """
+        Perform a reduction operation.
+
+        If we have an ndarray as a value, then simply perform the operation,
+        otherwise delegate to the object.
+        """
+        delegate = self._values
+
+        if axis is not None:
+            self._get_axis_number(axis)
+
+        if isinstance(delegate, ExtensionArray):
+            # dispatch to ExtensionArray interface
+            return delegate._reduce(name, skipna=skipna, **kwds)
+
+        else:
+            # dispatch to numpy arrays
+            if numeric_only and not is_numeric_dtype(self.dtype):
+                kwd_name = "numeric_only"
+                if name in ["any", "all"]:
+                    kwd_name = "bool_only"
+                # GH#47500 - change to TypeError to match other methods
+                raise TypeError(
+                    f"Series.{name} does not allow {kwd_name}={numeric_only} "
+                    "with non-numeric dtypes."
+                )
+            with np.errstate(all="ignore"):
+                return op(delegate, skipna=skipna, **kwds)
+[/SEARCH]
+[REPLACE]
+    def _reduce(
+        self,
+        op,
+        name: str,
+        *,
+        axis: Axis = 0,
+        skipna: bool = True,
+        numeric_only: bool = False,
+        filter_type=None,
+        **kwds,
+    ):
+        """
+        Perform a reduction operation.
+
+        If we have an ndarray as a value, then simply perform the operation,
+        otherwise delegate to the object.
+        """
+        delegate = self._values
+
+        if axis is not None:
+            self._get_axis_number(axis)
+
+        if isinstance(delegate, ExtensionArray):
+            # dispatch to ExtensionArray interface
+            return delegate._reduce(name, skipna=skipna, **kwds)
+
+        else:
+            # dispatch to numpy arrays
+            if numeric_only and not is_numeric_dtype(self.dtype):
+                kwd_name = "numeric_only"
+                if name in ["any", "all"]:
+                    kwd_name = "bool_only"
+                # GH#47500 - change to TypeError to match other methods
+                raise TypeError(
+                    f"Series.{name} does not allow {kwd_name}={numeric_only} "
+                    "with non-numeric dtypes."
+                )
+            # Fast-path for "any" with boolean Series and skipna=True
+            if name == "any" and skipna and is_bool_dtype(self.dtype):
+                return bool(delegate.any())
+            with np.errstate(all="ignore"):
+                return op(delegate, skipna=skipna, **kwds)
+[/REPLACE]

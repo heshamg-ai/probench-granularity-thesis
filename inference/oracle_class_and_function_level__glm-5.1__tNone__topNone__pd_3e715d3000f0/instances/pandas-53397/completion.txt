@@ -1,0 +1,48 @@
+Looking at the `RangeIndex.take` method, it currently inherits from `Index.take`, which materializes the entire `_values` array (via `_data` property, creating an `np.arange(...)`) before calling `algos.take`. For a `RangeIndex`, we can compute the taken values directly from `start`, `stop`, and `step` without materializing the full range, which is much faster and more memory efficient.
+
+The optimization:
+1. Override `take` in `RangeIndex` to compute `self.start + indices * self.step` directly using numpy arithmetic on the indexer array
+2. Handle `allow_fill` properly by checking for -1 indices and filling with the appropriate NA value
+3. Return an `Index` (not `RangeIndex`) since take results are generally not contiguous ranges, matching the existing `_constructor` behavior
+
+pandas/core/indexes/range.py
+[SEARCH]
+    @doc(Index.get_loc)
+    def get_loc(self, key):
+[/SEARCH]
+[REPLACE]
+    def take(
+        self,
+        indices,
+        axis: Axis = 0,
+        allow_fill: bool = True,
+        fill_value=None,
+        **kwargs,
+    ):
+        if kwargs:
+            nv.validate_take((), kwargs)
+        if is_scalar(indices):
+            raise TypeError("Expected indices to be array-like")
+
+        indices = ensure_platform_int(indices)
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+
+        if allow_fill:
+            # We have fill_value is not None and self._can_hold_na is False,
+            # but _maybe_disallow_fill would raise in that case for RangeIndex
+            # since it can't hold NA. However, allow_fill can still be True
+            # when fill_value is None (which is the default), so we need to
+            # handle the -1 sentinel indices.
+            mask = indices == -1
+            if mask.any():
+                taken = self.start + indices * self.step
+                taken = taken.astype(np.float64)
+                taken[mask] = np.nan
+                return Index._simple_new(taken, name=self.name)
+
+        taken = self.start + indices * self.step
+        return Index._simple_new(taken, name=self.name)
+
+    @doc(Index.get_loc)
+    def get_loc(self, key):
+[/REPLACE]

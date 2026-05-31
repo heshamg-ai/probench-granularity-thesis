@@ -1,0 +1,25 @@
+pandas/core/reshape/encoding.py
+[SEARCH]
+    from pandas.core.reshape.concat import concat
+
+    # Series avoids inconsistent NaN handling
+    codes, levels = factorize_from_iterable(Series(data, copy=False))
+[/SEARCH]
+[REPLACE]
+    from pandas.core.reshape.concat import concat
+
+    # Series avoids inconsistent NaN handling
+    if isinstance(data.dtype, CategoricalDtype):
+        # Fast path for Categorical: use existing codes/categories directly
+        codes = data.cat.codes.copy()
+        levels = data.cat.categories
+        # codes are int8/int16/int32/int64; factorize_from_iterable returns int8
+        # Ensure codes dtype matches what factorize_from_iterable would produce
+        if not dummy_na:
+            codes = codes.astype(np.intp, copy=False)
+        else:
+            # dummy_na needs -1 sentinel; ensure we have a signed type that can hold -1
+            codes = codes.astype(np.intp, copy=False)
+    else:
+        codes, levels = factorize_from_iterable(Series(data, copy=False))
+[/REPLACE]

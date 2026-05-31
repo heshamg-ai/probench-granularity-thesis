@@ -1,0 +1,70 @@
+pandas/_libs/missing.pyx
+[SEARCH]
+def array_equivalent_object(object[:] left, object[:] right, bint strict_nan):
+    """
+    We have two object arrays and want to know if they are equivalent.
+    """
+    n = len(left)
+    if n != len(right):
+        return False
+[/SEARCH]
+[REPLACE]
+def array_equivalent_object(object[:] left, object[:] right, bint strict_nan):
+    """
+    We have two object arrays and want to know if they are equivalent.
+    """
+    cdef:
+        Py_ssize_t n = len(left)
+        Py_ssize_t i
+        object lval, rval
+
+    if n != len(right):
+        return False
+[/REPLACE]
+
+pandas/_libs/missing.pyx
+[SEARCH]
+    for i in range(n):
+        if left[i] is NaT:
+            if right[i] is not NaT:
+                return False
+        elif left[i] is NA:
+            if right[i] is not NA:
+                return False
+        elif util.is_nan(left[i]):
+            if not util.is_nan(right[i]):
+                return False
+        elif left[i] != right[i]:
+            if strict_nan:
+                if util.is_nan(right[i]):
+                    return False
+            else:
+                return False
+    return True
+[/SEARCH]
+[REPLACE]
+    for i in range(n):
+        lval = left[i]
+        rval = right[i]
+
+        if lval is NaT:
+            if rval is not NaT:
+                return False
+        elif lval is NA:
+            if rval is not NA:
+                return False
+        elif util.is_nan(lval):
+            if not util.is_nan(rval):
+                return False
+        else:
+            if strict_nan and util.is_nan(rval):
+                return False
+            try:
+                if lval != rval:
+                    return False
+            except ValueError:
+                if np_any(np_asarray(lval != rval)):
+                    return False
+
+    return True
+[/REPLACE]

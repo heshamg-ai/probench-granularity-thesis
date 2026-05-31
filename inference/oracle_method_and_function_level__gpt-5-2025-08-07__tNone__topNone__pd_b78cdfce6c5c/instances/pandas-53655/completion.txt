@@ -1,0 +1,60 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        result_data = []
+        for lst in split.to_pylist():
+            if lst is None:
+                result_data.append([False] * len(uniques_sorted))
+            else:
+                res = pc.is_in(uniques_sorted, pa.array(set(lst)))
+                result_data.append(res.to_pylist())
+        result = type(self)(pa.array(result_data))
+        return result, uniques_sorted.to_pylist()
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies(self, sep: str = "|"):
+        import numpy as np
+
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+
+        n = len(split)
+        U = len(uniques_sorted)
+
+        if U == 0:
+            offsets = pa.array([0] * (n + 1), type=pa.int32())
+            values = pa.array([], type=pa.bool_())
+            result = type(self)(pa.ListArray.from_arrays(offsets, values))
+            return result, []
+
+        cols = []
+        for i in range(U):
+            scalar = uniques_sorted[i]
+            if getattr(scalar, "is_valid", True):
+                col = pc.list_contains(split, value=scalar)
+            else:
+                col = pa.array([False] * n, type=pa.bool_())
+            col = pc.fill_null(col, False)
+            cols.append(col)
+
+        col_major = pa.concat_arrays(cols)  # length = U * n
+
+        total = n * U
+        if total:
+            z = np.arange(total, dtype=np.int64)
+            indices = (z % U) * n + (z // U)
+            indices_arr = pa.array(indices, type=pa.int64())
+            row_major = pc.take(col_major, indices_arr)
+        else:
+            row_major = pa.array([], type=pa.bool_())
+
+        offsets = pa.array(np.arange(n + 1, dtype=np.int32) * U, type=pa.int32())
+        list_arr = pa.ListArray.from_arrays(offsets, row_major)
+
+        result = type(self)(list_arr)
+        return result, uniques_sorted.to_pylist()
+[/REPLACE]

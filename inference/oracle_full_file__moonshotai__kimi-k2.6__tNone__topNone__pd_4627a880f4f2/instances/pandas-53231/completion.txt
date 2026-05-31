@@ -1,0 +1,35 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+    elif isinstance(lk, ExtensionArray) and lk.dtype == rk.dtype:
+        if not isinstance(lk, BaseMaskedArray) and not (
+            # exclude arrow dtypes that would get cast to object
+            isinstance(lk.dtype, ArrowDtype)
+            and is_numeric_dtype(lk.dtype.numpy_dtype)
+        ):
+            lk, _ = lk._values_for_factorize()
+
+            # error: Item "ndarray" of "Union[Any, ndarray]" has no attribute
+            # "_values_for_factorize"
+            rk, _ = rk._values_for_factorize()  # type: ignore[union-attr]
+[/SEARCH]
+[REPLACE]
+    elif isinstance(lk, ExtensionArray) and lk.dtype == rk.dtype:
+        if not isinstance(lk, BaseMaskedArray) and not (
+            # exclude arrow dtypes that would get cast to object
+            isinstance(lk.dtype, ArrowDtype)
+            and is_numeric_dtype(lk.dtype.numpy_dtype)
+        ):
+            lk, _ = lk._values_for_factorize()
+
+            # error: Item "ndarray" of "Union[Any, ndarray]" has no attribute
+            # "_values_for_factorize"
+            rk, _ = rk._values_for_factorize()  # type: ignore[union-attr]
+
+    elif needs_i8_conversion(lk.dtype) and needs_i8_conversion(rk.dtype):
+        # Fast path for datetime-like ExtensionArrays with different dtypes
+        # (e.g., datetime64[ns] vs datetime64[us], or DatetimeTZDtype vs
+        # non-tz-aware).  Convert both to int64 i8 representation so we can
+        # factorize natively without boxing to object.
+        lk = np.asarray(lk.view("i8"))
+        rk = np.asarray(rk.view("i8"))
+[/REPLACE]

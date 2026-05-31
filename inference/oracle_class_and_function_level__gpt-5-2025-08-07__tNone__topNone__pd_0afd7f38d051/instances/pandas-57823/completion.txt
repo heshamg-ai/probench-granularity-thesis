@@ -1,0 +1,35 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def max(self, axis=None, skipna: bool = True, *args, **kwargs) -> int | float:
+        """The maximum value of the RangeIndex"""
+        nv.validate_minmax_axis(axis)
+        nv.validate_max(args, kwargs)
+        return self._minmax("max")
+
+    def argsort(self, *args, **kwargs) -> npt.NDArray[np.intp]:
+[/SEARCH]
+[REPLACE]
+    def max(self, axis=None, skipna: bool = True, *args, **kwargs) -> int | float:
+        """The maximum value of the RangeIndex"""
+        nv.validate_minmax_axis(axis)
+        nv.validate_max(args, kwargs)
+        return self._minmax("max")
+
+    def argmin(self, axis=None, skipna: bool = True, *args, **kwargs) -> int:
+        nv.validate_minmax_axis(axis)
+        # Delegate to base implementation to preserve validation/behavior
+        # when unexpected arguments are provided.
+        if args or kwargs:
+            return super().argmin(*args, axis=axis, skipna=skipna, **kwargs)
+        # For empty RangeIndex, defer to super to raise the appropriate error.
+        if len(self) == 0:
+            return super().argmin(axis=axis, skipna=skipna)
+        # RangeIndex has no NA values; the position of the minimum is O(1)
+        # depending on step direction.
+        if self.step > 0 or len(self) <= 1:
+            return 0
+        else:
+            return len(self) - 1
+
+    def argsort(self, *args, **kwargs) -> npt.NDArray[np.intp]:
+[/REPLACE]

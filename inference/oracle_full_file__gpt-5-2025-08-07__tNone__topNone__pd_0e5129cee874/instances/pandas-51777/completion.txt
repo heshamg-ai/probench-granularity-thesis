@@ -1,0 +1,18 @@
+pandas/core/series.py
+[SEARCH]
+        new_index = self.index.union(other.index)
+        this = self.reindex(new_index, copy=False)
+        other = other.reindex(new_index, copy=False)
+        if this.dtype.kind == "M" and other.dtype.kind != "M":
+            other = to_datetime(other)
+
+        return this.where(notna(this), other)
+[/SEARCH]
+[REPLACE]
+        this, other = self.align(other, join="outer", copy=False)
+        if this.dtype.kind == "M" and other.dtype.kind != "M":
+            other = to_datetime(other)
+        mask = isna(this._values)
+        res_mgr = this._mgr.putmask(mask=mask, new=other)
+        return this._constructor(res_mgr).__finalize__(this)
+[/REPLACE]

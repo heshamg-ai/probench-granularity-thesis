@@ -1,0 +1,31 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        elif pa.types.is_boolean(pa_type):
+            from pandas.core.arrays import BooleanArray
+
+            scalars = BooleanArray._from_sequence_of_strings(strings).to_numpy()
+[/SEARCH]
+[REPLACE]
+        elif pa.types.is_boolean(pa_type):
+            import numpy as np
+            from pandas._libs.lib import is_np_nan
+
+            if isinstance(strings, (pa.Array, pa.ChunkedArray)):
+                strings = strings.to_pylist()
+            vec_trues = {"true", "True", "TRUE", "1", "1.0"}
+            vec_falses = {"false", "False", "FALSE", "0", "0.0"}
+            result = np.empty(len(strings), dtype=object)
+            for i, s in enumerate(strings):
+                if not isinstance(s, str):
+                    if s is None or is_np_nan(s):
+                        result[i] = np.nan
+                        continue
+                    s = str(s)
+                if s in vec_trues:
+                    result[i] = True
+                elif s in vec_falses:
+                    result[i] = False
+                else:
+                    result[i] = np.nan
+            scalars = result
+[/REPLACE]

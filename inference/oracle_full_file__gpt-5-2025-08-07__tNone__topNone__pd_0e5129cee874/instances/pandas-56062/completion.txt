@@ -1,0 +1,20 @@
+pandas/core/common.py
+[SEARCH]
+    if isinstance(values, list) and dtype in [np.object_, object]:
+        return construct_1d_object_array_from_listlike(values)
+[/SEARCH]
+[REPLACE]
+    if isinstance(values, (list, tuple)) and dtype in [np.object_, object]:
+        return construct_1d_object_array_from_listlike(values)
+
+    # Fast paths for common Python sequences to avoid np.asarray overhead
+    if isinstance(values, (list, tuple)):
+        # If values is a sequence of tuples, always return object-dtype 1D array of tuples
+        # This avoids creating a 2D ndarray and then converting back to object
+        if values and isinstance(values[0], tuple) and (dtype is None or dtype in [np.object_, object]):
+            return construct_1d_object_array_from_listlike(values)
+        # If values is a pure sequence of strings and dtype is not specified,
+        # result would be coerced to object anyway; construct directly
+        if dtype is None and values and all(isinstance(x, str) for x in values):
+            return np.asarray(values, dtype=object)
+[/REPLACE]

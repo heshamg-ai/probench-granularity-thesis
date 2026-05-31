@@ -1,0 +1,41 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        if (
+            is_object_dtype(dtype)
+            or pa.types.is_timestamp(pa_type)
+            or pa.types.is_duration(pa_type)
+        ):
+            result = np.array(list(self), dtype=dtype)
+[/SEARCH]
+[REPLACE]
+        if (
+            is_object_dtype(dtype)
+            or pa.types.is_timestamp(pa_type)
+            or pa.types.is_duration(pa_type)
+        ):
+            n = len(self)
+            # Build Python-object array efficiently via chunked conversion
+            obj_arr = np.empty(n, dtype=object)
+            if n:
+                offset = 0
+                for chunk in self._data.iterchunks():
+                    pylist = chunk.to_pylist()
+                    size = len(pylist)
+                    obj_arr[offset : offset + size] = pylist
+                    offset += size
+            if dtype is None or is_object_dtype(dtype):
+                result = obj_arr
+            else:
+                result = np.array(obj_arr, dtype=dtype)
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        if self._hasna:
+            result[self.isna()] = na_value
+[/SEARCH]
+[REPLACE]
+        if self._hasna:
+            mask = self._data.is_null().to_numpy()
+            result[mask] = na_value
+[/REPLACE]

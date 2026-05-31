@@ -1,0 +1,75 @@
+pandas/core/groupby/groupby.py
+[SEARCH]
+        # Need int value for Cython
+        if limit is None:
+            limit = -1
+[/SEARCH]
+[REPLACE]
+        # Need int value for Cython
+        if limit is None:
+            limit = -1
+        # Fast path: nothing to fill when limit == 0
+        if limit == 0:
+            obj = self._obj_with_exclusions
+            if self.axis == 1 and isinstance(obj, DataFrame):
+                result = obj.T
+                result.columns = self.obj.columns
+                result.index = self.obj.index
+                return result
+            obj = obj.copy(deep=False)
+            obj.index = self.obj.index
+            return obj
+[/REPLACE]
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+            if values.ndim == 1:
+                indexer = np.empty(values.shape, dtype=np.intp)
+                col_func(out=indexer, mask=mask)
+                return algorithms.take_nd(values, indexer)
+[/SEARCH]
+[REPLACE]
+            if values.ndim == 1:
+                # if no missing values, return values as-is
+                if not mask.any():
+                    return values
+                indexer = np.empty(values.shape, dtype=np.intp)
+                col_func(out=indexer, mask=mask)
+                return algorithms.take_nd(values, indexer)
+[/REPLACE]
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+            else:
+                # We broadcast algorithms.take_nd analogous to
+                #  np.take_along_axis
+[/SEARCH]
+[REPLACE]
+            else:
+                # Fast path: if there are no missing values in this block, return as-is
+                if not mask.any():
+                    return values
+                # We broadcast algorithms.take_nd analogous to
+                #  np.take_along_axis
+[/REPLACE]
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+                for i, value_element in enumerate(values):
+                    # call group_fillna_indexer column-wise
+                    indexer = np.empty(values.shape[1], dtype=np.intp)
+                    col_func(out=indexer, mask=mask[i])
+                    out[i, :] = algorithms.take_nd(value_element, indexer)
+                return out
+[/SEARCH]
+[REPLACE]
+                for i, value_element in enumerate(values):
+                    # call group_fillna_indexer column-wise
+                    if not mask[i].any():
+                        out[i, :] = value_element
+                        continue
+                    indexer = np.empty(values.shape[1], dtype=np.intp)
+                    col_func(out=indexer, mask=mask[i])
+                    out[i, :] = algorithms.take_nd(value_element, indexer)
+                return out
+[/REPLACE]

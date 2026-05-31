@@ -1,0 +1,74 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+        if not isinstance(other, (list, tuple)):
+            other = [other]
+
+        if all(
+            (isinstance(o, MultiIndex) and o.nlevels >= self.nlevels) for o in other
+        ):
+            arrays, names = [], []
+            for i in range(self.nlevels):
+                label = self._get_level_values(i)
+                appended = [o._get_level_values(i) for o in other]
+                arrays.append(label.append(appended))
+                single_label_name = all(label.name == x.name for x in appended)
+                names.append(label.name if single_label_name else None)
+            return MultiIndex.from_arrays(arrays, names=names)
+[/SEARCH]
+[REPLACE]
+        if not isinstance(other, (list, tuple)):
+            other = [other]
+
+        # Fast path: all inputs are MultiIndex with same nlevels
+        to_concat: tuple[Index, ...]
+        if isinstance(other, list):
+            to_concat = (self, *other)
+        else:
+            to_concat = (self,) + tuple(other)
+
+        # Check if we can use the fast path for MultiIndex concatenation
+        if all(isinstance(o, MultiIndex) for o in to_concat):
+            first = to_concat[0]
+            nlevels = first.nlevels
+            if all(o.nlevels == nlevels for o in to_concat):
+                # Fast path: concatenate level values directly
+                from pandas.core.indexes.api import ensure_index
+
+                new_levels = []
+                new_names = []
+                for i in range(nlevels):
+                    level_vals = [ensure_index(o.get_level_values(i)) for o in to_concat]
+                    # Use _concat method which is more efficient than append
+                    new_level = level_vals[0]._concat(level_vals[1:])
+                    new_levels.append(new_level)
+                    # Determine name: all same or None
+                    names = [o.names[i] for o in to_concat]
+                    if all(n == names[0] for n in names):
+                        new_names.append(names[0])
+                    else:
+                        new_names.append(None)
+                return MultiIndex.from_arrays(new_levels, names=new_names)
+[/REPLACE]
+[SEARCH]
+        to_concat = (self._values,) + tuple(k._values for k in other)
+        new_tuples = np.concatenate(to_concat)
+
+        # if all(isinstance(x, MultiIndex) for x in other):
+        try:
+            # We only get here if other contains at least one index with tuples,
+            # setting names to None automatically
+            return MultiIndex.from_tuples(new_tuples)
+        except (TypeError, IndexError):
+            return Index(new_tuples)
+[/SEARCH]
+[REPLACE]
+        to_concat = (self._values,) + tuple(k._values for k in other)
+        new_tuples = np.concatenate(to_concat)
+
+        try:
+            # We only get here if other contains at least one index with tuples,
+            # setting names to None automatically
+            return MultiIndex.from_tuples(new_tuples)
+        except (TypeError, IndexError):
+            return Index(new_tuples)
+[/REPLACE]

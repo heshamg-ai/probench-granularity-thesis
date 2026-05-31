@@ -1,0 +1,47 @@
+{
+  "id": 101,
+  "scenario_id": "xarray-10316",
+  "repo": "pydata/xarray",
+  "pr_number": 10316,
+  "baseline_sha": "54ef8d2b68fabe0eeba7033d0a7036b98b8ba927",
+  "reference_sha": "ce8f739b3f759d4306560c153e9c450952a18a20",
+  "task": "Optimize DataArray.isel when using vectorized indexing with duck arrays",
+  "entry_point": "xarray.DataArray.isel",
+  "whats_new": "Lazily indexed arrays now use less memory to store keys by avoiding copies in :py:class:`~xarray.indexing.VectorizedIndexer` and :py:class:`~xarray.indexing.OuterIndexer`",
+  "optimization_target": "Runtime, Memory",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/xarray-10316:baseline",
+      "digest": "sha256:9dfb40463b74c264a6cb973469a8bf07dfb23b244b6acce4c0693e7fe0d3ed11"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/xarray-10316:reference",
+      "digest": "sha256:8d3c06262ddd2249718b5782e34fc8322fd5f550d67ec40ba392c7724c68e722"
+    }
+  },
+  "params": [
+    {
+      "name": "n_select",
+      "short_indicator": "ni",
+      "explanation": "Number of indices in the vectorized indexer",
+      "values": [
+        "2000000",
+        "5000000"
+      ]
+    },
+    {
+      "name": "indexer_type",
+      "short_indicator": "nd",
+      "explanation": "Number of dimensions in the indexer pattern",
+      "values": [
+        "1",
+        "2"
+      ]
+    }
+  ],
+  "core_tests": [
+    "xarray/tests/test_dataarray.py::TestDataArray::test_isel_fancy",
+    "xarray/tests/test_dataset.py::TestDataset::test_isel_fancy"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize xarray.DataArray.isel for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize DataArray.isel when using vectorized indexing with duck arrays\nOptimization function: xarray.DataArray.isel\n\n\n[start of xarray/core/indexing.py]\n### Relevant context\n#### Class `xarray.core.indexing.OuterIndexer`\n```python\nclass OuterIndexer(ExplicitIndexer):\n    \"\"\"Tuple for outer/orthogonal indexing.\n\n    All elements should be int, slice or 1-dimensional np.ndarray objects with\n    an integer dtype. Indexing is applied independently along each axis, and\n    axes indexed with an integer are dropped from the result. This type of\n    indexing works like MATLAB/Fortran.\n    \"\"\"\n\n    __slots__ = ()\n\n    def __init__(\n        self,\n        key: tuple[\n            int | np.integer | slice | np.ndarray[Any, np.dtype[np.generic]], ...\n        ],\n    ):\n        if not isinstance(key, tuple):\n            raise TypeError(f\"key must be a tuple: {key!r}\")\n\n        new_key = []\n        for k in key:\n            if isinstance(k, integer_types):\n                k = int(k)\n            elif isinstance(k, slice):\n                k = as_integer_slice(k)\n            elif is_duck_array(k):\n                if not np.issubdtype(k.dtype, np.integer):\n                    raise TypeError(\n                        f\"invalid indexer array, does not have integer dtype: {k!r}\"\n                    )\n                if k.ndim > 1:  # type: ignore[union-attr]\n                    raise TypeError(\n                        f\"invalid indexer array for {type(self).__name__}; must be scalar \"\n                        f\"or have 1 dimension: {k!r}\"\n                    )\n                k = k.astype(np.int64)  # type: ignore[union-attr]\n            else:\n                raise TypeError(\n                    f\"unexpected indexer type for {type(self).__name__}: {k!r}\"\n                )\n            new_key.append(k)\n\n        super().__init__(tuple(new_key))\n```\n#### Class `xarray.core.indexing.VectorizedIndexer`\n```python\nclass VectorizedIndexer(ExplicitIndexer):\n    \"\"\"Tuple for vectorized indexing.\n\n    All elements should be slice or N-dimensional np.ndarray objects with an\n    integer dtype and the same number of dimensions. Indexing follows proposed\n    rules for np.ndarray.vindex, which matches NumPy's advanced indexing rules\n    (including broadcasting) except sliced axes are always moved to the end:\n    https://github.com/numpy/numpy/pull/6256\n    \"\"\"\n\n    __slots__ = ()\n\n    def __init__(self, key: tuple[slice | np.ndarray[Any, np.dtype[np.generic]], ...]):\n        if not isinstance(key, tuple):\n            raise TypeError(f\"key must be a tuple: {key!r}\")\n\n        new_key = []\n        ndim = None\n        for k in key:\n            if isinstance(k, slice):\n                k = as_integer_slice(k)\n            elif is_duck_array(k):\n                if not np.issubdtype(k.dtype, np.integer):\n                    raise TypeError(\n                        f\"invalid indexer array, does not have integer dtype: {k!r}\"\n                    )\n                if ndim is None:\n                    ndim = k.ndim  # type: ignore[union-attr]\n                elif ndim != k.ndim:  # type: ignore[union-attr]\n                    ndims = [k.ndim for k in key if isinstance(k, np.ndarray)]\n                    raise ValueError(\n                        \"invalid indexer key: ndarray arguments \"\n                        f\"have different numbers of dimensions: {ndims}\"\n                    )\n                k = k.astype(np.int64)  # type: ignore[union-attr]\n            else:\n                raise TypeError(\n                    f\"unexpected indexer type for {type(self).__name__}: {k!r}\"\n                )\n            new_key.append(k)\n\n        super().__init__(tuple(new_key))\n```\n[end of xarray/core/indexing.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

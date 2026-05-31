@@ -1,0 +1,27 @@
+
+
+Looking at the code, I need to find the `astype` method in `pandas/core/generic.py`. The key optimization target is the branch that handles extension dtypes for DataFrames (ndim > 1).
+
+Let me locate and optimize this section:
+
+pandas/core/generic.py
+[SEARCH]
+        elif is_extension_array_dtype(dtype) and self.ndim > 1:
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: use iloc to handle duplicate column names
+            # TODO(EA2D): special case not needed with 2D EAs
+            results = [
+                self.iloc[:, i].astype(dtype, copy=copy)
+                for i in range(len(self.columns))
+            ]
+[/SEARCH]
+[REPLACE]
+        elif is_extension_array_dtype(dtype) and self.ndim > 1:
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: use iloc to handle duplicate column names
+            # Use manager's astype method directly for better performance
+            # when converting all columns to the same extension dtype
+            new_data = self._mgr.astype(dtype=dtype, copy=copy, errors=errors)
+            res = self._constructor_from_mgr(new_data, axes=new_data.axes)
+            return res.__finalize__(self, method="astype")
+[/REPLACE]

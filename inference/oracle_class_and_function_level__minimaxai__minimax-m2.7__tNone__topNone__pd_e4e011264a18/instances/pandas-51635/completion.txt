@@ -1,0 +1,25 @@
+
+
+Looking at the `fillna` method, I need to add a fast path when the Arrow-backed array contains no nulls. This will avoid unnecessary processing with `pc.fill_null` when there are no nulls to fill.
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        if limit is not None:
+            return super().fillna(value=value, method=method, limit=limit)
+
+        if method is not None:
+            fallback_performancewarning()
+            return super().fillna(value=value, method=method, limit=limit)
+[/SEARCH]
+[REPLACE]
+        if limit is not None:
+            return super().fillna(value=value, method=method, limit=limit)
+
+        if method is not None:
+            fallback_performancewarning()
+            return super().fillna(value=value, method=method, limit=limit)
+
+        if self._pa_array.null_count == 0:
+            # Fast path: no nulls to fill, return a copy
+            return type(self)(self._pa_array)
+[/REPLACE]

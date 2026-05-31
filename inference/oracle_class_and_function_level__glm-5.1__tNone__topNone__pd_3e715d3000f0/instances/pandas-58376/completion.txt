@@ -1,0 +1,50 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def all(self, *args, **kwargs) -> bool:
+        return 0 not in self._range
+
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+[/SEARCH]
+[REPLACE]
+    def all(self, *args, **kwargs) -> bool:
+        return 0 not in self._range
+
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+
+    def value_counts(
+        self,
+        normalize: bool = False,
+        sort: bool = True,
+        ascending: bool = False,
+        bins=None,
+        dropna: bool = True,
+    ):
+        from pandas import Series
+
+        if bins is not None:
+            return super().value_counts(
+                normalize=normalize,
+                sort=sort,
+                ascending=ascending,
+                bins=bins,
+                dropna=dropna,
+            )
+
+        n = len(self)
+        if n == 0:
+            index_vals = np.array([], dtype=np.int64)
+            counts = np.array([], dtype=np.int64)
+        else:
+            index_vals = np.array([self[0]], dtype=np.int64)
+            counts = np.array([n], dtype=np.int64)
+
+        result = Series(counts, index=Index(index_vals), name="count", copy=False)
+
+        if normalize:
+            result = result / n
+            result.name = "proportion"
+
+        return result
+[/REPLACE]

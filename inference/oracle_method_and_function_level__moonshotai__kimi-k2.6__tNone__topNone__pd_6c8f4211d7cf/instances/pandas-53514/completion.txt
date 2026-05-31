@@ -1,0 +1,41 @@
+ pandas/core/frame.py
+[SEARCH]
+        else:
+            if not is_list_like(values):
+                raise TypeError(
+                    "only list-like or dict-like objects are allowed "
+                    "to be passed to DataFrame.isin(), "
+                    f"you passed a '{type(values).__name__}'"
+                )
+            # error: Argument 2 to "isin" has incompatible type "Union[Sequence[Any],
+            # Mapping[Any, Any]]"; expected "Union[Union[ExtensionArray,
+            # ndarray[Any, Any]], Index, Series]"
+            res_values = algorithms.isin(
+                self.values.ravel(),
+                values,  # type: ignore[arg-type]
+            )
+            result = self._constructor(
+                res_values.reshape(self.shape),
+                self.index,
+                self.columns,
+                copy=False,
+            )
+[/SEARCH]
+[REPLACE]
+        else:
+            if not is_list_like(values):
+                raise TypeError(
+                    "only list-like or dict-like objects are allowed "
+                    "to be passed to DataFrame.isin(), "
+                    f"you passed a '{type(values).__name__}'"
+                )
+            result = self._constructor(
+                {
+                    col: self[col].isin(values)
+                    for col in self.columns
+                },
+                self.index,
+                self.columns,
+                copy=False,
+            )
+[/REPLACE]

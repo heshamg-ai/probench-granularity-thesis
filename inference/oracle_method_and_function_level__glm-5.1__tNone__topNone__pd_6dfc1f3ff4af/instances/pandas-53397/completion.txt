@@ -1,0 +1,45 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    _typ = "rangeindex"
+[/SEARCH]
+[REPLACE]
+    _typ = "rangeindex"
+[/REPLACE]
+
+pandas/core/indexes/range.py
+[SEARCH]
+    _values: np.ndarray
+[/SEARCH]
+[REPLACE]
+    _values: np.ndarray
+
+    def take(
+        self,
+        indices,
+        axis=0,
+        allow_fill=True,
+        fill_value=None,
+        **kwargs,
+    ):
+        if kwargs:
+            nv.validate_take((), kwargs)
+        if is_scalar(indices):
+            raise TypeError("Expected indices to be array-like")
+
+        indices = ensure_platform_int(indices)
+
+        if allow_fill:
+            indices = indices.copy()
+            mask = indices == -1
+        else:
+            mask = None
+
+        start = self._range.start
+        step = self._range.step
+        taken = start + indices * step
+
+        if allow_fill and mask.any():
+            taken[mask] = self._na_value
+
+        return Index(taken, dtype=self.dtype, name=self.name)
+[/REPLACE]

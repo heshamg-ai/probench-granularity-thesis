@@ -1,0 +1,71 @@
+I'll optimize `QuantileRegressor.fit` for the `highs`-family solvers by improving memory efficiency and reducing redundant operations. The key optimizations are:
+
+1. **Avoid dense matrix construction for `highs` solvers**: When using `highs` family solvers with dense input, we currently convert to dense arrays via `np.eye(n_indices)` and `np.ones()`. But `scipy.optimize.linprog` with `highs` can accept sparse matrix format directly, which is more memory efficient. We should use sparse matrix format when possible.
+
+2. **Remove redundant `np.concatenate` for `c`**: Construct the `c` array more efficiently.
+
+3. **Avoid unnecessary copying in the sparse path**: The sparse path already works well, but we can unify the code paths better.
+
+4. **Key insight for `highs` solvers**: `highs`, `highs-ds`, and `highs-ipm` all support sparse input. When `X` is dense but we're using a `highs` solver, we should still construct `A_eq` as a sparse matrix to save memory (especially important for large `n_indices`).
+
+5. **Use `sparse.lil_matrix` or `sparse.vstack`/`hstack` efficiently**: For the dense-X-but-highs-solver case, build sparse matrices directly.
+
+Let me trace through the key hot path for `highs` solvers with dense X:
+- Currently: `eye = np.eye(n_indices)` creates a dense `(n_indices, n_indices)` array — this is O(n²) memory!
+- Then `A_eq = np.concatenate([ones, X, -ones, -X, eye, -eye], axis=1)` — huge dense matrix
+
+For `highs` solvers, we can instead build `A_eq` as a sparse matrix, dramatically reducing memory.
+
+sklearn/linear_model/_quantile.py
+[SEARCH]
+        if sparse.issparse(X):
+            if self.solver not in ["highs-ds", "highs-ipm", "highs"]:
+                raise ValueError(
+                    f"Solver {self.solver} does not support sparse X. "
+                    "Use solver 'highs' for example."
+                )
+            # Note that highs methods do convert to csc.
+            # Therefore, we work with csc matrices as much as possible.
+            eye = sparse.eye(n_indices, dtype=X.dtype, format="csc")
+            if self.fit_intercept:
+                ones = sparse.csc_matrix(np.ones(shape=(n_indices, 1)), dtype=X.dtype))
+                A_eq = sparse.hstack([ones, X, -ones, -X, eye, -eye], format="csc")
+            else:
+                A_eq = sparse.hstack([X, -X, eye, -eye], format="csc")
+        else:
+            eye = np.eye(n_indices)
+            if self.fit_intercept:
+                ones = np.ones((n_indices, 1))
+                A_eq = np.concatenate([ones, X, -ones, -X, eye, -eye], axis=1)
+            else:
+                A_eq = np.concatenate([X, -X, eye, -eye], axis=1)
+[/SEARCH]
+[REPLACE]
+        # For highs solvers, always use sparse A_eq for memory efficiency.
+        use_sparse = sparse.issparse(X) or self.solver in (
+            "highs-ds",
+            "highs-ipm",
+            "highs",
+        )
+        if use_sparse:
+            if self.solver not in ["highs-ds", "highs-ipm", "highs"]:
+                raise ValueError(
+                    f"Solver {self.solver} does not support sparse X. "
+                    "Use solver 'highs' for example."
+                )
+            # Note that highs methods do convert to csc.
+            # Therefore, we work with csc matrices as much as possible.
+            eye = sparse.eye(n_indices, dtype=X.dtype, format="csc")
+            if self.fit_intercept:
+                ones = sparse.csc_matrix(np.ones(shape=(n_indices, 1)), dtype=X.dtype)
+                A_eq = sparse.hstack([ones, X, -ones, -X, eye, -eye], format="csc")
+            else:
+                A_eq = sparse.hstack([X, -X, eye, -eye], format="csc")
+        else:
+            eye = np.eye(n_indices)
+            if self.fit_intercept:
+                ones = np.ones((n_indices, 1))
+                A_eq = np.concatenate([ones, X, -ones, -X, eye, -eye], axis=1)
+            else:
+                A_eq = np.concatenate([X, -X, eye, -eye], axis=1)
+[/REPLACE]

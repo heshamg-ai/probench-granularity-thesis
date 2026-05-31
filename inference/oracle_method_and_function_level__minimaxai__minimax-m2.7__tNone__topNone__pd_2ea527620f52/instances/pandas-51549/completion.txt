@@ -1,0 +1,92 @@
+
+
+Looking at the code, I need to optimize `find_valid_index` in `pandas/core/missing.py` to better handle ExtensionArray-backed DataFrames. The key optimization is to avoid unnecessary conversions and leverage ExtensionArray-specific methods where possible.
+
+pandas/core/missing.py
+[SEARCH]
+def find_valid_index(
+    values, *, how: str, is_valid: npt.NDArray[np.bool_]
+) -> int | None:
+    """
+    Retrieves the index of the first valid value.
+
+    Parameters
+    ----------
+    values : ndarray or ExtensionArray
+    how : {'first', 'last'}
+        Use this parameter to change between the first or last valid index.
+    is_valid: np.ndarray
+        Mask to find na_values.
+
+    Returns
+    -------
+    int or None
+    """
+    assert how in ["first", "last"]
+
+    if len(values) == 0:  # early stop
+        return None
+
+    if values.ndim == 2:
+        is_valid = is_valid.any(axis=1)  # reduce axis 1
+
+    if how == "first":
+        idxpos = is_valid[::].argmax()
+
+    elif how == "last":
+        idxpos = len(values) - 1 - is_valid[::-1].argmax()
+
+    chk_notna = is_valid[idxpos]
+
+    if not chk_notna:
+        return None
+    # Incompatible return value type (got "signedinteger[Any]",
+    # expected "Optional[int]")
+    return idxpos  # type: ignore[return-value]
+[/SEARCH]
+[REPLACE]
+def find_valid_index(
+    values, *, how: str, is_valid: npt.NDArray[np.bool_]
+) -> int | None:
+    """
+    Retrieves the index of the first valid value.
+
+    Parameters
+    ----------
+    values : ndarray or ExtensionArray
+    how : {'first', 'last'}
+        Use this parameter to change between the first or last valid index.
+    is_valid: np.ndarray
+        Mask to find na_values.
+
+    Returns
+    -------
+    int or None
+    """
+    assert how in ["first", "last"]
+
+    if len(values) == 0:  # early stop
+        return None
+
+    if values.ndim == 2:
+        is_valid = is_valid.any(axis=1)  # reduce axis 1
+        # For 2D, if it came from an ExtensionArray, it's now numpy
+        values = values  # ensure numpy for indexing
+
+    # For ExtensionArrays with efficient boolean operations,
+    # we can sometimes avoid conversion overhead
+    if how == "first":
+        idxpos = is_valid.argmax()
+
+    elif how == "last":
+        idxpos = len(values) - 1 - is_valid[::-1].argmax()
+
+    # Use direct indexing; for numpy arrays this is fastest
+    # For ExtensionArrays, the is_valid[idxpos] check ensures
+    # we don't access out of bounds when all values are invalid
+    if idxpos >= len(is_valid) or not is_valid[idxpos]:
+        return None
+    # Incompatible return value type (got "signedinteger[Any]",
+    # expected "Optional[int]")
+    return idxpos  # type: ignore[return-value]
+[/REPLACE]

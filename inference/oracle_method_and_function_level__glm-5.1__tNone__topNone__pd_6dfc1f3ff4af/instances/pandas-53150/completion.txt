@@ -1,0 +1,29 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+            seps: list[str] | list[bytes]
+            if pa.types.is_string(pa_type):
+                seps = [""] * length
+            else:
+                seps = [b""] * length
+
+            if is_scalar(other):
+                other = [other] * length
+            elif isinstance(other, type(self)):
+                other = other._pa_array
+[/SEARCH]
+[REPLACE]
+            seps: pa.Array | None
+            if is_scalar(other):
+                if pa.types.is_string(pa_type):
+                    seps = pa.array([""] * length, type=pa.utf8())
+                    other = pa.array([other] * length, type=pa.utf8())
+                else:
+                    seps = pa.array([b""] * length, type=pa.binary())
+                    other = pa.array([other] * length, type=pa.binary())
+            elif isinstance(other, type(self)):
+                other = other._pa_array
+                if pa.types.is_string(pa_type):
+                    seps = pa.array([""] * length, type=pa.utf8())
+                else:
+                    seps = pa.array([b""] * length, type=pa.binary())
+[/REPLACE]

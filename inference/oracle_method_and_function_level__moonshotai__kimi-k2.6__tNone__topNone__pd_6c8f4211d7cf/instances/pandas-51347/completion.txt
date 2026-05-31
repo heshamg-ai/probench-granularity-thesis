@@ -1,0 +1,61 @@
+ pandas/core/arrays/arrow/array.py
+[SEARCH]
+        if (
+            is_object_dtype(dtype)
+            or pa.types.is_timestamp(pa_type)
+            or pa.types.is_duration(pa_type)
+        ):
+            result = np.array(list(self), dtype=dtype)
+[/SEARCH]
+[REPLACE]
+        if (
+            is_object_dtype(dtype)
+            or pa.types.is_timestamp(pa_type)
+            or pa.types.is_duration(pa_type)
+        ):
+            result = np.empty(len(self), dtype=dtype)
+            mask = self.isna()
+            has_mask = bool(mask.any())
+            if has_mask:
+                result[mask] = na_value
+            from pandas.core.arrays.masked import BaseMaskedArray
+
+            if pa.types.is_duration(pa_type) or (
+                pa.types.is_timestamp(pa_type) and pa_type.unit in ["us", "ns"]
+            ):
+                # timestamps with us/ns and durations have no direct numpy
+                # equivalent, so fallback to object conversion via python
+                if has_mask:
+                    not_mask = ~mask
+                    result[not_mask] = np.asarray(
+                        self._data.filter(pa.array(not_mask)).to_pylist(),
+                        dtype=dtype,
+                    )
+                else:
+                    result[:] = np.asarray(self._data.to_pylist(), dtype=dtype)
+            else:
+                arr = self._data.combine_chunks()
+                if pa.types.is_timestamp(pa_type):
+                    # fast path for timestamp types that fit in numpy datetime64
+                    if has_mask:
+                        not_mask = ~mask
+                        result[not_mask] = arr.to_numpy(
+                            zero_copy_only=False,
+                            dtype=dtype,
+                        )[not_mask]
+                    else:
+                        result[:] = arr.to_numpy(
+                            zero_copy_only=False,
+                            dtype=dtype,
+                        )
+                else:
+                    # string, binary, list, struct, etc.
+                    if has_mask:
+                        not_mask = ~mask
+                        result[not_mask] = np.asarray(
+                            arr.filter(pa.array(not_mask)).to_pylist(),
+                            dtype=dtype,
+                        )
+                    else:
+                        result[:] = np.asarray(arr.to_pylist(), dtype=dtype)
+[/REPLACE]

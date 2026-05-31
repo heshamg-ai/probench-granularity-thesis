@@ -1,0 +1,133 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+    # get left & right join labels and num. of levels at each location
+[/SEARCH]
+[REPLACE]
+    # get left & right join labels and num. of levels at each location
+    # fast-path for monotonic, sorted single-key merges without NAs
+    if len(left_keys) == 1 and len(right_keys) == 1 and how in ("inner", "left", "right"):
+        try:
+            larr = np.asarray(left_keys[0])
+            rarr = np.asarray(right_keys[0])
+        except Exception:
+            larr = None
+            rarr = None
+        if isinstance(larr, np.ndarray) and isinstance(rarr, np.ndarray):
+            if larr.ndim == 1 and rarr.ndim == 1 and len(larr) == left_n and len(rarr) == right_n:
+                # require comparable, ordered dtypes and matching kinds
+                if larr.dtype.kind in ("b", "i", "u", "f", "m", "M", "S", "U") and larr.dtype.kind == rarr.dtype.kind:
+                    try:
+                        l_mono = larr.size < 2 or (larr[1:] >= larr[:-1]).all()
+                        r_mono = rarr.size < 2 or (rarr[1:] >= rarr[:-1]).all()
+                    except Exception:
+                        l_mono = False
+                        r_mono = False
+                    if l_mono and r_mono:
+                        from pandas.core.dtypes.missing import isna
+                        # exclude if any NA to preserve exact matching semantics
+                        if not (isna(larr).any() or isna(rarr).any()):
+                            return _monotonic_join_indexers(larr, rarr, how, sort)
+[/REPLACE]
+
+pandas/core/reshape/merge.py
+[SEARCH]
+    return join_func(lkey, rkey, count, **kwargs)  # type: ignore[operator]
+[/SEARCH]
+[REPLACE]
+    return join_func(lkey, rkey, count, **kwargs)  # type: ignore[operator]
+
+
+def _monotonic_join_indexers(left, right, how: str, sort: bool):
+    """
+    Specialized join indexer computation for single-key merges when both left and
+    right keys are 1-D, monotonic non-decreasing, contain no missing values,
+    and have comparable dtypes.
+
+    Parameters
+    ----------
+    left : np.ndarray
+    right : np.ndarray
+    how : {'inner', 'left', 'right'}
+    sort : bool
+
+    Returns
+    -------
+    (left_indexer, right_indexer) : tuple of np.ndarray[np.intp]
+    """
+    # run-length encode equal-value groups
+    def _runs(arr):
+        n = arr.size
+        if n == 0:
+            return np.empty(0, dtype=np.intp), np.empty(0, dtype=np.intp), arr
+        diffs = arr[1:] != arr[:-1]
+        starts = np.r_[0, 1 + np.flatnonzero(diffs)].astype(np.intp, copy=False)
+        counts = np.diff(np.r_[starts, n]).astype(np.intp, copy=False)
+        vals = arr[starts]
+        return starts, counts, vals
+
+    l_starts, l_counts, l_vals = _runs(left)
+    r_starts, r_counts, r_vals = _runs(right)
+
+    i = 0
+    j = 0
+    L_chunks = []
+    R_chunks = []
+
+    while i < len(l_starts) and j < len(r_starts):
+        lv = l_vals[i]
+        rv = r_vals[j]
+        if lv == rv:
+            ll = int(l_counts[i])
+            rr = int(r_counts[j])
+            lrange = np.arange(l_starts[i], l_starts[i] + ll, dtype=np.intp)
+            rrange = np.arange(r_starts[j], r_starts[j] + rr, dtype=np.intp)
+            if how == "right":
+                # right-major within-group ordering
+                L_chunks.append(np.tile(lrange, rr))
+                R_chunks.append(np.repeat(rrange, ll))
+            else:
+                # left-major within-group ordering (inner/left)
+                L_chunks.append(np.repeat(lrange, rr))
+                R_chunks.append(np.tile(rrange, ll))
+            i += 1
+            j += 1
+        elif lv < rv:
+            if how in ("left", "outer"):
+                ll = int(l_counts[i])
+                lrange = np.arange(l_starts[i], l_starts[i] + ll, dtype=np.intp)
+                L_chunks.append(lrange)
+                R_chunks.append(np.full(ll, -1, dtype=np.intp))
+            i += 1
+        else:
+            if how in ("right", "outer"):
+                rr = int(r_counts[j])
+                rrange = np.arange(r_starts[j], r_starts[j] + rr, dtype=np.intp)
+                L_chunks.append(np.full(rr, -1, dtype=np.intp))
+                R_chunks.append(rrange)
+            j += 1
+
+    # leftovers
+    if how in ("left", "outer"):
+        while i < len(l_starts):
+            ll = int(l_counts[i])
+            lrange = np.arange(l_starts[i], l_starts[i] + ll, dtype=np.intp)
+            L_chunks.append(lrange)
+            R_chunks.append(np.full(ll, -1, dtype=np.intp))
+            i += 1
+    if how in ("right", "outer"):
+        while j < len(r_starts):
+            rr = int(r_counts[j])
+            rrange = np.arange(r_starts[j], r_starts[j] + rr, dtype=np.intp)
+            L_chunks.append(np.full(rr, -1, dtype=np.intp))
+            R_chunks.append(rrange)
+            j += 1
+
+    if L_chunks:
+        left_indexer = np.concatenate(L_chunks).astype(np.intp, copy=False)
+        right_indexer = np.concatenate(R_chunks).astype(np.intp, copy=False)
+    else:
+        left_indexer = np.empty(0, dtype=np.intp)
+        right_indexer = np.empty(0, dtype=np.intp)
+
+    return left_indexer, right_indexer
+[/REPLACE]

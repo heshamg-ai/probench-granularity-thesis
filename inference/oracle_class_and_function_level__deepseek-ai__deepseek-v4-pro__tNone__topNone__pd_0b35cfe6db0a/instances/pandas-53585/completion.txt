@@ -1,0 +1,23 @@
+pandas/core/strings/accessor.py
+[SEARCH]
+        if regex is False and is_re(pat):
+            raise ValueError(
+                "Cannot use a compiled regex as replacement pattern with regex=False"
+            )
+        if is_re(pat):
+            regex = True
+        result = self._data.array._str_split(pat, n, expand, regex)
+        return self._wrap_result(result, returns_string=expand, expand=expand)
+[/SEARCH]
+[REPLACE]
+        if regex is False and is_re(pat):
+            raise ValueError(
+                "Cannot use a compiled regex as replacement pattern with regex=False"
+            )
+        if is_re(pat):
+            regex = True
+        result = self._data.array._str_split(pat, n, expand, regex)
+        if expand and isinstance(result, ArrowExtensionArray) and result._hasna:
+            result = result._pa_array.fill_null([None])
+        return self._wrap_result(result, returns_string=expand, expand=expand)
+[/REPLACE]

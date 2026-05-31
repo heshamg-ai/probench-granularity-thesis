@@ -1,0 +1,61 @@
+pandas/core/generic.py
+[SEARCH]
+            cond = cond.align(self, join="right")[0]
+[/SEARCH]
+[REPLACE]
+            if cond.index.equals(self.index) and cond.columns.equals(self.columns):
+                # fastpath: already aligned to self
+                pass
+            else:
+                cond = cond.align(self, join="right")[0]
+[/REPLACE]
+
+pandas/core/generic.py
+[SEARCH]
+        cond = cond.infer_objects()
+[/SEARCH]
+[REPLACE]
+        if isinstance(cond, ABCDataFrame):
+            # only infer when object dtype present to avoid per-column overhead
+            if (cond.dtypes == object).any():
+                cond = cond.infer_objects()
+        else:
+            cond = cond.infer_objects()
+[/REPLACE]
+
+pandas/core/generic.py
+[SEARCH]
+        cond = cond.reindex(self._info_axis, axis=self._info_axis_number)
+[/SEARCH]
+[REPLACE]
+        if not (isinstance(cond, ABCDataFrame) and cond.columns.equals(self._info_axis)):
+            cond = cond.reindex(self._info_axis, axis=self._info_axis_number)
+[/REPLACE]
+
+pandas/core/generic.py
+[SEARCH]
+                other = self.align(
+                    other,
+                    join="left",
+                    axis=axis,
+                    level=level,
+                    fill_value=None,
+                )[1]
+[/SEARCH]
+[REPLACE]
+                # fastpath: skip alignment if already indexed same as self (both axes)
+                need_align = True
+                if hasattr(other, "_indexed_same"):
+                    if axis is None:
+                        need_align = not other._indexed_same(self)
+                    else:
+                        need_align = not other._indexed_same(self)
+                if need_align:
+                    other = self.align(
+                        other,
+                        join="left",
+                        axis=axis,
+                        level=level,
+                        fill_value=None,
+                    )[1]
+[/REPLACE]

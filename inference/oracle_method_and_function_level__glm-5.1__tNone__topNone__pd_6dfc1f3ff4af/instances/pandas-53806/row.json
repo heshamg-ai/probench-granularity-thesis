@@ -1,0 +1,46 @@
+{
+  "id": 34,
+  "scenario_id": "pandas-53806",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 53806,
+  "baseline_sha": "af83376640ec7d86cb3166d0e01052dc6648bfdf",
+  "reference_sha": "98cb4e7a3374a204d6ca99b1b00645122e9cd3f4",
+  "task": "Optimize SeriesGroupBy.size on already-sorted MultiIndex levels",
+  "entry_point": "pandas.core.groupby.SeriesGroupBy.size",
+  "whats_new": "Performance improvement in MultiIndex and multi-column operations (e.g. DataFrame.sort_values, DataFrame.groupby, Series.unstack) when index/column values are already sorted",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-53806:baseline",
+      "digest": "sha256:08e74df5b021b562ac18894f098b05e690afd59482afb419b928d3e071ef5959"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-53806:reference",
+      "digest": "sha256:56936a25e7ba3ed2ef3a0d10eaf48627f7a69ac9a67e7b9ed31cdfcbcf702ea3"
+    }
+  },
+  "params": [
+    {
+      "name": "Rows",
+      "short_indicator": "R",
+      "explanation": "Number of rows in the sorted MultiIndex",
+      "values": [
+        "100000",
+        "1000000",
+        "10000000"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/groupby/test_groupby.py::test_groupby_sort_multiindex_series",
+    "pandas/tests/groupby/test_size.py::test_size",
+    "pandas/tests/groupby/test_size.py::test_size_sort",
+    "pandas/tests/groupby/test_size.py::test_size_on_categorical",
+    "pandas/tests/groupby/test_categorical.py::test_sorted_missing_category_values",
+    "pandas/tests/indexes/multi/test_sorting.py::test_remove_unused_levels_large",
+    "pandas/tests/groupby/test_grouping.py::TestGetGroup::test_gb_key_len_equal_axis_len",
+    "pandas/tests/test_sorting.py::TestSorting::test_int64_overflow_groupby_large_range",
+    "pandas/tests/frame/test_stack_unstack.py::TestStackUnstackMultiLevel::test_unstack_group_index_overflow"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.core.groupby.SeriesGroupBy.size for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n- Only change what directly improves the optimization target.\n\nOPTIMIZATION REQUEST:\nOptimize SeriesGroupBy.size on already-sorted MultiIndex levels\nOptimization function: pandas.core.groupby.SeriesGroupBy.size\n\n\n[start of pandas/core/sorting.py]\n### Relevant context\n#### Function `pandas.core.sorting.compress_group_index`\n```python\ndef compress_group_index(\n    group_index: npt.NDArray[np.int64], sort: bool = True\n) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:\n    \"\"\"\n    Group_index is offsets into cartesian product of all possible labels. This\n    space can be huge, so this function compresses it, by computing offsets\n    (comp_ids) into the list of unique labels (obs_group_ids).\n    \"\"\"\n    size_hint = len(group_index)\n    table = hashtable.Int64HashTable(size_hint)\n\n    group_index = ensure_int64(group_index)\n\n    # note, group labels come out ascending (ie, 1,2,3 etc)\n    comp_ids, obs_group_ids = table.get_labels_groupby(group_index)\n\n    if sort and len(obs_group_ids) > 0:\n        obs_group_ids, comp_ids = _reorder_by_uniques(obs_group_ids, comp_ids)\n\n    return ensure_int64(comp_ids), ensure_int64(obs_group_ids)\n```\n[end of pandas/core/sorting.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

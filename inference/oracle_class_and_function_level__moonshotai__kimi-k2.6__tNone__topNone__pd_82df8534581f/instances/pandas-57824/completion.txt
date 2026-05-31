@@ -1,0 +1,67 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def _getitem_slice(self, slobj: slice) -> Self:
+        """
+        Fastpath for __getitem__ when we know we have a slice.
+        """
+        res = self._range[slobj]
+        return type(self)._simple_new(res, name=self._name)
+[/SEARCH]
+[REPLACE]
+    def _getitem_slice(self, slobj: slice) -> Self:
+        """
+        Fastpath for __getitem__ when we know we have a slice.
+        """
+        res = self._range[slobj]
+        return type(self)._simple_new(res, name=self._name)
+
+    def round(self, decimals: int = 0) -> Self:
+        """
+        Round each value in the Index to the given number of decimals.
+
+        Parameters
+        ----------
+        decimals : int, optional
+            Number of decimal places to round to. If decimals is negative,
+            it specifies the number of positions to the left of the decimal point.
+
+        Returns
+        -------
+        Index
+            A new Index with the rounded values.
+
+        Examples
+        --------
+        >>> import pandas as pd
+        >>> idx = pd.RangeIndex(0, 5)
+        >>> idx.round(decimals=2)
+        RangeIndex(start=0, stop=5, step=1)
+        """
+        if decimals >= 0:
+            # Integer values rounded to any non-negative decimal places
+            # are still the same integers
+            return self.copy()
+        else:
+            # For negative decimals, we need to check if the rounding
+            # affects the values
+            factor = 10 ** (-decimals)
+            start_q, start_r = divmod(self.start, factor)
+            stop_q, stop_r = divmod(self.stop, factor)
+            step_q, step_r = divmod(self.step, factor)
+
+            # Check if start, stop, and step are all exact multiples of factor
+            if start_r == 0 and stop_r == 0 and step_r == 0 and self.step != 0:
+                # All values are exact multiples, result is still a RangeIndex
+                new_start = start_q * factor
+                new_stop = stop_q * factor
+                new_step = step_q * factor
+                # Need to verify the rounded values form a valid range
+                try:
+                    result = type(self)(new_start, new_stop, new_step, name=self.name)
+                    return result
+                except ValueError:
+                    pass
+            # Fall back to converting to array and rounding
+            rounded = np.round(self._data, decimals)
+            return self._shallow_copy(rounded, name=self.name)
+[/REPLACE]

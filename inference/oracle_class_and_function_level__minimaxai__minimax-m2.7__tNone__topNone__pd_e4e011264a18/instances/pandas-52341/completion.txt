@@ -1,0 +1,138 @@
+
+
+Looking at the context, I need to optimize `Series.any` for boolean Series. The key insight is that for boolean dtypes, we can implement an optimized path that avoids unnecessary overhead in `_get_values`.
+
+Let me trace the call path:
+1. `Series.any()` → `_reduce()` → calls `nanops.nanany()` for numpy arrays
+2. `nanany()` calls `_get_values()` which has overhead for mask handling
+
+For boolean Series with `skipna=True`:
+- Boolean data cannot contain NaN, so we don't need mask computation
+- We can short-circuit on the first True value
+- We should only return False if the series is empty or all False
+
+Let me implement the optimization:
+<minimax:tool_call>
+pandas/core/nanops.py
+[SEARCH]
+def nanany(
+    values: np.ndarray,
+    *,
+    axis: AxisInt | None = None,
+    skipna: bool = True,
+    mask: npt.NDArray[np.bool_] | None = None,
+) -> bool:
+    """
+    Check if any elements along an axis evaluate to True.
+
+    Parameters
+    ----------
+    values : ndarray
+    axis : int, optional
+    skipna : bool, default True
+    mask : ndarray[bool], optional
+        nan-mask if known
+
+    Returns
+    -------
+    result : bool
+
+    Examples
+    --------
+    >>> from pandas.core import nanops
+    >>> s = pd.Series([1, 2])
+    >>> nanops.nanany(s.values)
+    True
+
+    >>> from pandas.core import nanops
+    >>> s = pd.Series([np.nan])
+    >>> nanops.nanany(s.values)
+    False
+    """
+    if needs_i8_conversion(values.dtype) and values.dtype.kind != "m":
+        # GH#34479
+        warnings.warn(
+            "'any' with datetime64 dtypes is deprecated and will raise in a "
+            "future version. Use (obj != pd.Timestamp(0)).any() instead.",
+            FutureWarning,
+            stacklevel=find_stack_level(),
+        )
+
+    values, _, _, _, _ = _get_values(values, skipna, fill_value=False, mask=mask)
+
+    # For object type, any won't necessarily return
+    # boolean values (numpy/numpy#4352)
+    if is_object_dtype(values):
+        values = values.astype(bool)
+
+    # error: Incompatible return value type (got "Union[bool_, ndarray]", expected
+    # "bool")
+    return values.any(axis)  # type: ignore[return-value]
+[/SEARCH]
+[REPLACE]
+def nanany(
+    values: np.ndarray,
+    *,
+    axis: AxisInt | None = None,
+    skipna: bool = True,
+    mask: npt.NDArray[np.bool_] | None = None,
+) -> bool:
+    """
+    Check if any elements along an axis evaluate to True.
+
+    Parameters
+    ----------
+    values : ndarray
+    axis : int, optional
+    skipna : bool, default True
+    mask : ndarray[bool], optional
+        nan-mask if known
+
+    Returns
+    -------
+    result : bool
+
+    Examples
+    --------
+    >>> from pandas.core import nanops
+    >>> s = pd.Series([1, 2])
+    >>> nanops.nanany(s.values)
+    True
+
+    >>> from pandas.core import nanops
+    >>> s = pd.Series([np.nan])
+    >>> nanops.nanany(s.values)
+    False
+    """
+    if needs_i8_conversion(values.dtype) and values.dtype.kind != "m":
+        # GH#34479
+        warnings.warn(
+            "'any' with datetime64 dtypes is deprecated and will raise in a "
+            "future version. Use (obj != pd.Timestamp(0)).any() instead.",
+            FutureWarning,
+            stacklevel=find_stack_level(),
+        )
+
+    # Fast path for boolean dtype: booleans cannot contain NaN, so we don't
+    # need mask computation. Use np.any directly which short-circuits.
+    if skipna and is_bool_dtype(values.dtype):
+        # Only need to check for empty case with axis=None
+        if axis is None:
+            if values.size == 0:
+                return False
+            return np.any(values)
+        elif values.shape[axis] == 0:
+            return False
+        return np.any(values, axis=axis)
+
+    values, _, _, _, _ = _get_values(values, skipna, fill_value=False, mask=mask)
+
+    # For object type, any won't necessarily return
+    # boolean values (numpy/numpy#4352)
+    if is_object_dtype(values):
+        values = values.astype(bool)
+
+    # error: Incompatible return value type (got "Union[bool_, ndarray]", expected
+    # "bool")
+    return values.any(axis)  # type: ignore[return-value]
+[/REPLACE]

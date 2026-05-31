@@ -1,0 +1,198 @@
+
+
+Let me analyze the code to find the right optimization location. The key code is in the `_wrap_result` method of `StringMethods` class where it handles Arrow-backed strings with `expand=True`.
+[TO REFINE]
+
+Looking at the `_wrap_result` method in `pandas/core/strings/accessor.py`, I can see the section that handles Arrow-backed strings with `expand=True`. The current implementation has several inefficiencies:
+
+1. Uses `value_lengths()` which iterates through all values
+2. For uniform length lists (`min_len == max_len`), still goes through the complex dictionary building path
+3. Uses Python-level iteration to build column arrays
+
+Let me look at the exact location to optimize:
+[TO REFINE]
+
+The optimization targets the section handling `isinstance(result.dtype, ArrowDtype)` in `_wrap_result`. The main improvements:
+
+1. Skip expensive `value_lengths()`, `max()`, `min()` when not needed
+2. For uniform-length lists (`min_len == max_len`), extract columns directly using `pa.compute.list_element`
+3. For variable-length with PyArrow >= 11.0, use optimized `list_slice` with `return_fixed_size_list=True`
+
+Let me create the replacement blocks:
+[TO REFINE]
+
+The current code:
+```python
+                value_lengths = result._pa_array.combine_chunks().value_lengths()
+                max_len = pa.compute.max(value_lengths).as_py()
+                min_len = pa.compute.min(value_lengths).as_py()
+                if result._hasna:
+                    # ArrowExtensionArray.fillna doesn't work for list scalars
+                    result = ArrowExtensionArray(
+                        result._pa_array.fill_null([None] * max_len)
+                    )
+                if min_len < max_len:
+                    # append nulls to each scalar list element up to max_len
+                    if not pa_version_under11p0:
+                        result = ArrowExtensionArray(
+                            pa.compute.list_slice(
+                                result._pa_array,
+                                start=0,
+                                stop=max_len,
+                                return_fixed_size_list=True,
+                            )
+                        )
+                    else:
+                        all_null = np.full(max_len, fill_value=None, dtype=object)
+                        values = result.to_numpy()
+                        new_values = []
+                        for row in values:
+                            if len(row) < max_len:
+                                nulls = all_null[: max_len - len(row)]
+                                row = np.append(row, nulls)
+                            new_values.append(row)
+                        pa_type = result._pa_array.type
+                        result = ArrowExtensionArray(pa.array(new_values, type=pa_type))
+                if name is not None:
+                    labels = name
+                else:
+                    labels = range(max_len)
+                result = {
+                    label: ArrowExtensionArray(pa.array(res))
+                    for label, res in zip(labels, (zip(*result.tolist())))
+                }
+```
+
+The optimization will:
+1. Compute `max_len` and `min_len` only when necessary
+2. Use efficient `pa.compute.list_element` for uniform-length lists
+3. Avoid Python-level iteration for column extraction
+
+Let me create the replacement:
+[TO REFINE]
+
+pandas/core/strings/accessor.py
+[SEARCH]
+                if isinstance(result.dtype, ArrowDtype):
+                    import pyarrow as pa
+
+                    from pandas.compat import pa_version_under11p0
+
+                    from pandas.core.arrays.arrow.array import ArrowExtensionArray
+
+                    value_lengths = result._pa_array.combine_chunks().value_lengths()
+                    max_len = pa.compute.max(value_lengths).as_py()
+                    min_len = pa.compute.min(value_lengths).as_py()
+                    if result._hasna:
+                        # ArrowExtensionArray.fillna doesn't work for list scalars
+                        result = ArrowExtensionArray(
+                            result._pa_array.fill_null([None] * max_len)
+                        )
+                    if min_len < max_len:
+                        # append nulls to each scalar list element up to max_len
+                        if not pa_version_under11p0:
+                            result = ArrowExtensionArray(
+                                pa.compute.list_slice(
+                                    result._pa_array,
+                                    start=0,
+                                    stop=max_len,
+                                    return_fixed_size_list=True,
+                                )
+                            )
+                        else:
+                            all_null = np.full(max_len, fill_value=None, dtype=object)
+                            values = result.to_numpy()
+                            new_values = []
+                            for row in values:
+                                if len(row) < max_len:
+                                    nulls = all_null[: max_len - len(row)]
+                                    row = np.append(row, nulls)
+                                new_values.append(row)
+                            pa_type = result._pa_array.type
+                            result = ArrowExtensionArray(pa.array(new_values, type=pa_type))
+                    if name is not None:
+                        labels = name
+                    else:
+                        labels = range(max_len)
+                    result = {
+                        label: ArrowExtensionArray(pa.array(res))
+                        for label, res in zip(labels, (zip(*result.tolist())))
+                    }
+[/SEARCH]
+[REPLACE]
+                if isinstance(result.dtype, ArrowDtype):
+                    import pyarrow as pa
+
+                    from pandas.compat import pa_version_under11p0
+
+                    from pandas.core.arrays.arrow.array import ArrowExtensionArray
+
+                    # Combine chunks for efficient processing
+                    combined = result._pa_array.combine_chunks()
+                    value_lengths = combined.value_lengths()
+                    max_len = pa.compute.max(value_lengths).as_py()
+                    min_len = pa.compute.min(value_lengths).as_py()
+
+                    if result._hasna or min_len < max_len:
+                        if min_len < max_len and not pa_version_under11p0:
+                            # Use efficient list_slice to pad shorter lists
+                            # This returns fixed-size lists which is more efficient
+                            combined = pa.compute.list_slice(
+                                combined,
+                                start=0,
+                                stop=max_len,
+                                return_fixed_size_list=True,
+                            )
+                        elif result._hasna:
+                            # ArrowExtensionArray.fillna doesn't work for list scalars
+                            combined = combined.fill_null([None] * max_len)
+                        if min_len < max_len and pa_version_under11p0:
+                            # Fallback for older PyArrow versions
+                            all_null = np.full(max_len, fill_value=None, dtype=object)
+                            values = result.to_numpy()
+                            new_values = []
+                            for row in values:
+                                if len(row) < max_len:
+                                    nulls = all_null[: max_len - len(row)]
+                                    row = np.append(row, nulls)
+                                new_values.append(row)
+                            pa_type = result._pa_array.type
+                            combined = pa.array(new_values, type=pa_type)
+
+                    if name is not None:
+                        labels = name
+                    else:
+                        labels = range(max_len)
+
+                    # Fast path: if lists have uniform length, extract columns directly
+                    # using PyArrow compute functions instead of Python iteration
+                    if min_len == max_len:
+                        # Extract each column using list_element
+                        columns_data = {}
+                        combined_chunked = pa.chunked_array([combined])
+                        for col_idx in range(max_len):
+                            col_array = pa.compute.list_element(
+                                combined_chunked, col_idx
+                            ).combine_chunks()
+                            columns_data[labels[col_idx]] = ArrowExtensionArray(col_array)
+                        result = columns_data
+                    else:
+                        # Variable length case: need to handle None padding
+                        columns_data = {}
+                        for col_idx in range(max_len):
+                            col_arrays = []
+                            for chunk in combined.chunks:
+                                # Get element at position col_idx, with None for null lists
+                                values = []
+                                for i in range(len(chunk)):
+                                    list_val = chunk[i]
+                                    if list_val.is_valid and len(list_val) > col_idx:
+                                        values.append(list_val[col_idx].as_py())
+                                    else:
+                                        values.append(None)
+                                col_arrays.append(pa.array(values, from_pylist=values))
+                            columns_data[labels[col_idx]] = ArrowExtensionArray(
+                                pa.chunked_array(col_arrays)
+                            )
+                        result = columns_data
+[/REPLACE]

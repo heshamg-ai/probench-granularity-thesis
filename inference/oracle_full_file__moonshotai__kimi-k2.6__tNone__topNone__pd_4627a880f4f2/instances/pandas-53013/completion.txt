@@ -1,0 +1,26 @@
+ pandas/core/arrays/masked.py
+[SEARCH]
+    def reshape(self, *args, **kwargs) -> Self:
+        data = self._data.reshape(*args, **kwargs)
+        mask = self._mask.reshape(*args, **kwargs)
+        return type(self)(data, mask)
+[/SEARCH]
+[REPLACE]
+    def reshape(self, *args, **kwargs) -> Self:
+        # Use np.reshape with order keyword if provided for consistent behavior
+        # but avoid overhead of *args, **kwargs unpacking when possible
+        if len(args) == 1 and not kwargs:
+            # Common case: single tuple/list argument
+            shape = args[0]
+            data = self._data.reshape(shape)
+            mask = self._mask.reshape(shape)
+        elif not kwargs:
+            # Multiple positional arguments
+            data = self._data.reshape(*args)
+            mask = self._mask.reshape(*args)
+        else:
+            # General case with kwargs (e.g., order)
+            data = self._data.reshape(*args, **kwargs)
+            mask = self._mask.reshape(*args, **kwargs)
+        return type(self)(data, mask, copy=False)
+[/REPLACE]

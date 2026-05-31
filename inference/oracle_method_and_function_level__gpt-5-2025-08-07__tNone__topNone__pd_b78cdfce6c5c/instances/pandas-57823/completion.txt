@@ -1,0 +1,18 @@
+pandas/core/indexes/range.py
+[SEARCH]
+        return self.start + self.step * no_steps
+[/SEARCH]
+[REPLACE]
+        return self.start + self.step * no_steps
+
+    def argmin(self, axis=None, skipna: bool = True) -> int:
+        # Delegate to base class for non-standard axis values to preserve
+        # exact validation behavior and error messages.
+        if axis not in (None, 0):
+            return super().argmin(axis=axis, skipna=skipna)
+        # Delegate to base class for empty to preserve exact error behavior.
+        if len(self) == 0:
+            return super().argmin(axis=axis, skipna=skipna)
+        # Fast path without materializing values.
+        return 0 if self.step > 0 else len(self) - 1
+[/REPLACE]

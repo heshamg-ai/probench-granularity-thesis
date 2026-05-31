@@ -1,0 +1,30 @@
+pandas/core/frame.py
+[SEARCH]
+            else:
+                # We have other EAs with the same dtype. We preserve dtype in transpose.
+                dtyp = dtypes[0]
+                arr_typ = dtyp.construct_array_type()
+                values = self.values
+                new_values = [arr_typ._from_sequence(row, dtype=dtyp) for row in values]
+[/SEARCH]
+[REPLACE]
+            else:
+                # We have other EAs with the same dtype. We preserve dtype in transpose.
+                dtyp = dtypes[0]
+                arr_typ = dtyp.construct_array_type()
+                if isinstance(dtyp, ArrowDtype):
+                    # Avoid materializing a large object-dtype 2D array; build rows directly
+                    if isinstance(self._mgr, ArrayManager):
+                        col_arrays = self._mgr.arrays
+                    else:
+                        col_arrays = list(self._iter_column_arrays())
+                    nrows = len(self.index)
+                    ncols = len(col_arrays)
+                    new_values = []
+                    for i in range(nrows):
+                        row = [col_arrays[j][i] for j in range(ncols)]
+                        new_values.append(arr_typ._from_sequence(row, dtype=dtyp, copy=False))
+                else:
+                    values = self.values
+                    new_values = [arr_typ._from_sequence(row, dtype=dtyp) for row in values]
+[/REPLACE]

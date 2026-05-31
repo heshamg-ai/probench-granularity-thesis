@@ -1,0 +1,11 @@
+Looking at the `Dataset.interp` method, I can see that when iterating over variables to determine which ones need interpolation vs. reindexing vs. pass-through, the current code checks `var.dtype.kind in "uifc"` for numeric types. However, for 0-dimensional (scalar) variables with non-numeric dtypes like `"O"` (object), `"U"` (unicode string), or `"b"` (boolean), the code falls into the `elif dtype_kind in "ObU"` branch and adds them to `reindex_vars`, which then triggers an expensive `alignment.reindex()` call even though scalar variables aren't affected by interpolation along any dimension.
+
+The fix is to also check that the variable has dimensions that overlap with the interpolation indexers before adding it to `reindex_vars`. Scalar variables (0-dimensional) with non-numeric dtypes should simply pass through, handled by the existing `elif all(d not in indexers for d in var.dims)` branch, which is much faster since it just copies the variable reference.
+
+xarray/core/dataset.py
+[SEARCH]
+            elif dtype_kind in "ObU" and (use_indexers.keys() & var.dims):
+[/SEARCH]
+[REPLACE]
+            elif dtype_kind in "ObU" and (indexers.keys() & var.dims):
+[/REPLACE]

@@ -1,0 +1,100 @@
+ pandas/core/reshape/merge.py [SEARCH]         # validate index types are the same
+        for i, (lk, rk) in enumerate(zip(left_join_keys, right_join_keys)):
+            _check_dtype_match(lk, rk, i)
+
+        if self.left_index:
+            lt = self.left.index._values
+        else:
+            lt = left_join_keys[-1]
+
+        if self.right_index:
+            rt = self.right.index._values
+        else:
+            rt = right_join_keys[-1]
+
+        _check_dtype_match(lt, rt, 0) [/SEARCH] [REPLACE]         # validate index types are the same
+        for i, (lk, rk) in enumerate(zip(left_join_keys, right_join_keys)):
+            # For non-"on" keys (i.e., "by" keys), we only need to check that
+            # the types are compatible enough to be factorized together, not
+            # that they match exactly. The factorization will handle any
+            # necessary conversions. We still require exact match for the "on"
+            # key (the last key), which is checked separately below.
+            if i == len(left_join_keys) - 1:
+                _check_dtype_match(lk, rk, i)
+            # else: skip strict check for by columns, _factorize_keys handles it
+
+        if self.left_index:
+            lt = self.left.index._values
+        else:
+            lt = left_join_keys[-1]
+
+        if self.right_index:
+            rt = self.right.index._values
+        else:
+            rt = right_join_keys[-1]
+
+        _check_dtype_match(lt, rt, 0) [/REPLACE]
+
+pandas/core/reshape/merge.py [SEARCH]         if len(left_by_values) == 1:
+            lbv = left_by_values[0]
+            rbv = right_by_values[0]
+
+            # TODO: conversions for EAs that can be no-copy.
+            lbv = np.asarray(lbv)
+            rbv = np.asarray(rbv)
+
+            if needs_i8_conversion(lbv.dtype):
+                lbv = lbv.view("i8")
+            if needs_i8_conversion(rbv.dtype):
+                rbv = rbv.view("i8")
+        else:
+            # We get here with non-ndarrays in test_merge_by_col_tz_aware
+            # and test_merge_groupby_multiple_column_with_categorical_column
+            mapped = [
+                _factorize_keys(
+                    left_by_values[n],
+                    right_by_values[n],
+                    sort=False,
+                    how="left",
+                )
+                for n in range(len(left_by_values))
+            ]
+            arrs = [np.concatenate(m[:2]) for m in mapped]
+            shape = tuple(m[2] for m in mapped)
+            group_index = get_group_index(
+                arrs, shape=shape, sort=False, xnull=False
+            )
+            left_len = len(left_by_values[0])
+            lbv = group_index[:left_len]
+            rbv = group_index[left_len:] [/SEARCH] [REPLACE]         if len(left_by_values) == 1:
+            lbv = left_by_values[0]
+            rbv = right_by_values[0]
+
+            # Use _factorize_keys to handle different dtypes in by columns.
+            # This is more robust than np.asarray which fails for incompatible
+            # dtypes (e.g., int64 vs float64, or different datetime units).
+            llab, rlab, count = _factorize_keys(lbv, rbv, sort=False, how="left")
+            # Factorize returns intp labels starting from 0; we need dense
+            # 0-based integer group labels which is exactly what we get.
+            lbv = llab
+            rbv = rlab
+        else:
+            # We get here with non-ndarrays in test_merge_by_col_tz_aware
+            # and test_merge_groupby_multiple_column_with_categorical_column
+            mapped = [
+                _factorize_keys(
+                    left_by_values[n],
+                    right_by_values[n],
+                    sort=False,
+                    how="left",
+                )
+                for n in range(len(left_by_values))
+            ]
+            arrs = [np.concatenate(m[:2]) for m in mapped]
+            shape = tuple(m[2] for m in mapped)
+            group_index = get_group_index(
+                arrs, shape=shape, sort=False, xnull=False
+            )
+            left_len = len(left_by_values[0])
+            lbv = group_index[:left_len]
+            rbv = group_index[left_len:] [/REPLACE]

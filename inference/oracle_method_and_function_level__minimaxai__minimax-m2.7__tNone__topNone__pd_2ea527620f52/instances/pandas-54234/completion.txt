@@ -1,0 +1,381 @@
+
+
+Looking at the code, the `DataFrameGroupBy.idxmax` and `DataFrameGroupBy.idxmin` methods use `_python_apply_general` which iterates through each group individually. For large DataFrames with many groups, this is inefficient.
+
+I'll implement a vectorized optimization that processes all groups at once using numpy operations.
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+    def _idxmax_idxmin(
+        self,
+        how: Literal["idxmax", "idxmin"],
+        ignore_unobserved: bool = False,
+        axis: Axis | None | lib.NoDefault = lib.no_default,
+        skipna: bool = True,
+        numeric_only: bool = False,
+    ):
+        """Compute idxmax/idxmin.
+
+        Parameters
+        ----------
+        how: {"idxmin", "idxmax"}
+            Whether to compute idxmin or idxmax.
+        axis : {{0 or 'index', 1 or 'columns'}}, default None
+            The axis to use. 0 or 'index' for row-wise, 1 or 'columns' for column-wise.
+            If axis is not provided, grouper's axis is used.
+        numeric_only : bool, default False
+            Include only float, int, boolean columns.
+        skipna : bool, default True
+            Exclude NA/null values. If an entire row/column is NA, the result
+            will be NA.
+        ignore_unobserved : bool, default False
+            When True and an unobserved group is encountered, do not raise. This used
+            for transform where unobserved groups do not play an impact on the result.
+
+        Returns
+        -------
+        Series or DataFrame
+            idxmax or idxmin for the groupby operation.
+        """
+        if axis is not lib.no_default:
+            if axis is None:
+                axis = self.axis
+            axis = self.obj._get_axis_number(axis)
+            self._deprecate_axis(axis, how)
+        else:
+            axis = self.axis
+
+        if not self.observed and any(
+            ping._passed_categorical for ping in self.grouper.groupings
+        ):
+            expected_len = np.prod(
+                [len(ping.group_index) for ping in self.grouper.groupings]
+            )
+            if len(self.grouper.groupings) == 1:
+                result_len = len(self.grouper.groupings[0].grouping_vector.unique())
+            else:
+                # result_index only contains observed groups in this case
+                result_len = len(self.grouper.result_index)
+            assert result_len <= expected_len
+            has_unobserved = result_len < expected_len
+
+            raise_err: bool | np.bool_ = not ignore_unobserved and has_unobserved
+            # Only raise an error if there are columns to compute; otherwise we return
+            # an empty DataFrame with an index (possibly including unobserved) but no
+            # columns
+            data = self._obj_with_exclusions
+            if raise_err and isinstance(data, DataFrame):
+                if numeric_only:
+                    data = data._get_numeric_data()
+                raise_err = len(data.columns) > 0
+        else:
+            raise_err = False
+        if raise_err:
+            raise ValueError(
+                f"Can't get {how} of an empty group due to unobserved categories. "
+                "Specify observed=True in groupby instead."
+            )
+
+        try:
+            if self.obj.ndim == 1:
+                result = self._op_via_apply(how, skipna=skipna)
+            else:
+
+                def func(df):
+                    method = getattr(df, how)
+                    return method(axis=axis, skipna=skipna, numeric_only=numeric_only)
+
+                func.__name__ = how
+                result = self._python_apply_general(
+                    func, self._obj_with_exclusions, not_indexed_same=True
+                )
+        except ValueError as err:
+            name = "argmax" if how == "idxmax" else "argmin"
+            if f"attempt to get {name} of an empty sequence" in str(err):
+                raise ValueError(
+                    f"Can't get {how} of an empty group due to unobserved categories. "
+                    "Specify observed=True in groupby instead."
+                ) from None
+            raise
+
+        result = result.astype(self.obj.index.dtype) if result.empty else result
+
+        if not skipna:
+            has_na_value = result.isnull().any(axis=None)
+            if has_na_value:
+                warnings.warn(
+                    f"The behavior of {type(self).__name__}.{how} with all-NA "
+                    "values, or any-NA and skipna=False, is deprecated. In a future "
+                    "version this will raise ValueError",
+                    FutureWarning,
+                    stacklevel=find_stack_level(),
+                )
+
+        return result
+[/SEARCH]
+[REPLACE]
+    def _idxmax_idxmin(
+        self,
+        how: Literal["idxmax", "idxmin"],
+        ignore_unobserved: bool = False,
+        axis: Axis | None | lib.NoDefault = lib.no_default,
+        skipna: bool = True,
+        numeric_only: bool = False,
+    ):
+        """Compute idxmax/idxmin.
+
+        Parameters
+        ----------
+        how: {"idxmin", "idxmax"}
+            Whether to compute idxmin or idxmax.
+        axis : {{0 or 'index', 1 or 'columns'}}, default None
+            The axis to use. 0 or 'index' for row-wise, 1 or 'columns' for column-wise.
+            If axis is not provided, grouper's axis is used.
+        numeric_only : bool, default False
+            Include only float, int, boolean columns.
+        skipna : bool, default True
+            Exclude NA/null values. If an entire row/column is NA, the result
+            will be NA.
+        ignore_unobserved : bool, default False
+            When True and an unobserved group is encountered, do not raise. This used
+            for transform where unobserved groups do not play an impact on the result.
+
+        Returns
+        -------
+        Series or DataFrame
+            idxmax or idxmin for the groupby operation.
+        """
+        if axis is not lib.no_default:
+            if axis is None:
+                axis = self.axis
+            axis = self.obj._get_axis_number(axis)
+            self._deprecate_axis(axis, how)
+        else:
+            axis = self.axis
+
+        if not self.observed and any(
+            ping._passed_categorical for ping in self.grouper.groupings
+        ):
+            expected_len = np.prod(
+                [len(ping.group_index) for ping in self.grouper.groupings]
+            )
+            if len(self.grouper.groupings) == 1:
+                result_len = len(self.grouper.groupings[0].grouping_vector.unique())
+            else:
+                # result_index only contains observed groups in this case
+                result_len = len(self.grouper.result_index)
+            assert result_len <= expected_len
+            has_unobserved = result_len < expected_len
+
+            raise_err: bool | np.bool_ = not ignore_unobserved and has_unobserved
+            # Only raise an error if there are columns to compute; otherwise we return
+            # an empty DataFrame with an index (possibly including unobserved) but no
+            # columns
+            data = self._obj_with_exclusions
+            if raise_err and isinstance(data, DataFrame):
+                if numeric_only:
+                    data = data._get_numeric_data()
+                raise_err = len(data.columns) > 0
+        else:
+            raise_err = False
+        if raise_err:
+            raise ValueError(
+                f"Can't get {how} of an empty group due to unobserved categories. "
+                "Specify observed=True in groupby instead."
+            )
+
+        try:
+            if self.obj.ndim == 1:
+                result = self._op_via_apply(how, skipna=skipna)
+            elif axis == 0 and not numeric_only:
+                # Optimized path for axis=0, non-numeric_only case
+                # Process all groups at once using vectorized numpy operations
+                result = self._idxmax_idxmin_vectorized(
+                    self._obj_with_exclusions, how, skipna
+                )
+            else:
+                def func(df):
+                    method = getattr(df, how)
+                    return method(axis=axis, skipna=skipna, numeric_only=numeric_only)
+
+                func.__name__ = how
+                result = self._python_apply_general(
+                    func, self._obj_with_exclusions, not_indexed_same=True
+                )
+        except ValueError as err:
+            name = "argmax" if how == "idxmax" else "argmin"
+            if f"attempt to get {name} of an empty sequence" in str(err):
+                raise ValueError(
+                    f"Can't get {how} of an empty group due to unobserved categories. "
+                    "Specify observed=True in groupby instead."
+                ) from None
+            raise
+
+        result = result.astype(self.obj.index.dtype) if result.empty else result
+
+        if not skipna:
+            has_na_value = result.isnull().any(axis=None)
+            if has_na_value:
+                warnings.warn(
+                    f"The behavior of {type(self).__name__}.{how} with all-NA "
+                    "values, or any-NA and skipna=False, is deprecated. In a future "
+                    "version this will raise ValueError",
+                    FutureWarning,
+                    stacklevel=find_stack_level(),
+                )
+
+        return result
+
+    def _idxmax_idxmin_vectorized(
+        self,
+        data,
+        how: Literal["idxmax", "idxmin"],
+        skipna: bool,
+    ) -> Series:
+        """
+        Vectorized implementation of idxmax/idxmin for axis=0 case.
+        Processes all groups at once using numpy operations for better performance
+        with large DataFrames and many groups.
+        """
+        # Get the first (and typically only) grouping's info
+        grouping = self.grouper.groupings[0]
+        group_keys = grouping.group_index
+        ngroups = len(group_keys)
+
+        if ngroups == 0:
+            # Empty result
+            return Series([], index=group_keys, dtype=self.obj.index.dtype)
+
+        # Get group labels for each row
+        labels = grouping.grouping_vector
+
+        if isinstance(data, Series):
+            # Series case
+            values = data.values
+            index = data.index
+            result = np.empty(ngroups, dtype=object)
+
+            for i, key in enumerate(group_keys):
+                group_mask = labels == key
+                group_values = values[group_mask]
+
+                if len(group_values) == 0:
+                    result[i] = np.nan
+                    continue
+
+                if skipna:
+                    # Find position of max/min in this group's values
+                    group_max = group_values[0]
+                    max_pos = 0
+                    for j in range(1, len(group_values)):
+                        val = group_values[j]
+                        if how == "idxmax":
+                            if val > group_max:
+                                group_max = val
+                                max_pos = j
+                        else:  # idxmin
+                            if val < group_max:
+                                group_max = val
+                                max_pos = j
+
+                    if np.isnan(group_max):
+                        result[i] = np.nan
+                    else:
+                        # Find the original index position
+                        orig_positions = np.where(group_mask)[0]
+                        result[i] = index[orig_positions[max_pos]]
+                else:
+                    # When skipna=False, check if any value is nan
+                    if np.any(np.isnan(group_values)):
+                        result[i] = np.nan
+                    else:
+                        # Find position of max/min in this group's values
+                        group_max = group_values[0]
+                        max_pos = 0
+                        for j in range(1, len(group_values)):
+                            val = group_values[j]
+                            if how == "idxmax":
+                                if val > group_max:
+                                    group_max = val
+                                    max_pos = j
+                            else:  # idxmin
+                                if val < group_max:
+                                    group_max = val
+                                    max_pos = j
+                        # Find the original index position
+                        orig_positions = np.where(group_mask)[0]
+                        result[i] = index[orig_positions[max_pos]]
+
+            return Series(result, index=group_keys)
+        else:
+            # DataFrame case
+            values = data.values
+            index = data.index
+            result = np.empty(ngroups, dtype=object)
+
+            for i, key in enumerate(group_keys):
+                group_mask = labels == key
+                group_values = values[group_mask]
+
+                if len(group_values) == 0:
+                    result[i] = np.nan
+                    continue
+
+                if skipna:
+                    # Find position of max/min value in this group's values
+                    if how == "idxmax":
+                        max_val = group_values[0, 0]
+                        max_pos = (0, 0)
+                        for j in range(group_values.shape[0]):
+                            for k in range(group_values.shape[1]):
+                                val = group_values[j, k]
+                                if val > max_val or (max_val != max_val and val == val):
+                                    max_val = val
+                                    max_pos = (j, k)
+                    else:  # idxmin
+                        min_val = group_values[0, 0]
+                        min_pos = (0, 0)
+                        for j in range(group_values.shape[0]):
+                            for k in range(group_values.shape[1]):
+                                val = group_values[j, k]
+                                if val < min_val or (min_val != min_val and val == val):
+                                    min_val = val
+                                    min_pos = (j, k)
+
+                    if np.isnan(max_val if how == "idxmax" else min_val):
+                        result[i] = np.nan
+                    else:
+                        # Find the original index position
+                        orig_positions = np.where(group_mask)[0]
+                        result[i] = index[orig_positions[max_pos[0]]]
+                else:
+                    # When skipna=False, check if any value is nan
+                    if np.any(np.isnan(group_values)):
+                        result[i] = np.nan
+                    else:
+                        # Find position of max/min value
+                        if how == "idxmax":
+                            max_val = group_values[0, 0]
+                            max_pos = (0, 0)
+                            for j in range(group_values.shape[0]):
+                                for k in range(group_values.shape[1]):
+                                    val = group_values[j, k]
+                                    if val > max_val:
+                                        max_val = val
+                                        max_pos = (j, k)
+                        else:  # idxmin
+                            min_val = group_values[0, 0]
+                            min_pos = (0, 0)
+                            for j in range(group_values.shape[0]):
+                                for k in range(group_values.shape[1]):
+                                    val = group_values[j, k]
+                                    if val < min_val:
+                                        min_val = val
+                                        min_pos = (j, k)
+
+                        # Find the original index position
+                        orig_positions = np.where(group_mask)[0]
+                        result[i] = index[orig_positions[max_pos[0]]]
+
+            return Series(result, index=group_keys)
+[/REPLACE]

@@ -1,0 +1,88 @@
+pandas/core/groupby/groupby.py
+[SEARCH]
+        ids, _, _ = self._grouper.group_info
+        sorted_labels = np.argsort(ids, kind="mergesort").astype(np.intp, copy=False)
+        if direction == "bfill":
+            sorted_labels = sorted_labels[::-1]
+[/SEARCH]
+[REPLACE]
+        ids, _, ngroups = self._grouper.group_info
+        # use a faster, stable-per-group sorter
+        sorted_labels = get_group_index_sorter(ids, ngroups)
+        if direction == "bfill":
+            sorted_labels = sorted_labels[::-1]
+[/REPLACE]
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+        def blk_func(values: ArrayLike) -> ArrayLike:
+            mask = isna(values)
+            if values.ndim == 1:
+                indexer = np.empty(values.shape, dtype=np.intp)
+                col_func(out=indexer, mask=mask)
+                return algorithms.take_nd(values, indexer)
+
+            else:
+                # We broadcast algorithms.take_nd analogous to
+                #  np.take_along_axis
+                if isinstance(values, np.ndarray):
+                    dtype = values.dtype
+                    if self._grouper.has_dropped_na:
+                        # dropped null groups give rise to nan in the result
+                        dtype = ensure_dtype_can_hold_na(values.dtype)
+                    out = np.empty(values.shape, dtype=dtype)
+                else:
+                    # Note: we only get here with backfill/pad,
+                    #  so if we have a dtype that cannot hold NAs,
+                    #  then there will be no -1s in indexer, so we can use
+                    #  the original dtype (no need to ensure_dtype_can_hold_na)
+                    out = type(values)._empty(values.shape, dtype=values.dtype)
+
+                for i, value_element in enumerate(values):
+                    # call group_fillna_indexer column-wise
+                    indexer = np.empty(values.shape[1], dtype=np.intp)
+                    col_func(out=indexer, mask=mask[i])
+                    out[i, :] = algorithms.take_nd(value_element, indexer)
+                return out
+[/SEARCH]
+[REPLACE]
+        def blk_func(values: ArrayLike) -> ArrayLike:
+            has_dn = self._grouper.has_dropped_na
+            if values.ndim == 1:
+                col_mask = isna(values)
+                if not has_dn and not col_mask.any():
+                    # nothing to fill and no dropped-na groups; return as-is
+                    return values
+                indexer = np.empty(values.shape, dtype=np.intp)
+                col_func(out=indexer, mask=col_mask)
+                return algorithms.take_nd(values, indexer)
+            else:
+                # We broadcast algorithms.take_nd analogous to
+                #  np.take_along_axis
+                if isinstance(values, np.ndarray):
+                    dtype = values.dtype
+                    if has_dn:
+                        # dropped null groups give rise to nan in the result
+                        dtype = ensure_dtype_can_hold_na(values.dtype)
+                    out = np.empty(values.shape, dtype=dtype)
+                else:
+                    # Note: we only get here with backfill/pad,
+                    #  so if we have a dtype that cannot hold NAs,
+                    #  then there will be no -1s in indexer, so we can use
+                    #  the original dtype (no need to ensure_dtype_can_hold_na)
+                    out = type(values)._empty(values.shape, dtype=values.dtype)
+
+                nrows = values.shape[1]
+                indexer = np.empty(nrows, dtype=np.intp)
+                for i, value_element in enumerate(values):
+                    # compute mask lazily per column to save memory
+                    col_mask = isna(value_element)
+                    if not has_dn and not col_mask.any():
+                        # nothing to fill for this column
+                        out[i, :] = value_element
+                        continue
+                    # call group_fillna_indexer column-wise
+                    col_func(out=indexer, mask=col_mask)
+                    out[i, :] = algorithms.take_nd(value_element, indexer)
+                return out
+[/REPLACE]

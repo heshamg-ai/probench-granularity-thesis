@@ -1,0 +1,67 @@
+
+
+Let me first check where `argmin` is defined in the parent class to understand the expected behavior:
+
+Based on the code analysis, `RangeIndex` inherits from `Index` and there's no explicit `argmin` method defined. I'll add an optimized version for `RangeIndex`.
+
+For a `RangeIndex`, the argmin logic is straightforward:
+- Empty range: return -1 (consistent with numpy)
+- Step > 0: minimum is at start (index 0)
+- Step < 0: minimum is at end (index len-1)
+
+Similarly for argmax (mirror logic):
+- Empty range: return -1
+- Step > 0: maximum is at end (index len-1)
+- Step < 0: maximum is at start (index 0)
+
+pandas/core/indexes/range.py
+[SEARCH]
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+
+    # --------------------------------------------------------------------
+    # Reductions
+
+    def all(self, *args, **kwargs) -> bool:
+        return 0 not in self._range
+[/SEARCH]
+[REPLACE]
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+
+    def argmin(self, skipna: bool = True) -> int:
+        """
+        Return the index of the minimum value.
+
+        See Also
+        --------
+        numpy.ndarray.argmin
+        """
+        # Optimized path for RangeIndex
+        if len(self) == 0:
+            return -1
+        if self.step > 0:
+            return 0
+        return len(self) - 1
+
+    def argmax(self, skipna: bool = True) -> int:
+        """
+        Return the index of the maximum value.
+
+        See Also
+        --------
+        numpy.ndarray.argmax
+        """
+        # Optimized path for RangeIndex
+        if len(self) == 0:
+            return -1
+        if self.step > 0:
+            return len(self) - 1
+        return 0
+
+    # --------------------------------------------------------------------
+    # Reductions
+
+    def all(self, *args, **kwargs) -> bool:
+        return 0 not in self._range
+[/REPLACE]

@@ -1,0 +1,248 @@
+
+
+Looking at the code, I need to add a specialized `join` method to `RangeIndex` that can handle RangeIndex-to-RangeIndex joins more efficiently using arithmetic instead of array operations.
+
+pandas/core/indexes/range.py
+[SEARCH]
+    def symmetric_difference(
+        self, other, result_name: Hashable | None = None, sort=None
+    ) -> Index:
+        if not isinstance(other, RangeIndex) or sort is not None:
+            return super().symmetric_difference(other, result_name, sort)
+
+        left = self.difference(other)
+        right = other.difference(self)
+        result = left.union(right)
+
+        if result_name is not None:
+            result = result.rename(result_name)
+        return result
+[/SEARCH]
+[REPLACE]
+    def symmetric_difference(
+        self, other, result_name: Hashable | None = None, sort=None
+    ) -> Index:
+        if not isinstance(other, RangeIndex) or sort is not None:
+            return super().symmetric_difference(other, result_name, sort)
+
+        left = self.difference(other)
+        right = other.difference(self)
+        result = left.union(right)
+
+        if result_name is not None:
+            result = result.rename(result_name)
+        return result
+
+    @cache_readonly
+    def _can_use_libjoin(self) -> bool:
+        """
+        Whether we can use the fastpaths implemented in _libs.join.
+
+        For RangeIndex we exclude it because the conversion to numpy
+        arrays negates the performance benefit, and we can compute
+        joins more efficiently using pure integer arithmetic.
+        """
+        return False
+
+    def join(
+        self,
+        other: Index,
+        *,
+        how: JoinHow = "left",
+        level: Level | None = None,
+        return_indexers: bool = False,
+        sort: bool = False,
+    ) -> Index | tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        """
+        Compute join_index and indexers to conform data structures to the new index.
+
+        Parameters
+        ----------
+        other : Index
+        how : {'left', 'right', 'inner', 'outer'}
+        level : int or level name, default None
+        return_indexers : bool, default False
+        sort : bool, default False
+
+        Returns
+        -------
+        join_index, (left_indexer, right_indexer)
+        """
+        # Handle level parameter - delegate to parent for MultiIndex case
+        if level is not None:
+            return super().join(
+                other, how=how, level=level, return_indexers=return_indexers, sort=sort
+            )
+
+        other = ensure_index(other)
+
+        # Fast path: if other is empty, handle directly
+        if len(other) == 0:
+            if len(self) == 0:
+                # Both empty
+                if return_indexers:
+                    return self, None, None
+                return self
+            elif how in ("left", "outer"):
+                # Return self (sorted if needed)
+                if sort and not self.is_monotonic_increasing:
+                    result = self.sort_values()
+                else:
+                    result = self
+                if return_indexers:
+                    if sort:
+                        indexer = np.arange(len(result), dtype=np.intp)
+                        return result, indexer, None
+                    return result, None, None
+                return result
+            else:  # how in ("right", "inner")
+                # inner/right join with empty other is empty
+                if return_indexers:
+                    return self[:0], np.array([], dtype=np.intp), None
+                return self[:0]
+
+        # Fast path: if self is empty, handle directly
+        if len(self) == 0:
+            if how in ("right", "outer"):
+                if sort and not other.is_monotonic_increasing:
+                    result = other.sort_values()
+                else:
+                    result = other
+                if return_indexers:
+                    if sort:
+                        indexer = np.arange(len(result), dtype=np.intp)
+                        return result, None, indexer
+                    return result, None, None
+                return result
+            else:  # how in ("left", "inner")
+                if return_indexers:
+                    return self, np.array([], dtype=np.intp), None
+                return self
+
+        # Check if other is also a RangeIndex - if so, we can optimize
+        if not isinstance(other, RangeIndex):
+            return super().join(
+                other, how=how, level=level, return_indexers=return_indexers, sort=sort
+            )
+
+        # Both self and other are non-empty RangeIndex
+        # Compute the join range using arithmetic
+        s_start, s_stop, s_step = self.start, self.stop, self.step
+        o_start, o_stop, o_step = other.start, other.stop, other.step
+
+        # Normalize for easier computation (handle negative steps)
+        if s_step < 0:
+            s_start, s_stop, s_step = self[-1], self.start - 1, -s_step
+        if o_step < 0:
+            o_start, o_stop, o_step = other[-1], other.start - 1, -o_step
+
+        if how == "left":
+            # Result is self, compute right indexer
+            join_index = self
+            lidx = None
+            ridx = self._compute_join_indexer_for_range(other)
+        elif how == "right":
+            # Result is other, compute left indexer
+            join_index = other
+            ridx = None
+            lidx = other._compute_join_indexer_for_range(self)
+        elif how == "inner":
+            # Intersection of two ranges
+            start = max(s_start, o_start)
+            stop = min(s_stop, o_stop)
+            if start >= stop:
+                # No overlap
+                join_index = self[:0]
+                lidx = np.array([], dtype=np.intp)
+                ridx = np.array([], dtype=np.intp)
+            else:
+                # Compute GCD for step
+                from math import gcd
+                step = gcd(s_step, o_step)
+                # Adjust start to be at the correct position
+                diff = start - s_start
+                if diff % s_step != 0:
+                    step_adjusted = diff % s_step
+                    start = start - s_step + step_adjusted
+                diff = start - o_start
+                if diff % o_step != 0:
+                    step_adjusted = diff % o_step
+                    start = start - o_step + step_adjusted
+                if start < max(s_start, o_start):
+                    start += step
+                new_range = range(start, stop, step)
+                join_index = type(self)._simple_new(new_range)
+                # Compute indexers for inner join
+                lidx = self._compute_join_indexer_for_range(join_index)
+                ridx = other._compute_join_indexer_for_range(join_index)
+        elif how == "outer":
+            # Union of two ranges - compute bounding box
+            start = min(s_start, o_start)
+            stop = max(s_stop, o_stop)
+            if s_start == o_start and s_step == o_step:
+                # Same start and step - simple case
+                new_range = range(start, stop, s_step)
+                join_index = type(self)._simple_new(new_range)
+            else:
+                # For outer join, we need all unique values
+                # Fall back to parent for complex cases
+                return super().join(
+                    other, how=how, level=level, return_indexers=return_indexers, sort=sort
+                )
+            # Compute indexers for outer join
+            lidx = self._compute_join_indexer_for_range(join_index)
+            ridx = other._compute_join_indexer_for_range(join_index)
+        else:
+            raise ValueError(f"Invalid join type: {how}")
+
+        if return_indexers:
+            if lidx is not None:
+                lidx = ensure_platform_int(lidx)
+            if ridx is not None:
+                ridx = ensure_platform_int(ridx)
+            return join_index, lidx, ridx
+        return join_index
+
+    def _compute_join_indexer_for_range(self, other: RangeIndex) -> npt.NDArray[np.intp]:
+        """
+        Compute the indexer for a 'right' join: for each element in other,
+        find its position in self. Returns -1 for elements not in self.
+
+        This uses pure arithmetic to avoid creating arrays.
+        """
+        if len(self) == 0:
+            return np.array([], dtype=np.intp)
+
+        if len(other) == 0:
+            return np.array([], dtype=np.intp)
+
+        result = np.empty(len(other), dtype=np.intp)
+
+        s_start, s_step = self.start, self.step
+        s_stop = self.stop
+
+        for i, val in enumerate(other):
+            if s_step > 0:
+                if val < s_start or val >= s_stop:
+                    result[i] = -1
+                else:
+                    diff = val - s_start
+                    if diff % s_step == 0:
+                        result[i] = diff // s_step
+                    else:
+                        result[i] = -1
+            else:
+                # Handle negative step case
+                if self.step < 0:
+                    s_start, s_stop, s_step = self[-1], self.start - 1, -self.step
+                if val > s_start or val <= s_stop:
+                    result[i] = -1
+                else:
+                    diff = s_start - val
+                    if diff % s_step == 0:
+                        result[i] = diff // s_step
+                    else:
+                        result[i] = -1
+
+        return result
+[/REPLACE]

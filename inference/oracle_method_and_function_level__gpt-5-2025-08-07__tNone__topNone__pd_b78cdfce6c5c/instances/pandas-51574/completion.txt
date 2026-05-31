@@ -1,0 +1,21 @@
+pandas/core/generic.py
+[SEARCH]
+        cond = -cond if inplace else cond
+        cond = cond.reindex(self._info_axis, axis=self._info_axis_number, copy=False)
+[/SEARCH]
+[REPLACE]
+        cond = -cond if inplace else cond
+        cond = cond.reindex(self._info_axis, axis=self._info_axis_number, copy=False)
+        # Fastpath: if cond is a boolean DataFrame backed by ExtensionArray dtype(s),
+        # convert to a dense NumPy bool mask for faster Manager.where handling.
+        if not inplace and isinstance(cond, ABCDataFrame):
+            # cond has been NA-filled above and validated as boolean-typed
+            # Detect non-numpy-bool dtypes (e.g., BooleanDtype) without importing helpers
+            dtypes = getattr(cond, "dtypes", ())
+            if dtypes is not None and not all(getattr(_dt, "kind", None) == "b" for _dt in dtypes):
+                try:
+                    cond = cond.to_numpy(dtype="bool")
+                except TypeError:
+                    # Fallback for older EA implementations
+                    cond = cond.astype(bool).to_numpy()
+[/REPLACE]

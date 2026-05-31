@@ -1,0 +1,107 @@
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+        batch_cost = (
+            0.5 * ((X - code @ dictionary) ** 2).sum()
+            + self.alpha * np.sum(np.abs(code))
+        ) / batch_size
+[/SEARCH]
+[REPLACE]
+        diff = X - code @ dictionary
+        batch_cost = (0.5 * np.dot(diff.ravel(), diff.ravel()) + self.alpha * np.sum(np.abs(code))) / batch_size
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+    if X.ndim == 1:
+        X = X[:, np.newaxis]
+    n_samples, n_features = X.shape
+    n_components = dictionary.shape[0]
+    if dictionary.shape[1] != X.shape[1]:
+        raise ValueError(
+            "Dictionary and X have different numbers of features:"
+            "dictionary.shape: {} X.shape{}".format(dictionary.shape, X.shape)
+        )
+    if cov is None and algorithm != "lasso_cd":
+        # overwriting cov is safe
+        copy_cov = False
+        cov = np.dot(dictionary, X.T)
+[/SEARCH]
+[REPLACE]
+    if X.ndim == 1:
+        X = X[:, np.newaxis]
+    n_samples, n_features = X.shape
+    n_components = dictionary.shape[0]
+    if dictionary.shape[1] != X.shape[1]:
+        raise ValueError(
+            "Dictionary and X have different numbers of features:"
+            "dictionary.shape: {} X.shape{}".format(dictionary.shape, X.shape)
+        )
+    if cov is None and algorithm != "lasso_cd":
+        # overwriting cov is safe
+        copy_cov = False
+        cov = np.dot(dictionary, X.T)
+
+    if algorithm == "lasso_lars":
+        alpha = float(regularization) / n_features  # account for scaling
+        try:
+            err_mgt = np.seterr(all="ignore")
+
+            # Not passing in verbose=max(0, verbose-1) because Lars.fit already
+            # corrects the verbosity level.
+            lasso_lars = LassoLars(
+                alpha=alpha,
+                fit_intercept=False,
+                verbose=verbose,
+                precompute=gram,
+                fit_path=False,
+                positive=positive,
+                max_iter=max_iter,
+            )
+            lasso_lars.fit(dictionary.T, X.T, Xy=cov)
+            new_code = lasso_lars.coef_
+        finally:
+            np.seterr(**err_mgt)
+
+    elif algorithm == "lasso_cd":
+        alpha = float(regularization) / n_features  # account for scaling
+        X_T = X.T
+
+        if init is None:
+            # Use fast Gram-based precompute path with warm start from zero
+            clf = Lasso(
+                alpha=alpha,
+                fit_intercept=False,
+                precompute=gram,
+                max_iter=max_iter,
+                warm_start=True,
+                positive=positive,
+            )
+            # Initialize with zeros for fast first pass; Lasso will coerce to proper shape
+            clf.coef_ = np.zeros(n_components, dtype=X_T.dtype)
+            clf.fit(dictionary.T, X_T, check_input=False)
+            new_code = clf.coef_
+        else:
+            # When init is provided, use it for warm start
+            clf = Lasso(
+                alpha=alpha,
+                fit_intercept=False,
+                precompute=gram,
+                max_iter=max_iter,
+                warm_start=True,
+                positive=positive,
+            )
+            if not init.flags["WRITEABLE"]:
+                init = np.array(init)
+            # init is (n_samples, n_components); coef_ expects (n_targets, n_features)
+            # For multi-target Lasso, we iterate over targets (X columns) here
+            n_targets = X_T.shape[1]
+            new_code = np.empty((n_targets, n_components), dtype=X_T.dtype)
+            for i in range(n_targets):
+                clf.coef_ = init[i] if init.ndim == 2 else init
+                clf.fit(dictionary.T, X_T[:, i], check_input=False)
+                new_code[i] = clf.coef_
+            new_code = new_code if n_targets > 1 else new_code.ravel()
+
+    elif algorithm == "lars":
+
+[/REPLACE]

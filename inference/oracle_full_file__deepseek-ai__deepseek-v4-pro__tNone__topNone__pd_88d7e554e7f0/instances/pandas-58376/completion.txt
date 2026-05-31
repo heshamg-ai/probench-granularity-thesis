@@ -1,0 +1,94 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    # --------------------------------------------------------------------
+    # Reductions
+
+    def all(self, *args, **kwargs) -> bool:
+        return 0 not in self._range
+
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+[/SEARCH]
+[REPLACE]
+    # --------------------------------------------------------------------
+    # Reductions
+
+    def all(self, *args, **kwargs) -> bool:
+        return 0 not in self._range
+
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+
+    def value_counts(
+        self,
+        normalize: bool = False,
+        sort: bool = True,
+        ascending: bool = False,
+        bins=None,
+        dropna: bool = True,
+    ) -> Series:
+        from pandas import Series
+
+        n = len(self._range)
+        if n == 0:
+            # Empty RangeIndex produces empty Series
+            result = Series(
+                [],
+                index=Index([], dtype=self.dtype),
+                name="proportion" if normalize else "count",
+                dtype="float64" if normalize else "int64",
+            )
+            result.index.name = self.name
+            return result
+
+        # All values in a RangeIndex are unique, so each count is exactly 1
+        if bins is not None:
+            # Defer to the general algorithm when binning is requested
+            return super().value_counts(
+                normalize=normalize,
+                sort=sort,
+                ascending=ascending,
+                bins=bins,
+                dropna=dropna,
+            )
+
+        # Fast path: no bins, all unique
+        counts = np.ones(n, dtype=np.int64)
+        values = self._values  # materialize the dense array
+        index = self._constructor(values, name=self.name)
+
+        if not dropna:
+            # RangeIndex has no NaN, but for API consistency, include it
+            # (the general algorithm would produce the same result)
+            pass  # nothing extra to do; there are no NaNs
+
+        if normalize:
+            result = counts / n
+            name = "proportion"
+            dtype = "float64"
+        else:
+            result = counts
+            name = "count"
+            dtype = "int64"
+
+        out = Series(
+            result,
+            index=index,
+            name=name,
+            dtype=dtype,
+            copy=False,
+        )
+        out.index.name = self.name
+
+        if sort:
+            if ascending:
+                # Sort by values ascending (all counts equal, so original order preserved)
+                pass  # already in ascending order
+            else:
+                # Sort by values descending (all counts equal, so reverse to match typical output)
+                out = out[::-1]
+            # When sorting, the result is sorted by frequency,
+            # then by index. Since frequencies are all 1, stable sort is enough.
+
+        return out
+[/REPLACE]

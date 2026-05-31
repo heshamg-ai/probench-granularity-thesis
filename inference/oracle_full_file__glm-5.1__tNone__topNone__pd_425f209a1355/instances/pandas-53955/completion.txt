@@ -1,0 +1,105 @@
+Looking at the `MultiIndex.intersection` method, it currently falls back to the base `Index.intersection` implementation which materializes the full tuple representation of both MultiIndex objects (via `self._values` and `other._values`), then uses `isin` and `get_indexer_for`. This can be extremely slow and memory-intensive for large MultiIndex objects.
+
+We can optimize this by overriding `intersection` directly in `MultiIndex` to work on the underlying integer codes. By comparing codes level-by-level using vectorized set operations (leveraging `isin` on each level's codes), we can identify the intersection without ever materializing the tuple representation. This is both significantly faster and more memory-efficient.
+
+pandas/core/indexes/multi.py
+[SEARCH]
+    def _wrap_intersection_result(self, other, result) -> MultiIndex:
+        _, result_names = self._convert_can_do_setop(other)
+        return result.set_names(result_names)
+[/SEARCH]
+[REPLACE]
+    def intersection(
+        self, other, sort: bool | None = False
+    ) -> MultiIndex:
+        """
+        Form the intersection of two MultiIndex objects.
+
+        This is optimized to work on the underlying integer codes,
+        avoiding materialization of the full tuple representation.
+        """
+        from pandas.core.arrays.categorical import factorize_from_iterables
+
+        self._validate_sort_keyword(sort)
+        other, result_names = self._convert_can_do_setop(other)
+
+        if self.equals(other):
+            return self._get_reconciled_name_object(other)
+
+        if len(self) == 0:
+            return self[:0].set_names(result_names)
+        if len(other) == 0:
+            return other[:0].set_names(result_names)
+
+        if not isinstance(other, MultiIndex):
+            # Keep existing behavior for non-MultiIndex
+            result = Index.intersection(self, other, sort=sort)
+            if isinstance(result, MultiIndex):
+                return result
+            return MultiIndex.from_arrays(
+                zip(*result), sortorder=None, names=result_names
+            )
+
+        if self.nlevels != other.nlevels:
+            return self[:0].set_names(result_names)
+
+        # Fast path: compute intersection using integer codes
+        # Recode other's codes to refer to self's levels where possible
+        other_codes = []
+        for i in range(self.nlevels):
+            lev = self.levels[i]
+            other_codes_i = lev.get_indexer_for(other.get_level_values(i))
+            other_codes.append(other_codes_i)
+
+        # Initialize mask: True where other's codes are present in self
+        mask = np.ones(len(other), dtype=bool)
+        for i in range(self.nlevels):
+            mask &= other_codes[i] != -1
+
+        # Filter to valid codes
+        valid_other_codes = [codes[mask] for codes in other_codes]
+
+        # Build a lookup structure for self's code combinations
+        # Use a dict mapping code tuples to their first position in self
+        self_tuples = tuple(self.codes[i] for i in range(self.nlevels))
+        self_set = set(zip(*self_tuples))
+
+        # Find which valid other entries are in self_set
+        if len(mask) > 0 and mask.any():
+            other_tuples = tuple(valid_other_codes[i] for i in range(self.nlevels))
+            other_set = set(zip(*other_tuples))
+            intersect_set = self_set & other_set
+        else:
+            intersect_set = set()
+
+        if not intersect_set:
+            return self[:0].set_names(result_names)
+
+        # Build result by selecting from self entries that are in the intersection
+        result_mask = np.zeros(len(self), dtype=bool)
+        for i in range(len(self)):
+            tup = tuple(self.codes[j][i] for j in range(self.nlevels))
+            if tup in intersect_set:
+                result_mask[i] = True
+
+        result = self[result_mask]
+
+        if sort is not False:
+            try:
+                result = result.sort_values()
+            except TypeError:
+                if sort is True:
+                    raise
+                warnings.warn(
+                    "The values in the array are unorderable. "
+                    "Pass `sort=False` to suppress this warning.",
+                    RuntimeWarning,
+                    stacklevel=find_stack_level(),
+                )
+
+        return result.set_names(result_names)
+
+    def _wrap_intersection_result(self, other, result) -> MultiIndex:
+        _, result_names = self._convert_can_do_setop(other)
+        return result.set_names(result_names)
+[/REPLACE]

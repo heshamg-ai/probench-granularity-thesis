@@ -1,0 +1,38 @@
+
+
+Looking at the code, I can see that `get_indexer_indexer` in `pandas/core/sorting.py` handles sorting of MultiIndex by calling `lexsort_indexer`. I can add an optimization to check if the MultiIndex is already sorted and skip the expensive sorting operation.
+
+Let me check the exact location and content to modify:
+
+```python
+pandas/core/sorting.py
+[SEARCH]
+    if level is not None:
+        _, indexer = target.sortlevel(
+            level,
+            ascending=ascending,
+            sort_remaining=sort_remaining,
+            na_position=na_position,
+        )
+    elif isinstance(target, ABCMultiIndex):
+        indexer = lexsort_indexer(
+            target.codes, orders=ascending, na_position=na_position, codes_given=True
+        )
+[/SEARCH]
+[REPLACE]
+    if level is not None:
+        _, indexer = target.sortlevel(
+            level,
+            ascending=ascending,
+            sort_remaining=sort_remaining,
+            na_position=na_position,
+        )
+    elif isinstance(target, ABCMultiIndex):
+        # Fast path: if the MultiIndex is already sorted in the desired order,
+        # we can avoid the expensive lexsort operation
+        if ascending and target.is_monotonic_increasing:
+            return None
+        indexer = lexsort_indexer(
+            target.codes, orders=ascending, na_position=na_position, codes_given=True
+        )
+[/REPLACE]

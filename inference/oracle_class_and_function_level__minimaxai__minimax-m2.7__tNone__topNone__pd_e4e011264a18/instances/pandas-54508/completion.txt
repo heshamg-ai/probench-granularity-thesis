@@ -1,0 +1,28 @@
+
+
+Looking at this task, I need to optimize `DataFrame.iloc` for scalar integer indexing on extension dtypes. Let me analyze the relevant code paths.
+
+The key method is `BlockManager.fast_xs` which handles `frame.iloc[loc]`. For extension dtypes, there's unnecessary overhead when handling multi-block cases.
+
+Let me identify the optimization opportunity:
+
+pandas/core/internals/managers.py
+[SEARCH]
+        for blk in self.blocks:
+            # Such assignment may incorrectly coerce NaT to None
+            # result[blk.mgr_locs] = blk._slice((slice(None), loc))
+            for i, rl in enumerate(blk.mgr_locs):
+                result[rl] = blk.iget((i, loc))
+[/SEARCH]
+[REPLACE]
+        for blk in self.blocks:
+            # Such assignment may incorrectly coerce NaT to None
+            # result[blk.mgr_locs] = blk._slice((slice(None), loc))
+            # Fast path for single column blocks - avoid enumerate overhead
+            mgr_locs = blk.mgr_locs
+            if len(mgr_locs) == 1:
+                result[mgr_locs[0]] = blk.iget((0, loc))
+            else:
+                for i, rl in enumerate(mgr_locs):
+                    result[rl] = blk.iget((i, loc))
+[/REPLACE]

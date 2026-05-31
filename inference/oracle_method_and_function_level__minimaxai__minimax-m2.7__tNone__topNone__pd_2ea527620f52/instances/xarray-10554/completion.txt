@@ -1,0 +1,54 @@
+
+
+Looking at the `Dataset.interp` method, I need to identify the optimization opportunities for handling non-numeric scalars. The main performance issues are:
+
+1. Non-numeric scalar variables (with `dtype_kind in "ObU"` and empty dims) are being collected into `reindex_vars` even though they don't need any interpolation
+2. The `reindex_indexers` filtering logic runs even when there are no valid reindex operations
+
+Let me implement the optimization:
+
+xarray/core/dataset.py
+[SEARCH]
+            dtype_kind = var.dtype.kind
+            if dtype_kind in "uifc":
+                # For normal number types do the interpolation:
+                var_indexers = {k: v for k, v in use_indexers.items() if k in var.dims}
+                variables[name] = missing.interp(var, var_indexers, method, **kwargs)
+            elif dtype_kind in "ObU" and (use_indexers.keys() & var.dims):
+                # For types that we do not understand do stepwise
+                # interpolation to avoid modifying the elements.
+                # reindex the variable instead because it supports
+                # booleans and objects and retains the dtype but inside
+                # this loop there might be some duplicate code that slows it
+                # down, therefore collect these signals and run it later:
+                reindex_vars.append(name)
+            elif all(d not in indexers for d in var.dims):
+                # For anything else we can only keep variables if they
+                # are not dependent on any coords that are being
+                # interpolated along:
+                variables[name] = var
+[/SEARCH]
+[REPLACE]
+            dtype_kind = var.dtype.kind
+            if dtype_kind in "uifc":
+                # For normal number types do the interpolation:
+                var_indexers = {k: v for k, v in use_indexers.items() if k in var.dims}
+                variables[name] = missing.interp(var, var_indexers, method, **kwargs)
+            elif not var.dims:
+                # Scalar variables (no dimensions) are kept as-is
+                # since they don't depend on any interpolated coordinate
+                variables[name] = var
+            elif dtype_kind in "ObU" and (use_indexers.keys() & var.dims):
+                # For types that we do not understand do stepwise
+                # interpolation to avoid modifying the elements.
+                # reindex the variable instead because it supports
+                # booleans and objects and retains the dtype but inside
+                # this loop there might be some duplicate code that slows it
+                # down, therefore collect these signals and run it later:
+                reindex_vars.append(name)
+            elif all(d not in indexers for d in var.dims):
+                # For anything else we can only keep variables if they
+                # are not dependent on any coords that are being
+                # interpolated along:
+                variables[name] = var
+[/REPLACE]

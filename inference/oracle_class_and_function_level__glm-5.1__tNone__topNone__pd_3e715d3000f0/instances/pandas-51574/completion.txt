@@ -1,0 +1,55 @@
+Looking at the `_where` method in `NDFrame`, the optimization target is when `cond` is an ExtensionArray-backed DataFrame. The current code aligns `cond` to `self`, then iterates through `cond.dtypes` to validate they are boolean. For ExtensionArray-backed DataFrames, this column-by-column check can be slow.
+
+The key insight is that after alignment, if the `cond` DataFrame has a single ExtensionArray block (common for homogeneous EA-backed DataFrames), we can skip the per-column loop and check the dtype once using the existing `_mgr` attribute.
+
+pandas/core/generic.py
+[SEARCH]
+        # make sure we are boolean
+        fill_value = bool(inplace)
+        cond = cond.fillna(fill_value)
+
+        msg = "Boolean array expected for the condition, not {dtype}"
+
+        if not cond.empty:
+            if not isinstance(cond, ABCDataFrame):
+                # This is a single-dimensional object.
+                if not is_bool_dtype(cond):
+                    raise ValueError(msg.format(dtype=cond.dtype))
+            else:
+                for _dt in cond.dtypes:
+                    if not is_bool_dtype(_dt):
+                        raise ValueError(msg.format(dtype=_dt))
+        else:
+            # GH#21947 we have an empty DataFrame/Series, could be object-dtype
+            cond = cond.astype(bool)
+[/SEARCH]
+[REPLACE]
+        # make sure we are boolean
+        fill_value = bool(inplace)
+        cond = cond.fillna(fill_value)
+
+        msg = "Boolean array expected for the condition, not {dtype}"
+
+        if not cond.empty:
+            if not isinstance(cond, ABCDataFrame):
+                # This is a single-dimensional object.
+                if not is_bool_dtype(cond):
+                    raise ValueError(msg.format(dtype=cond.dtype))
+            else:
+                # Fast path for ExtensionArray-backed DataFrames with a single
+                # block: check dtype once instead of per-column.
+                if cond._mgr.is_single_block and is_extension_array_dtype(
+                    cond._mgr.blocks[0].dtype
+                ):
+                    if not is_bool_dtype(cond._mgr.blocks[0].dtype):
+                        raise ValueError(
+                            msg.format(dtype=cond._mgr.blocks[0].dtype)
+                        )
+                else:
+                    for _dt in cond.dtypes:
+                        if not is_bool_dtype(_dt):
+                            raise ValueError(msg.format(dtype=_dt))
+        else:
+            # GH#21947 we have an empty DataFrame/Series, could be object-dtype
+            cond = cond.astype(bool)
+[/REPLACE]

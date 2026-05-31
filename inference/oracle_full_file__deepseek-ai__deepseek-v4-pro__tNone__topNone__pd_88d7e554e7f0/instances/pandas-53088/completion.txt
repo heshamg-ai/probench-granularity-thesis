@@ -1,0 +1,38 @@
+pandas/core/groupby/ops.py
+[SEARCH]
+    @cache_readonly
+    def groups(self) -> dict[Hashable, np.ndarray]:
+        """dict {group name -> group labels}"""
+        if len(self.groupings) == 1:
+            return self.groupings[0].groups
+        else:
+            to_groupby = zip(*(ping.grouping_vector for ping in self.groupings))
+            index = Index(to_groupby)
+            return self.axis.groupby(index)
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def groups(self) -> dict[Hashable, np.ndarray]:
+        """dict {group name -> group labels}"""
+        if len(self.groupings) == 1:
+            return self.groupings[0].groups
+        else:
+            # Pre-sort the axis and align the index to avoid O(n log n) per-group
+            # lookup when building the dict.
+            codes_list = [ping.codes for ping in self.groupings]
+            shape = tuple(ping.ngroups for ping in self.groupings)
+            group_index = get_group_index(codes_list, shape, sort=True, xnull=False)
+            sorter = get_group_index_sorter(group_index, self.ngroups)
+
+            axis = self.axis.take(sorter)
+            sorted_groups = group_index[sorter]
+
+            starts, ends = lib.generate_slices(sorted_groups, self.ngroups)
+            return {
+                key: axis.iloc[start:end]
+                for key, (start, end) in zip(
+                    get_flattened_list(sorted_groups, self.ngroups, self.levels, self.codes),
+                    zip(starts, ends),
+                )
+            }
+[/REPLACE]

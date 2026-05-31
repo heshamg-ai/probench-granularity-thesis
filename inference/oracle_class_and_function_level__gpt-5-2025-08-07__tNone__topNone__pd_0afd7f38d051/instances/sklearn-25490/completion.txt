@@ -1,0 +1,77 @@
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+        if self.shuffle:
+            X_train = X.copy()
+            self._random_state.shuffle(X_train)
+        else:
+            X_train = X
+
+        n_samples, n_features = X_train.shape
+[/SEARCH]
+[REPLACE]
+        n_samples, n_features = X.shape
+
+        if self.shuffle:
+            X_train = X
+            indices = np.arange(n_samples)
+            self._random_state.shuffle(indices)
+        else:
+            X_train = X
+            indices = None
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+                X_batch = X_train[batch]
+[/SEARCH]
+[REPLACE]
+                if indices is None:
+                    X_batch = X_train[batch]
+                else:
+                    X_batch = X_train[indices[batch]]
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+                self._minibatch_step(X_train[batch], dictionary, self._random_state, i)
+[/SEARCH]
+[REPLACE]
+                X_batch = X_train[batch] if indices is None else X_train[indices[batch]]
+                self._minibatch_step(X_batch, dictionary, self._random_state, i)
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+        code = sparse_encode(
+            X,
+            dictionary,
+            algorithm=self._fit_algorithm,
+            alpha=self.alpha,
+            n_jobs=self.n_jobs,
+            check_input=False,
+            positive=self.positive_code,
+            max_iter=self.transform_max_iter,
+            verbose=self.verbose,
+        )
+[/SEARCH]
+[REPLACE]
+        # Precompute Gram and covariance to avoid redundant work inside sparse_encode
+        gram = np.dot(dictionary, dictionary.T)
+        cov = None
+        if self._fit_algorithm != "lasso_cd":
+            cov = np.dot(dictionary, X.T)
+
+        code = sparse_encode(
+            X,
+            dictionary,
+            gram=gram,
+            cov=cov,
+            algorithm=self._fit_algorithm,
+            alpha=self.alpha,
+            n_jobs=self.n_jobs,
+            check_input=False,
+            positive=self.positive_code,
+            max_iter=self.transform_max_iter,
+            verbose=self.verbose,
+        )
+[/REPLACE]

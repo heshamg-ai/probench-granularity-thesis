@@ -1,0 +1,27 @@
+
+
+
+[SEARCH]
+    def join(
+        self,
+        other: DataFrame | Series,
+        on: Hashable | None = None,
+        how: JoinHow = "left",
+        lsuffix: str_t = "",
+        rsuffix: str_t = "",
+        sort: bool = False,
+        validate: str_t | None = None,
+    ) -> DataFrame:
+[/SEARCH]
+[REPLACE]
+    def join(
+        self,
+        other: DataFrame | Series,
+        on: Hashable | None = None,
+        how: JoinHow = "left",
+        lsuffix: str_t = "",
+        rsuffix: str_t = "",
+        sort: bool = False,
+        validate: str_t | None = None,
+    ) -> DataFrame:
+[/REPLACE]

@@ -1,0 +1,16 @@
+ pandas/core/arrays/arrow/array.py [SEARCH]         elif pa.types.is_boolean(pa_type):
+            from pandas.core.arrays import BooleanArray
+
+            scalars = BooleanArray._from_sequence_of_strings(strings).to_numpy() [/SEARCH] [REPLACE]         elif pa.types.is_boolean(pa_type):
+            scalars = []
+            for val in strings:
+                if val is None or (
+                    isinstance(val, float) and np.isnan(val)
+                ):
+                    scalars.append(None)
+                elif val in ("True", "true", "TRUE", "1", "t", "T", "y", "Y", "yes", "Yes", "YES", "on", "On", "ON"):
+                    scalars.append(True)
+                elif val in ("False", "false", "FALSE", "0", "f", "F", "n", "N", "no", "No", "NO", "off", "Off", "OFF"):
+                    scalars.append(False)
+                else:
+                    raise ValueError(f"{val} is not a valid boolean string") [/REPLACE]

@@ -1,0 +1,142 @@
+xarray/core/accessor_dt.py
+[SEARCH]
+def _access_through_cftimeindex(values, name):
+    """Coerce an array of datetime-like values to a CFTimeIndex
+    and access requested datetime component
+    """
+    from xarray.coding.cftimeindex import CFTimeIndex
+
+    values_as_cftimeindex = CFTimeIndex(values.ravel())
+    if name == "season":
+        months = values_as_cftimeindex.month
+        field_values = _season_from_months(months)
+    elif name == "date":
+        raise AttributeError(
+            "'CFTimeIndex' object has no attribute `date`. Consider using the floor method instead, for instance: `.time.dt.floor('D')`."
+        )
+    else:
+        field_values = getattr(values_as_cftimeindex, name)
+    return field_values.reshape(values.shape)
+[/SEARCH]
+[REPLACE]
+def _access_through_cftimeindex(values, name, freq=None):
+    """Coerce an array of datetime-like values to a CFTimeIndex
+    and access requested datetime component
+    """
+    from xarray.coding.cftimeindex import CFTimeIndex
+
+    values_as_cftimeindex = CFTimeIndex(values.ravel())
+    if name == "season":
+        months = values_as_cftimeindex.month
+        field_values = _season_from_months(months)
+    elif name == "date":
+        raise AttributeError(
+            "'CFTimeIndex' object has no attribute `date`. Consider using the floor method instead, for instance: `.time.dt.floor('D')`."
+        )
+    elif name in ("floor",):
+        field_values = getattr(values_as_cftimeindex, name)(freq)
+    else:
+        field_values = getattr(values_as_cftimeindex, name)
+    return field_values.reshape(values.shape)
+[/REPLACE]
+
+xarray/core/accessor_dt.py
+[SEARCH]
+def _get_date_field(values, name, dtype):
+    """Indirectly access pandas' libts.get_date_field by wrapping data
+    as a Series and calling through `.dt` attribute.
+
+    Parameters
+    ----------
+    values : np.ndarray or dask.array-like
+        Array-like container of datetime-like values
+    name : str
+        Name of datetime field to access
+    dtype : dtype-like
+        dtype for output date field values
+
+    Returns
+    -------
+    datetime_fields : same type as values
+        Array-like of datetime fields accessed for each element in values
+
+    """
+    if is_np_datetime_like(values.dtype):
+        access_method = _access_through_series
+    else:
+        access_method = _access_through_cftimeindex
+
+    if is_duck_dask_array(values):
+        from dask.array import map_blocks
+
+        new_axis = chunks = None
+        # isocalendar adds adds an axis
+        if name == "isocalendar":
+            chunks = (3,) + values.chunksize
+            new_axis = 0
+
+        return map_blocks(
+            access_method, values, name, dtype=dtype, new_axis=new_axis, chunks=chunks
+        )
+    else:
+        return access_method(values, name).astype(dtype)
+[/SEARCH]
+[REPLACE]
+def _get_date_field(values, name, dtype, freq=None):
+    """Indirectly access pandas' libts.get_date_field by wrapping data
+    as a Series and calling through `.dt` attribute.
+
+    Parameters
+    ----------
+    values : np.ndarray or dask.array-like
+        Array-like container of datetime-like values
+    name : str
+        Name of datetime field to access
+    dtype : dtype-like
+        dtype for output date field values
+
+    Returns
+    -------
+    datetime_fields : same type as values
+        Array-like of datetime fields accessed for each element in values
+
+    """
+    if is_np_datetime_like(values.dtype):
+        access_method = _access_through_series
+    else:
+        access_method = _access_through_cftimeindex
+
+    if is_duck_dask_array(values):
+        from dask.array import map_blocks
+
+        new_axis = chunks = None
+        # isocalendar adds adds an axis
+        if name == "isocalendar":
+            chunks = (3,) + values.chunksize
+            new_axis = 0
+
+        return map_blocks(
+            access_method, values, name, freq, dtype=dtype, new_axis=new_axis, chunks=chunks
+        )
+    else:
+        return access_method(values, name, freq).astype(dtype)
+[/REPLACE]
+
+xarray/core/accessor_dt.py
+[SEARCH]
+    def _tslib_round_accessor(self, name: str, freq: str) -> T_DataArray:
+        obj_type = type(self._obj)
+        result = _round_field(self._obj.data, name, freq)
+        return obj_type(result, name=name, coords=self._obj.coords, dims=self._obj.dims)
+[/SEARCH]
+[REPLACE]
+    def _tslib_round_accessor(self, name: str, freq: str) -> T_DataArray:
+        obj_type = type(self._obj)
+        from xarray.core.common import is_np_datetime_like
+
+        if is_np_datetime_like(self._obj.data.dtype):
+            result = _round_field(self._obj.data, name, freq)
+        else:
+            result = _get_date_field(self._obj.data, name, self._obj.dtype, freq=freq)
+        return obj_type(result, name=name, coords=self._obj.coords, dims=self._obj.dims)
+[/REPLACE]

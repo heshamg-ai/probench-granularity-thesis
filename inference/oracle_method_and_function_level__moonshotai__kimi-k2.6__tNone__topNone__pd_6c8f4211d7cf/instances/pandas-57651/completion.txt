@@ -1,0 +1,75 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def _cmp_method(self, other, op):
+        if isinstance(other, RangeIndex):
+            # TESTS ONLY, debug for now
+            step = self.step
+            if self.step < 0:
+                step = -step
+            snotify = (step + 1) & step == 0 and step != 0
+            snotify = False
+            if snotify:
+                print(
+                    f"_cmp_method: {self} {other}",
+                    op.__name__,
+                    f"self: start={self.start}, n={self._len}, step={self.step}",
+                    f"\nother: start={other.start}, n={other._len}"
+                    f", step={other.step}",
+                )
+        return super()._cmp_method(other, op)
+[/SEARCH]
+[REPLACE]
+    def _cmp_method(self, other, op):
+        if isinstance(other, RangeIndex):
+            # TESTS ONLY, debug for now
+            step = self.step
+            if self.step < 0:
+                step = -step
+            snotify = (step + 1) & step == 0 and step != 0
+            snotify = False
+            if snotify:
+                print(
+                    f"_cmp_method: {self} {other}",
+                    op.__name__,
+                    f"self: start={self.start}, n={self._len}, step={self.step}",
+                    f"\nother: start={other.start}, n={other._len}"
+                    f", step={other.step}",
+                )
+        return super()._cmp_method(other, op)
+
+    def _join_monotonic(
+        self, other: Index, how: str = "left"
+    ) -> tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        from pandas.core.indexes.api import ensure_index
+
+        if not isinstance(other, RangeIndex):
+            return super()._join_monotonic(other, how)
+
+        left: Index = self
+        right: Index = other
+
+        # Convert to Int64Index for complex joins
+        if how == "left":
+            if right.is_unique:
+                join_index = left
+                lidx = None
+                ridx = left._left_indexer_unique(right)
+                return join_index, lidx, ridx
+            join_array, lidx, ridx = left._left_indexer(right)
+        elif how == "right":
+            if left.is_unique:
+                join_index = right
+                ridx = None
+                lidx = right._left_indexer_unique(left)
+                return join_index, lidx, ridx
+            join_array, ridx, lidx = right._left_indexer(left)
+        elif how == "inner":
+            join_array, lidx, ridx = left._inner_indexer(right)
+        elif how == "outer":
+            join_array, lidx, ridx = left._outer_indexer(right)
+        else:
+            raise ValueError(f"how must be one of left, right, inner, outer: {how}")
+
+        join_index = ensure_index(join_array)
+        return join_index, lidx, ridx
+[/REPLACE]

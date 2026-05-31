@@ -1,0 +1,29 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def all(self, *args, **kwargs) -> bool:
+        return 0 not in self._range
+
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+[/SEARCH]
+[REPLACE]
+    def all(self, *args, **kwargs) -> bool:
+        return 0 not in self._range
+
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+
+    def argmin(self, axis=None, skipna=True, *args, **kwargs) -> int:
+        """
+        Return the index of the minimum value.
+
+        For RangeIndex, the minimum value is always at the start index
+        when step > 0, and at the end index when step < 0. This avoids
+        materializing the full index.
+        """
+        nv.validate_minmax_axis(axis)
+        nv.validate_argmin(args, kwargs)
+        if not len(self):
+            raise ValueError("Attempt to get argmin of an empty sequence")
+        return 0 if self._range.step > 0 else len(self) - 1
+[/REPLACE]

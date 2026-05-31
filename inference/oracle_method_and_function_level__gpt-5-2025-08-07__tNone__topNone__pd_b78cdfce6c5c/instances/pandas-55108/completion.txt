@@ -1,0 +1,37 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        this = self.unique()
+
+        indexer = this.get_indexer_for(other)
+[/SEARCH]
+[REPLACE]
+        this = self.unique()
+
+        # Fastpath: if both are DatetimeIndex with identical dtype (incl. tz) and
+        # definitely disjoint, we can skip building the indexer/setdiff machinery.
+        # To preserve exact semantics around NaT handling, avoid fastpath when both
+        # contain NaT, as that would represent an overlap on NaT.
+        if isinstance(this, ABCDatetimeIndex) and isinstance(other, ABCDatetimeIndex):
+            if this.dtype == other.dtype and not (this.hasnans and other.hasnans):
+                if other.size == 0 or this.size == 0:
+                    the_diff = this._values
+                    the_diff = _maybe_try_sort(the_diff, sort)
+                    return the_diff
+                this_min = this.min()
+                this_max = this.max()
+                other_min = other.min()
+                other_max = other.max()
+                # Only apply bounds check if mins/maxes are valid (not NaT)
+                if (
+                    not isna(this_min)
+                    and not isna(this_max)
+                    and not isna(other_min)
+                    and not isna(other_max)
+                ):
+                    if this_max < other_min or other_max < this_min:
+                        the_diff = this._values
+                        the_diff = _maybe_try_sort(the_diff, sort)
+                        return the_diff
+
+        indexer = this.get_indexer_for(other)
+[/REPLACE]

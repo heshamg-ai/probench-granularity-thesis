@@ -1,0 +1,83 @@
+{
+  "id": 51,
+  "scenario_id": "pandas-56089",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 56089,
+  "baseline_sha": "562523602b4ac10d1b30d813d7c2bfe02adc0469",
+  "reference_sha": "83ad010c0bc2933d57b43adebce5efb5e8fd8f37",
+  "task": "Optimize pandas.get_dummies for Categorical Series inputs",
+  "entry_point": "pandas.get_dummies",
+  "whats_new": "Performance improvement in get_dummies",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-56089:baseline",
+      "digest": "sha256:ddaac7d77bb42c84495b0bd42b53ddddfcdee1754c98b980a1229f1754ba9996"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-56089:reference",
+      "digest": "sha256:49e86ad83df48fc86df910e92ea3be4acb8145bcc138b48b06a5ead57d67c6b8"
+    }
+  },
+  "params": [
+    {
+      "name": "Series Length",
+      "short_indicator": "N",
+      "explanation": "Number of elements in the Series",
+      "values": [
+        "10000",
+        "100000"
+      ]
+    },
+    {
+      "name": "Cardinality",
+      "short_indicator": "C",
+      "explanation": "Number of unique categories",
+      "values": [
+        "100",
+        "1000",
+        "10000"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/reshape/test_from_dummies.py::test_roundtrip_series_to_dataframe",
+    "pandas/tests/reshape/test_from_dummies.py::test_roundtrip_single_column_dataframe",
+    "pandas/tests/reshape/test_from_dummies.py::test_roundtrip_with_prefixes",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_dataframe_dummies_all_obj",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_dataframe_dummies_drop_first",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_dataframe_dummies_drop_first_with_categorical",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_dataframe_dummies_drop_first_with_na",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_dataframe_dummies_mix_default",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_dataframe_dummies_prefix_bad_length",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_dataframe_dummies_prefix_dict",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_dataframe_dummies_prefix_list",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_dataframe_dummies_prefix_sep",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_dataframe_dummies_prefix_sep_bad_length",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_dataframe_dummies_prefix_str",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_dataframe_dummies_preserve_categorical_dtype",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_dataframe_dummies_string_dtype",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_dataframe_dummies_subset",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_dataframe_dummies_unicode",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_dataframe_dummies_with_categorical",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_dataframe_dummies_with_na",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_get_dummies_all_sparse",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_get_dummies_basic",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_get_dummies_basic_drop_first",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_get_dummies_basic_drop_first_NA",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_get_dummies_basic_drop_first_one_level",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_get_dummies_basic_types",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_get_dummies_dont_sparsify_all_columns",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_get_dummies_duplicate_columns",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_get_dummies_ea_dtype_dataframe",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_get_dummies_ea_dtype_series",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_get_dummies_include_na",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_get_dummies_int_df",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_get_dummies_int_int",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_get_dummies_just_na",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_get_dummies_raises_on_dtype_object",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_get_dummies_unicode",
+    "pandas/tests/reshape/test_get_dummies.py::TestGetDummies::test_get_dummies_with_string_values"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.get_dummies for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize pandas.get_dummies for Categorical Series inputs\nOptimization function: pandas.get_dummies\n\n\n[start of pandas/core/reshape/encoding.py]\n### Relevant context\n#### Function `pandas.core.reshape.encoding._get_dummies_1d`\n```python\ndef _get_dummies_1d(\n    data,\n    prefix,\n    prefix_sep: str | Iterable[str] | dict[str, str] = \"_\",\n    dummy_na: bool = False,\n    sparse: bool = False,\n    drop_first: bool = False,\n    dtype: NpDtype | None = None,\n) -> DataFrame:\n    from pandas.core.reshape.concat import concat\n\n    # Series avoids inconsistent NaN handling\n    codes, levels = factorize_from_iterable(Series(data, copy=False))\n\n    if dtype is None:\n        dtype = np.dtype(bool)\n    _dtype = pandas_dtype(dtype)\n\n    if is_object_dtype(_dtype):\n        raise ValueError(\"dtype=object is not a valid dtype for get_dummies\")\n\n    def get_empty_frame(data) -> DataFrame:\n        index: Index | np.ndarray\n        if isinstance(data, Series):\n            index = data.index\n        else:\n            index = default_index(len(data))\n        return DataFrame(index=index)\n\n    # if all NaN\n    if not dummy_na and len(levels) == 0:\n        return get_empty_frame(data)\n\n    codes = codes.copy()\n    if dummy_na:\n        codes[codes == -1] = len(levels)\n        levels = levels.insert(len(levels), np.nan)\n\n    # if dummy_na, we just fake a nan level. drop_first will drop it again\n    if drop_first and len(levels) == 1:\n        return get_empty_frame(data)\n\n    number_of_cols = len(levels)\n\n    if prefix is None:\n        dummy_cols = levels\n    else:\n        dummy_cols = Index([f\"{prefix}{prefix_sep}{level}\" for level in levels])\n\n    index: Index | None\n    if isinstance(data, Series):\n        index = data.index\n    else:\n        index = None\n\n    if sparse:\n        fill_value: bool | float\n        if is_integer_dtype(dtype):\n            fill_value = 0\n        elif dtype == np.dtype(bool):\n            fill_value = False\n        else:\n            fill_value = 0.0\n\n        sparse_series = []\n        N = len(data)\n        sp_indices: list[list] = [[] for _ in range(len(dummy_cols))]\n        mask = codes != -1\n        codes = codes[mask]\n        n_idx = np.arange(N)[mask]\n\n        for ndx, code in zip(n_idx, codes):\n            sp_indices[code].append(ndx)\n\n        if drop_first:\n            # remove first categorical level to avoid perfect collinearity\n            # GH12042\n            sp_indices = sp_indices[1:]\n            dummy_cols = dummy_cols[1:]\n        for col, ixs in zip(dummy_cols, sp_indices):\n            sarr = SparseArray(\n                np.ones(len(ixs), dtype=dtype),\n                sparse_index=IntIndex(N, ixs),\n                fill_value=fill_value,\n                dtype=dtype,\n            )\n            sparse_series.append(Series(data=sarr, index=index, name=col, copy=False))\n\n        return concat(sparse_series, axis=1, copy=False)\n\n    else:\n        # take on axis=1 + transpose to ensure ndarray layout is column-major\n        eye_dtype: NpDtype\n        if isinstance(_dtype, np.dtype):\n            eye_dtype = _dtype\n        else:\n            eye_dtype = np.bool_\n        dummy_mat = np.eye(number_of_cols, dtype=eye_dtype).take(codes, axis=1).T\n\n        if not dummy_na:\n            # reset NaN GH4446\n            dummy_mat[codes == -1] = 0\n\n        if drop_first:\n            # remove first GH12042\n            dummy_mat = dummy_mat[:, 1:]\n            dummy_cols = dummy_cols[1:]\n        return DataFrame(dummy_mat, index=index, columns=dummy_cols, dtype=_dtype)\n```\n[end of pandas/core/reshape/encoding.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

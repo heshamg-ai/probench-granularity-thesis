@@ -1,0 +1,29 @@
+pandas/io/parsers/base_parser.py
+[SEARCH]
+            if is_scalar(colspec) or isinstance(colspec, tuple):
+                if isinstance(colspec, int) and colspec not in data_dict:
+                    colspec = orig_names[colspec]
+                if _isindex(colspec):
+                    continue
+                # Pyarrow engine returns Series which we need to convert to
+                # numpy array before converter, its a no-op for other parsers
+                data_dict[colspec] = converter(
+                    np.asarray(data_dict[colspec]), col=colspec
+                )
+[/SEARCH]
+[REPLACE]
+            if is_scalar(colspec) or isinstance(colspec, tuple):
+                if isinstance(colspec, int) and colspec not in data_dict:
+                    colspec = orig_names[colspec]
+                if _isindex(colspec):
+                    continue
+                val = data_dict[colspec]
+                # PyArrow engine returns Series with dedicated timestamp
+                # dtypes; if already datetime-like, skip costly conversion
+                if hasattr(val, "dtype") and lib.is_np_dtype(val.dtype, "M"):
+                    pass
+                else:
+                    data_dict[colspec] = converter(
+                        np.asarray(val), col=colspec
+                    )
+[/REPLACE]

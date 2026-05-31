@@ -1,0 +1,61 @@
+
+
+Looking at the code, I need to add a `round` method to `RangeIndex` that preserves the `RangeIndex` type when possible. Currently, `Index.round` always converts through `to_series().round()` which loses the efficient `RangeIndex` representation.
+
+Let me implement the optimization:
+
+pandas/core/indexes/range.py
+[SEARCH]
+    _typ = "rangeindex"
+    _dtype_validation_metadata = (is_signed_integer_dtype, "signed integer")
+    _range: range
+    _values: np.ndarray
+[/SEARCH]
+[REPLACE]
+    _typ = "rangeindex"
+    _dtype_validation_metadata = (is_signed_integer_dtype, "signed integer")
+    _range: range
+    _values: np.ndarray
+
+    def round(self, decimals: int = 0) -> Self:
+        """
+        Round the Index to the given number of decimals.
+
+        Parameters
+        ----------
+        decimals : int, optional
+            Number of decimal places to round to. If decimals is negative,
+            it specifies the number of positions to the left of the decimal point.
+
+        Returns
+        -------
+        Index
+            A new Index with the rounded values.
+
+        See Also
+        --------
+        Index.round : Equivalent method for Index.
+
+        Examples
+        --------
+        >>> import pandas as pd
+        >>> idx = pd.RangeIndex(5)
+        >>> idx.round(decimals=2)
+        RangeIndex(start=0, stop=5, step=1)
+        """
+        if decimals >= 0:
+            return self
+
+        if self._range.step < 0:
+            return Index.round(self, decimals)
+
+        step = 10**(-decimals)
+        start = round(self._range.start, -decimals)
+        step_rounded = round(self._range.step, -decimals)
+
+        if step_rounded <= 0 or start < 0:
+            return Index.round(self, decimals)
+
+        stop = start + self._range.step * len(self)
+        return RangeIndex(start, stop, step_rounded)
+[/REPLACE]

@@ -1,0 +1,53 @@
+pandas/core/reshape/concat.py
+[SEARCH]
+        for hlevel, level in zip(zipped, levels):
+            to_concat = []
+            for key, index in zip(hlevel, indexes):
+                # Find matching codes, include matching nan values as equal.
+                mask = (isna(level) & isna(key)) | (level == key)
+                if not mask.any():
+                    raise ValueError(f"Key {key} not in level {level}")
+                i = np.nonzero(mask)[0][0]
+
+                to_concat.append(np.repeat(i, len(index)))
+            codes_list.append(np.concatenate(to_concat))
+[/SEARCH]
+[REPLACE]
+        for hlevel, level in zip(zipped, levels):
+            # Vectorized mapping of keys to level positions with NaN handling
+            hlevel_index = ensure_index(hlevel)
+            mapped = level.get_indexer(hlevel_index)
+            if (mapped == -1).any():
+                # Handle NaNs: treat NaN in keys as matching NaN in level
+                level_isna = isna(level)
+                if level_isna.any():
+                    nan_pos_arr = np.nonzero(level_isna)[0]
+                    if len(nan_pos_arr):
+                        nan_pos = nan_pos_arr[0]
+                        hlevel_isna = isna(hlevel_index)
+                        missing_mask = (mapped == -1) & hlevel_isna
+                        if missing_mask.any():
+                            mapped = mapped.copy()
+                            mapped[missing_mask] = nan_pos
+                # After NaN handling, any remaining -1 means key not found
+                if (mapped == -1).any():
+                    missing_key = hlevel_index[(mapped == -1).nonzero()[0][0]]
+                    raise ValueError(f"Key {missing_key} not in level {level}")
+            to_concat = [np.repeat(code, len(index)) for code, index in zip(mapped, indexes)]
+            codes_list.append(np.concatenate(to_concat))
+[/REPLACE]
+
+pandas/core/reshape/concat.py
+[SEARCH]
+    else:
+        new_levels.append(new_index.unique())
+        single_codes = new_index.unique().get_indexer(new_index)
+        new_codes.append(np.tile(single_codes, kpieces))
+[/SEARCH]
+[REPLACE]
+    else:
+        unique_index = new_index.unique()
+        new_levels.append(unique_index)
+        single_codes = unique_index.get_indexer(new_index)
+        new_codes.append(np.tile(single_codes, kpieces))
+[/REPLACE]

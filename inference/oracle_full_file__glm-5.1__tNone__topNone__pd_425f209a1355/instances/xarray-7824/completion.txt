@@ -1,0 +1,121 @@
+xarray/core/concat.py
+[SEARCH]
+def _dataset_concat(
+    datasets: list[T_Dataset],
+    dim: str | T_DataArray | pd.Index,
+    data_vars: T_DataVars,
+    coords: str | list[str],
+    compat: CompatOptions,
+    positions: Iterable[Iterable[int]] | None,
+    fill_value: Any = dtypes.NA,
+    join: JoinOptions = "outer",
+    combine_attrs: CombineAttrsOptions = "override",
+) -> T_Dataset:
+    """
+    Concatenate a sequence of datasets along a new or existing dimension
+    """
+    from xarray.core.dataarray import DataArray
+    from xarray.core.dataset import Dataset
+
+    datasets = list(datasets)
+
+    if not all(isinstance(dataset, Dataset) for dataset in datasets):
+        raise TypeError(
+            "The elements in the input list need to be either all 'Dataset's or all 'DataArray's"
+        )
+
+    if isinstance(dim, DataArray):
+        dim_var = dim.variable
+    elif isinstance(dim, Variable):
+        dim_var = dim
+    else:
+        dim_var = None
+
+    dim, index = _calc_concat_dim_index(dim)
+
+    # Make sure we're working on a copy (we'll be loading variables)
+    datasets = [ds.copy() for ds in datasets]
+    datasets = list(
+        align(*datasets, join=join, copy=False, exclude=[dim], fill_value=fill_value)
+    )
+
+    dim_coords, dims_sizes, coord_names, data_names, vars_order = _parse_datasets(
+        datasets
+    )
+[/SEARCH]
+[REPLACE]
+def _dataset_concat(
+    datasets: list[T_Dataset],
+    dim: str | T_DataArray | pd.Index,
+    data_vars: T_DataVars,
+    coords: str | list[str],
+    compat: CompatOptions,
+    positions: Iterable[Iterable[int]] | None,
+    fill_value: Any = dtypes.NA,
+    join: JoinOptions = "outer",
+    combine_attrs: CombineAttrsOptions = "override",
+) -> T_Dataset:
+    """
+    Concatenate a sequence of datasets along a new or existing dimension
+    """
+    from xarray.core.dataarray import DataArray
+    from xarray.core.dataset import Dataset
+
+    datasets = list(datasets)
+
+    if not all(isinstance(dataset, Dataset) for dataset in datasets):
+        raise TypeError(
+            "The elements in the input list need to be either all 'Dataset's or all 'DataArray's"
+        )
+
+    if isinstance(dim, DataArray):
+        dim_var = dim.variable
+    elif isinstance(dim, Variable):
+        dim_var = dim
+    else:
+        dim_var = None
+
+    dim, index = _calc_concat_dim_index(dim)
+
+    # Determine which variables need concatenation before aligning to avoid
+    # loading data for variables that are identical across all datasets.
+    _concat_over, equals, concat_dim_lengths = _calc_concat_over(
+        datasets, dim, set(), data_vars, coords, compat
+    )
+
+    # Make sure we're working on a copy (we'll be loading variables)
+    datasets = [ds.copy() for ds in datasets]
+    datasets = list(
+        align(*datasets, join=join, copy=False, exclude=[dim], fill_value=fill_value)
+    )
+
+    dim_coords, dims_sizes, coord_names, data_names, vars_order = _parse_datasets(
+        datasets
+    )
+[/REPLACE]
+
+xarray/core/concat.py
+[SEARCH]
+    # determine which variables to concatenate
+    concat_over, equals, concat_dim_lengths = _calc_concat_over(
+        datasets, dim, dim_names, data_vars, coords, compat
+    )
+
+    # determine which variables to merge, and then merge them according to compat
+    variables_to_merge = (coord_names | data_names) - concat_over - unlabeled_dims
+[/SEARCH]
+[REPLACE]
+    # Use pre-computed concat_over from before alignment (which has correct dim_names)
+    # but also add any variables that appear due to alignment fill values
+    aligned_concat_over = _concat_over | {
+        k for k, v in datasets[0].variables.items() if dim in v.dims
+    }
+    for ds in datasets[1:]:
+        aligned_concat_over.update(
+            k for k, v in ds.variables.items() if dim in v.dims
+        )
+    concat_over = aligned_concat_over
+
+    # determine which variables to merge, and then merge them according to compat
+    variables_to_merge = (coord_names | data_names) - concat_over - unlabeled_dims
+[/REPLACE]

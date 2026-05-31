@@ -1,0 +1,86 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+        if all(
+            (isinstance(o, MultiIndex) and o.nlevels >= self.nlevels) for o in other
+        ):
+            arrays, names = [], []
+            for i in range(self.nlevels):
+                label = self._get_level_values(i)
+                appended = [o._get_level_values(i) for o in other]
+                arrays.append(label.append(appended))
+                single_label_name = all(label.name == x.name for x in appended)
+                names.append(label.name if single_label_name else None)
+            return MultiIndex.from_arrays(arrays, names=names)
+[/SEARCH]
+[REPLACE]
+        if all(
+            (isinstance(o, MultiIndex) and o.nlevels >= self.nlevels) for o in other
+        ):
+            # Fast-path: build new levels and codes directly without materializing
+            # full label arrays
+            idxs = [self] + list(other)
+            new_levels = []
+            new_codes = []
+            names = []
+            for i in range(self.nlevels):
+                # determine resulting level name
+                base_name = self.names[i]
+                single_label_name = True
+                for o in other:
+                    if o.names[i] != base_name:
+                        single_label_name = False
+                        break
+                names.append(base_name if single_label_name else None)
+
+                # build mapping of labels to new codes in order of first appearance
+                label_to_newcode = {}
+                level_vals = []
+                for idx in idxs:
+                    codes_i = idx.codes[i]
+                    if len(codes_i) == 0:
+                        continue
+                    uc = algos.unique(codes_i)
+                    if uc.size:
+                        if (uc == -1).any():
+                            uc = uc[uc != -1]
+                        if uc.size:
+                            lev_i = idx.levels[i]
+                            lev_values = lev_i._values
+                            for c in uc:
+                                val = lev_values[c]
+                                if val not in label_to_newcode:
+                                    label_to_newcode[val] = len(level_vals)
+                                    level_vals.append(val)
+                new_levels.append(ensure_index(level_vals))
+
+                # remap and concatenate codes for this level
+                parts = []
+                for idx in idxs:
+                    codes_i = ensure_int64(idx.codes[i])
+                    if codes_i.size == 0:
+                        parts.append(codes_i)
+                        continue
+                    lev_i = idx.levels[i]
+                    if len(lev_i) == 0:
+                        mapped = np.full(codes_i.shape, -1, dtype=np.intp)
+                    else:
+                        map_arr = np.empty(len(lev_i), dtype=np.intp)
+                        map_arr.fill(-1)
+                        uc2 = algos.unique(codes_i)
+                        if uc2.size:
+                            if (uc2 == -1).any():
+                                uc2 = uc2[uc2 != -1]
+                            if uc2.size:
+                                lev_values = lev_i._values
+                                for c in uc2:
+                                    val = lev_values[c]
+                                    map_arr[c] = label_to_newcode[val]
+                        mapped = map_arr[codes_i]
+                        if (codes_i == -1).any():
+                            mask = codes_i == -1
+                            mapped = mapped.astype(np.intp, copy=False)
+                            mapped[mask] = -1
+                    parts.append(mapped)
+                new_codes.append(np.concatenate(parts) if parts else np.array([], dtype=np.intp))
+            return MultiIndex(levels=new_levels, codes=new_codes, names=names, verify_integrity=False)
+[/REPLACE]

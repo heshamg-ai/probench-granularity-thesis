@@ -1,0 +1,182 @@
+pandas/core/arrays/base.py
+[SEARCH]
+    def _hash_pandas_object(
+        self, *, encoding: str, hash_key: str, categorize: bool
+    ) -> npt.NDArray[np.uint64]:
+        """
+        Hook for hash_pandas_object.
+
+        Default is to use the values returned by _values_for_factorize.
+
+        Parameters
+        ----------
+        encoding : str
+            Encoding for data & key when strings.
+        hash_key : str
+            Hash_key for string key to encode.
+        categorize : bool
+            Whether to first categorize object arrays before hashing. This is more
+            efficient when the array contains duplicate values.
+
+        Returns
+        -------
+        np.ndarray[uint64]
+
+        Examples
+        --------
+        >>> pd.array([1, 2])._hash_pandas_object(encoding='utf-8',
+        ...                                      hash_key="1000000000000000",
+        ...                                      categorize=False
+        ...                                      )
+        array([11381023671546835630,  4641644667904626417], dtype=uint64)
+        """
+        from pandas.core.util.hashing import hash_array
+
+        values, _ = self._values_for_factorize()
+        return hash_array(
+            values, encoding=encoding, hash_key=hash_key, categorize=categorize
+        )
+[/SEARCH]
+[REPLACE]
+    def _hash_pandas_object(
+        self, *, encoding: str, hash_key: str, categorize: bool
+    ) -> npt.NDArray[np.uint64]:
+        """
+        Hook for hash_pandas_object.
+
+        Default is to use the values returned by _values_for_factorize.
+
+        Parameters
+        ----------
+        encoding : str
+            Encoding for data & key when strings.
+        hash_key : str
+            Hash_key for string key to encode.
+        categorize : bool
+            Whether to first categorize object arrays before hashing. This is more
+            efficient when the array contains duplicate values.
+
+        Returns
+        -------
+        np.ndarray[uint64]
+
+        Examples
+        --------
+        >>> pd.array([1, 2])._hash_pandas_object(encoding='utf-8',
+        ...                                      hash_key="1000000000000000",
+        ...                                      categorize=False
+        ...                                      )
+        array([11381023671546835630,  4641644667904626417], dtype=uint64)
+        """
+        from pandas.core.util.hashing import hash_array
+
+        values, _ = self._values_for_factorize()
+        return hash_array(
+            values, encoding=encoding, hash_key=hash_key, categorize=categorize
+        )
+[/REPLACE]
+
+pandas/core/arrays/masked.py
+[SEARCH]
+    def _hash_pandas_object(
+        self, *, encoding: str, hash_key: str, categorize: bool
+    ) -> npt.NDArray[np.uint64]:
+        # Since masking variations of the same value (e.g., 1 and NA)
+        # would produce the same hash, we need to incorporate the mask
+        # into the hash. We do this by hashing the underlying data and
+        # then XORing with a hash of the mask.
+        from pandas.core.util.hashing import hash_array
+
+        values, _ = self._values_for_factorize()
+
+        result = hash_array(
+            values, encoding=encoding, hash_key=hash_key, categorize=categorize
+        )
+        mask = self._mask
+        result[mask] = hash_array(
+            mask, encoding=encoding, hash_key=hash_key, categorize=categorize
+        )[mask]
+        # GH#55677 XOR with mask hash to distinguish masked and unmasked values
+        return result
+[/SEARCH]
+[REPLACE]
+    def _hash_pandas_object(
+        self, *, encoding: str, hash_key: str, categorize: bool
+    ) -> npt.NDArray[np.uint64]:
+        # Since masking variations of the same value (e.g., 1 and NA)
+        # would produce the same hash, we need to incorporate the mask
+        # into the hash. We do this by hashing the underlying data and
+        # then XORing with a hash of the mask.
+        from pandas.core.util.hashing import hash_array
+
+        values, _ = self._values_for_factorize()
+
+        result = hash_array(
+            values, encoding=encoding, hash_key=hash_key, categorize=categorize
+        )
+        mask = self._mask
+        result[mask] = hash_array(
+            mask, encoding=encoding, hash_key=hash_key, categorize=categorize
+        )[mask]
+        # GH#55677 XOR with mask hash to distinguish masked and unmasked values
+        return result
+[/REPLACE]
+
+pandas/core/arrays/masked.py
+[SEARCH]
+    def _hash_pandas_object(
+        self, *, encoding: str, hash_key: str, categorize: bool
+    ) -> npt.NDArray[np.uint64]:
+        # Since masking variations of the same value (e.g., 1 and NA)
+        # would produce the same hash, we need to incorporate the mask
+        # into the hash. We do this by hashing the underlying data and
+        # then XORing with a hash of the mask.
+        from pandas.core.util.hashing import hash_array
+
+        values, _ = self._values_for_factorize()
+
+        result = hash_array(
+            values, encoding=encoding, hash_key=hash_key, categorize=categorize
+        )
+        mask = self._mask
+        result[mask] = hash_array(
+            mask, encoding=encoding, hash_key=hash_key, categorize=categorize
+        )[mask]
+        # GH#55677 XOR with mask hash to distinguish masked and unmasked values
+        return result
+[/SEARCH]
+[REPLACE]
+    def _hash_pandas_object(
+        self, *, encoding: str, hash_key: str, categorize: bool
+    ) -> npt.NDArray[np.uint64]:
+        from pandas.core.util.hashing import hash_array, hash_object_array
+
+        mask = self._mask
+        hasna = mask.any()
+
+        if hasna:
+            # Start with zeros for NA values, to be filled in later
+            result = np.zeros(len(self), dtype=np.uint64)
+            # Only hash non-missing values
+            valid = ~mask
+            if valid.any():
+                # Hash the valid underlying data
+                valid_data = self._data[valid]
+                valid_result = hash_array(
+                    valid_data, encoding=encoding, hash_key=hash_key, categorize=categorize
+                )
+                result[valid] = valid_result
+            # For masked positions, hash a sentinel that depends on position.
+            # Using the mask itself as data avoids materializing an object array.
+            mask_hash = hash_object_array(
+                np.arange(len(self), dtype=object), hash_key=hash_key, encoding=encoding
+            )
+            result[mask] = mask_hash[mask]
+        else:
+            # Fast path: no missing values, hash underlying data directly
+            result = hash_array(
+                self._data, encoding=encoding, hash_key=hash_key, categorize=categorize
+            )
+
+        return result
+[/REPLACE]

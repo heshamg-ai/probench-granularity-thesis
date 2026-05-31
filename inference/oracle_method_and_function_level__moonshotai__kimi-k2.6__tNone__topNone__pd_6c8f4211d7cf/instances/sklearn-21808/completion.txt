@@ -1,0 +1,933 @@
+I'll analyze the code and identify optimization opportunities for `LogisticRegression.fit` when using the `lbfgs` solver for multiclass classification.
+
+The key bottleneck is in the `_multinomial_loss_grad` function which is called repeatedly by `scipy.optimize.minimize` with `method='L-BFGS-B'`. The function `_multinomial_loss_grad` calls `_multinomial_loss` which computes the loss, and then computes the gradient. There are several inefficiencies:
+
+1. In `_multinomial_loss`, `p` is computed, then `logsumexp` is computed, then `p` is normalized, and then `np.exp(p, p)` is called at the end. But when called from `_multinomial_loss_grad`, we already call `_multinomial_loss` to get `p`, then recompute `sample_weight` and `diff` from `p`.
+
+2. More importantly, `_multinomial_loss_grad` calls `_multinomial_loss` which does extra work computing the loss when we often only need the gradient in the optimization loop. Actually, looking more carefully - L-BFGS-B needs both function value and gradient, so `func` returns both. But the real issue is that `_multinomial_loss_grad` calls `_multinomial_loss` which allocates new arrays and does redundant computations.
+
+3. The biggest issue: in `_multinomial_loss`, after computing `p -= logsumexp(p, axis=1)[:, np.newaxis]`, it then does `p = np.exp(p, p)` which is an safe in-place exp. But the function also returns `loss` which requires `(sample_weight * Y * p).sum()` before the exp. This means we compute `p` as log-probabilities, then compute loss, then exponentiate. But when called from `_multinomial_loss_grad`, we need `p` as probabilities, not log-probabilities.
+
+Looking at `_multinomial_loss_grad`, it calls `_multinomial_loss` and then uses `p` (which is now probabilities due to the `np.exp(p, p)` at the end of `_multinomial_loss`). But wait - the loss returned is computed before the exp, so that's correct.
+
+The main inefficiency for `lbfgs` with `multinomial` is that `func` in `_logistic_regression_path` calls `_multinomial_loss_grad` which returns `loss, grad, p` but `func` only uses `[0:2]`. However, the bigger issue is memory allocation - each call allocates multiple arrays.
+
+Let me look at what's called during optimization. The `func` is:
+```python
+def func(x, *args):
+    return _multinomial_loss_grad(x, *args)[0:2]
+```
+
+So it calls `_multinomial_loss_grad` which calls `_multinomial_loss`. Each of these functions allocates several temporary arrays.
+
+Let me trace through `_multinomial_loss`:
+1. `w = w.reshape(n_classes, -1)` - view, cheap
+2. `sample_weight = sample_weight[:, np.newaxis]` - view but new array? No, this is a view
+3. `if fit_intercept: ...` 
+4. `p = safe_sparse_dot(X, w.T)` - **new allocation**
+5. `p += intercept` - in-place
+6. `p -= logsumexp(p, axis=1)[:, np.newaxis]` - `logsumexp` returns new array, `[:, np.newaxis]` is a view
+7. `loss = -(sample_weight * Y * p).sum()` - temporary for `sample_weight * Y * p`
+8. `loss += 0.5 * alpha * squared_norm(w)` - cheap
+9. `p = np.exp(p, p)` - in-place exp, reuses `p`
+10. Return `loss, p, w`
+
+Then in `_multinomial_loss_grad`:
+1. Calls `_multinomial_loss` getting `loss, p, w`
+2. `sample_weight = sample_weight[:, np.newaxis]` - but this was already done in `_multinomial_loss`, and now `sample_weight` in this scope is overwritten. Wait, no - `_multinomial_loss` does `sample_weight = sample_weight[:, np.newaxis]` but that's a local variable. The parameter `sample_weight` in `_multinomial_loss_grad` is unchanged.
+
+Actually wait - `sample_weight` in `_multinomial_loss` shadows the parameter with a local that has an extra dimension. But in `_multinomial_loss_grad`, we then do `sample_weight = sample_weight[:, np.newaxis]` again. This is correct but wastes work since we could pass the reshaped version.
+
+But the main optimization is to avoid calling `_multinomial_loss` from `_multinomial_loss_grad` when we're just going to compute the gradient anyway. The loss computation in `_multinomial_loss` is relatively cheap, but we can still inline and optimize.
+
+However, looking more carefully at the question, I need to focus on actual measurable speed and memory improvements. The key insight is that for the `lbfgs` solver with `multinomial` multiclass, we can:
+
+1. Avoid redundant `sample_weight[:, np.newaxis]` operations by pre-computing
+2. Avoid extra function call overhead by inlining `_multinomial_loss` into `_multinomial_loss_grad` or vice versa
+
+But actually, let me look at this differently. The question says "Optimize `LogisticRegression.fit` when using `lbfgs` solver for multiclass classification". 
+
+The most impactful optimization would be to make `_multinomial_loss_grad` not call `_multinomial_loss` but instead compute everything directly, avoiding the temporary array allocations and the extra function call overhead.
+
+Looking at `_multinomial_loss`:
+```python
+def _multinomial_loss(w, X, Y, alpha, sample_weight):
+    n_classes = Y.shape[1]
+    n_features = X.shape[1]
+    fit_intercept = w.size == (n_classes * (n_features + 1))
+    w = w.reshape(n_classes, -1)
+    sample_weight = sample_weight[:, np.newaxis]
+    if fit_intercept:
+        intercept = w[:, -1]
+        w = w[:, :-1]
+    else:
+        intercept = 0
+    p = safe_sparse_dot(X, w.T)
+    p += intercept
+    p -= logsumexp(p, axis=1)[:, np.newaxis]
+    loss = -(sample_weight * Y * p).sum()
+    loss += 0.5 * alpha * squared_norm(w)
+    p = np.exp(p, p)
+    return loss, p, w
+```
+
+And `_multinomial_loss_grad`:
+```python
+def _multinomial_loss_grad(w, X, Y, alpha, sample_weight):
+    n_classes = Y.shape[1]
+    n_features = X.shape[1]
+    fit_intercept = w.size == n_classes * (n_features + 1)
+    grad = np.zeros((n_classes, n_features + bool(fit_intercept)), dtype=X.dtype)
+    loss, p, w = _multinomial_loss(w, X, Y, alpha, sample_weight)
+    sample_weight = sample_weight[:, np.newaxis]
+    diff = sample_weight * (p - Y)
+    grad[:, :n_features] = safe_sparse_dot(diff.T, X)
+    grad[:, :n_features] += alpha * w
+    if fit_intercept:
+        grad[:, -1] = diff.sum(axis=0)
+    return loss, grad.ravel(), p
+```
+
+The optimization: instead of calling `_multinomial_loss` which computes `p` as probabilities and returns them, we can inline the logic. But more importantly, we notice that `_multinomial_loss` does `p -= logsumexp(...)` and then `p = np.exp(p, p)` to get probabilities. In `_multinomial_loss_grad`, we then compute `p - Y`.
+
+Wait - we can optimize `diff = sample_weight * (p - Y)` by noting that this is the same as what's needed for the gradient. But there's a bigger win: we can avoid creating the temporary `sample_weight[:, np.newaxis]` twice and avoid some intermediate arrays.
+
+Actually, let me re-examine. In `_multinomial_loss`, `sample_weight * Y * p` creates a temporary. We can't easily avoid that. But we can avoid the function call overhead and the extra allocation of returning `p`.
+
+Actually, I think the best optimization is to make `_multinomial_loss_grad` compute everything directly without calling `_multinomial_loss`. This avoids:
+1. Function call overhead
+2. Returning `w` from `_multinomial_loss` when it's not needed
+3. Extra temporary for `loss` computation when we need to recompute things anyway
+
+But actually, let's look even more carefully. After calling `_multinomial_loss`, `_multinomial_loss_grad` does `sample_weight = sample_weight[:, np.newaxis]`. But `_multinomial_loss` also does this internally. So we're doing this twice!
+
+Actually no - `_multinomial_loss` does this internally but doesn't affect the caller's `sample_weight`. So we do `sample_weight[:, np.newaxis]` once in `_multinomial_loss` (locally) and once in `_multinomial_loss_grad`. 
+
+Wait, I need to re-read. In `_multinomial_loss`, the line is `sample_weight = sample_weight[:, np.newaxis]`. This is a local assignment. In `_multinomial_loss_grad`, the same line appears. So the outer function does this too. We could pass `sample_weight[:, np.newaxis]` already reshaped to avoid doing it twice, but that changes the API.
+
+Actually, looking at how these are called from `_logistic_regression_path`:
+```python
+func(x, *args)
+```
+where `args = (X, target, 1.0 / C, sample_weight)`.
+
+So the functions are called with `sample_weight` as the last argument.
+
+For the most impactful optimization without changing public API: we can optimize `_multinomial_loss_grad` to not call `_multinomial_loss` and instead compute everything inline. This is the hot path for lbfgs.
+
+Let me write the optimized version:
+
+```python
+def _multinomial_loss_grad(w, X, Y, alpha, sample_weight):
+    n_classes = Y.shape[1]
+    n_features = X.shape[1]
+    fit_intercept = w.size == n_classes * (n_features + 1)
+    grad = np.zeros((n_classes, n_features + bool(fit_intercept)), dtype=X.dtype)
+    
+    w = w.reshape(n_classes, -1)
+    sample_weight = sample_weight[:, np.newaxis]
+    if fit_intercept:
+        intercept = w[:, -1]
+        w = w[:, :-1]
+    else:
+        intercept = 0
+    
+    p = safe_sparse_dot(X, w.T)
+    p += intercept
+    p -= logsumexp(p, axis=1)[:, np.newaxis]
+    
+    # Compute loss
+    loss = -(sample_weight * Y * p).sum()
+    loss += 0.5 * alpha * squared_norm(w)
+    
+    # Convert to probabilities for gradient
+    np.exp(p, p)
+    
+    diff = sample_weight * (p - Y)
+    grad[:, :n_features] = safe_sparse_dot(diff.T, X)
+    grad[:, :n_features] += alpha * w
+    if fit_intercept:
+        grad[:, -1] = diff.sum(axis=0)
+    return loss, grad.ravel(), p
+```
+
+Wait, but the original returns `w` from `_multinomial_loss`, not the reshaped `w`. Let me check... In the original:
+```python
+loss, p, w = _multinomial_loss(w, X, Y, alpha, sample_weight)
+```
+And `_multinomial_loss` returns `return loss, p, w` where `w = w.reshape(n_classes, -1)` then if `fit_intercept`, `w = w[:, :-1]`. So it returns the `w` without intercept.
+
+But in `_multinomial_loss_grad`, the returned `w` is not used! Only `loss, grad.ravel(), p` are returned. So we don't need to return `w`.
+
+Actually wait, let me re-check `_multinomial_loss_grad` return: `return loss, grad.ravel(), p`. Yes, `w` is not returned.
+
+So inlining is safe and avoids returning `w`.
+
+But there's another optimization. Looking at `_multinomial_loss`:
+```python
+    p = np.exp(p, p)
+    return loss, p, w
+```
+
+This `np.exp(p, p)` is in-place. But `p` is still the same array. So returning it doesn't allocate.
+
+Now, for memory efficiency, the main win is avoiding the temporary in `sample_weight * Y * p` and reusing arrays better. But those are minor.
+
+Actually, let me think about this more. There's an even bigger optimization. Looking at `_logistic_regression_path`:
+
+```python
+if solver == "lbfgs":
+    def func(x, *args):
+        return _multinomial_loss_grad(x, *args)[0:2]
+```
+
+So `func` returns only the first 2 elements. But `_multinomial_loss_grad` always computes and returns `p` as the third element, which is wasteful when `func` only needs loss and grad.
+
+However, for the hessian in newton-cg, the third element might be used: wait no, newton-cg has its own `func` and `grad`:
+```python
+elif solver == "newton-cg":
+    def func(x, *args):
+        return _multinomial_loss(x, *args)[0]
+
+    def grad(x, *args):
+        return _multinomial_loss_grad(x, *args)[1]
+```
+
+Hmm, for newton-cg, `grad` uses `_multinomial_loss_grad` and takes `[1]`. But it could just as well use... no, it needs grad only.
+
+Wait, actually for newton-cg, `func` calls `_multinomial_loss` and `grad` calls `_multinomial_loss_grad`. So they don't share computations anyway.
+
+Given that for `lbfgs`, `func` needs both loss and grad, using `_multinomial_loss_grad` is correct. But the waste is computing `p` (probabilities) and returning it when it's not needed.
+
+However, `p` is needed to compute `diff` inside `_multinomial_loss_grad`. So we need to compute it. The question is whether we need to return it.
+
+Looking at what uses the third return value of `_multinomial_loss_grad`: nothing in the `lbfgs` path! Only if someone called it directly and needed `p`.
+
+But for newton-cg, `_multinomial_grad_hess` calls `_multinomial_loss_grad` and uses `p`:
+```python
+loss, grad, p = _multinomial_loss_grad(w, X, Y, alpha, sample_weight)
+```
+
+So `p` is used there. But we could optimize the lbfgs path specifically if we wanted.
+
+Actually, re-reading the original code - I think the cleanest optimization that preserves exact semantics is to inline `_multinomial_loss` into `_multinomial_loss_grad` to avoid the function call and return overhead. But this doesn't change the algorithmic complexity.
+
+Is there a bigger win? Let me look at `_multinomial_loss` again more carefully.
+
+Actually, I think there might be a more significant optimization related to `sample_weight`. Currently, in `_logistic_regression_path`:
+```python
+sample_weight = _check_sample_weight(sample_weight, X, dtype=X.dtype, copy=True)
+```
+
+This ensures `sample_weight` is a float64 (or float32) array. Good.
+
+Then for `func`, the args are `(X, target, 1.0 / C, sample_weight)`.
+
+Inside `_multinomial_loss_grad`, we do `sample_weight = sample_weight[:, np.newaxis]` which creates a view with shape `(n_samples, 1)`.
+
+Actually, wait. I think I should check if there's redundant computation between the loss and gradient that can be shared. In my inlined version above, we compute `p` as log-probs, then `-sample_weight * Y * p` for loss, then `np.exp(p, p)` for probs, then `sample_weight * (p - Y)`.
+
+Is there a way to avoid the `np.exp` and work in log-space? No, because we need probabilities for the gradient.
+
+Let me think about this differently. The actual most expensive operations are:
+1. `safe_sparse_dot(X, w.T)` - O(n_samples * n_features * n_classes)
+2. `logsumexp(p, axis=1)` - O(n_samples * n_classes)
+3. `safe_sparse_dot(diff.T, X)` - O(n_samples * n_features * n_classes)
+
+So it's O(n_samples * n_features * n_classes) dominated. Can we reduce this?
+
+Actually, for the gradient `grad[:, :n_features] = safe_sparse_dot(diff.T, X)`, this is `diff.T @ X` where `diff` is `(n_samples, n_classes)`. So it's `(n_classes, n_samples) @ (n_samples, n_features) = (n_classes, n_features)`. This is correct and necessary.
+
+Hmm, there's another thought. Currently `_multinomial_loss` returns `p` (probabilities) after doing `np.exp(p, p)`. The memory layout: `p` is `(n_samples, n_classes)`. Then in `_multinomial_loss_grad`, we compute `diff = sample_weight * (p - Y)`. This is element-wise and produces `(n_samples, n_classes)`.
+
+Is there memory optimization? `p - Y` creates a temporary, then `sample_weight *` creates another. We can do this in one operation with `np.multiply(sample_weight, p - Y, out=diff)` if we pre-allocate... but `p - Y` still needs a temp.
+
+Actually `p - Y` is a temporary of size `(n_samples, n_classes)`. We could use `np.subtract(p, Y, out=p)` to reuse `p`... but then we lose the original `p`. Since `p` is returned, we might not want to modify it if needed elsewhere. But in `_multinomial_loss_grad`, `p` is only used for `diff` and then returned. If `func` doesn't need `p` (which it doesn't for lbfgs since it slices `[0:2]`), we could modify it.
+
+But for exact semantics, we need to be careful. Let me check if `p` is used after returned from `func` in lbfgs path... No, `func` returns `_multinomial_loss_grad(x, *args)[0:2]`, so `p` is discarded.
+
+So one optimization: in the `func` wrapper or in `_multinomial_loss_grad` when called from `func`, we could avoid returning `p` and reuse its memory. But this requires changing the code path.
+
+Actually, the simplest high-impact change is: optimize `_multinomial_loss_grad` to avoid calling `_multinomial_loss` when we can inline it. This saves a function call and the construction of return tuple and unpacking.
+
+But wait - is there a vectorization or algorithmic optimization I'm missing?
+
+Let me look at the hessian product function too:
+```python
+def hessp(v):
+    v = v.reshape(n_classes, -1)
+    if fit_intercept:
+        inter_terms = v[:, -1]
+        v = v[:, :-1]
+    else:
+        inter_terms = 0
+    r_yhat = safe_sparse_dot(X, v.T)
+    r_yhat += inter_terms
+    r_yhat += (-p * r_yhat).sum(axis=1)[:, np.newaxis]
+    r_yhat *= p
+    r_yhat *= sample_weight
+    hessProd = np.zeros((n_classes, n_features + bool(fit_intercept)))
+    hessProd[:, :n_features] = safe_sparse_dot(r_yhat.T, X)
+    hessProd[:, :n_features] += v * alpha
+    if fit_intercept:
+        hessProd[:, -1] = r_yhat.sum(axis=0)
+    return hessProd.ravel()
+```
+
+This is for newton-cg, not lbfgs.
+
+Hmm, let me reconsider. For lbfgs, `func` is called with `jac=True`, so scipy expects both loss and gradient. The minimize function will evaluate `func` and use the returned gradient.
+
+Actually, looking at scipy's `L-BFGS-B` with `jac=True`: the function should return `(loss, grad)` tuple. So `_multinomial_loss_grad` is perfect since it returns `(loss, grad, p)` and we slice to `[0:2]`.
+
+Wait, I just realized - we return a 3-tuple and slice it. That's creating a tuple and slicing. Minor overhead.
+
+OK let me think about what the actual most impactful optimization is for this specific case. The user asks to optimize `LogisticRegression.fit` for `lbfgs` solver with `multiclass`.
+
+The bottleneck during fit is the repeated calls to `_multinomial_loss_grad` from scipy's optimize. Each call does:
+
+1. Call `_multinomial_loss` which: reshapes w, computes p = X @ w.T + intercept, subtracts logsumexp, computes loss, exponentiates to probabilities, returns (loss, p, w)
+2. Then `_multinomial_loss_grad`: computes diff = sample_weight * (p - Y), computes grad = diff.T @ X + alpha * w, returns (loss, grad.ravel(), p)
+
+The key observation: `_multinomial_loss` returns `w` (the weight matrix without intercept), but this is unused! And the loss computation in `_multinomial_loss` is somewhat wasteful because we can compute it more directly.
+
+Actually, the main computational cost is the matrix multiplications, not the overhead. Let me verify if there are opportunities to cache or reuse computations.
+
+Wait - I think I found something. Look at `_multinomial_loss`:
+
+```python
+p = safe_sparse_dot(X, w.T)
+p += intercept
+p -= logsumexp(p, axis=1)[:, np.newaxis]
+loss = -(sample_weight * Y * p).sum()
+loss += 0.5 * alpha * squared_norm(w)
+p = np.exp(p, p)
+```
+
+Notice: `p -= logsumexp(...)` modifies `p` in place. Then `np.exp(p, p)` also in-place. 
+
+And in `_multinomial_loss_grad`:
+```python
+loss, p, w = _multinomial_loss(w, X, Y, alpha, sample_weight)
+sample_weight = sample_weight[:, np.newaxis]
+diff = sample_weight * (p - Y)
+grad[:, :n_features] = safe_sparse_dot(diff.T, X)
+```
+
+The issue: `p` and `Y` are both `(n_samples, n_classes)`. `p - Y` creates a new array. Then `sample_weight * (p - Y)` creates another. But we can avoid one temporary with:
+```python
+diff = p - Y
+diff *= sample_weight
+```
+
+But that modifies `p - Y` in-place. Or better, if we don't need `p` after:
+```python
+p -= Y
+p *= sample_weight
+diff = p  # now p contains diff
+```
+
+But we need `p` for the return value! Unless we're in lbfgs and don't need it.
+
+Hmm, this is getting complicated for marginal gains. Let me look for bigger wins.
+
+Actually, I just realized there's a significant memory optimization. Currently, for `multinomial` with `lbfgs`, `w0` is initialized as:
+```python
+w0 = np.zeros((classes.size, n_features + int(fit_intercept)), order="F", dtype=X.dtype)
+```
+
+Wait, no - that's only for `sag`/`saga` or in other paths? Let me re-read.
+
+In `_logistic_regression_path`:
+```python
+if multi_class == "multinomial":
+    # scipy.optimize.minimize and newton-cg accepts only ravelled parameters.
+    if solver in ["lbfgs", "newton-cg"]:
+        w0 = w0.ravel()
+```
+
+Hmm, `w0` starts as:
+```python
+w0 = np.zeros((classes.size, n_features + int(fit_intercept)), order="F", dtype=X.dtype)
+```
+
+Then if `multinomial` and `lbfgs`/`newton-cg`, it gets ravelled. So during optimization, `w` is a 1D array of size `classes.size * (n_features + int(fit_intercept))`.
+
+Actually, I want to check: for `lbfgs`, does `w0` start with `order="F"`? Yes. But then it's raveled, so the order doesn't matter much.
+
+OK, let me look at this from a different angle. What's the most common performance issue with this code?
+
+Looking at the functions again, I notice that in `_multinomial_loss`:
+```python
+sample_weight = sample_weight[:, np.newaxis]
+```
+
+This is done in `_multinomial_loss` and then again in `_multinomial_loss_grad`. If we inline, we avoid the second one.
+
+But there's more: `p -= logsumexp(p, axis=1)[:, np.newaxis]` - `logsumexp` allocates an array, and `[:, np.newaxis]` creates a view. Fine.
+
+What about `loss = -(sample_weight * Y * p).sum()` - this allocates a temporary for `sample_weight * Y`, then another for `* p`, or maybe numpy fuses these. Actually modern numpy might not fuse well without explicit out parameter.
+
+Let me suggest the inline optimization which is the cleanest and most impactful:
+
+For `_multinomial_loss_grad`, inline `_multinomial_loss` to avoid function call overhead and redundant `sample_weight` reshaping.
+
+Wait, I want to check one more thing. Is there any Cython optimization available? The file is `_logistic.py`, pure Python. There might be `_logistic.pyx` or similar, but based on the context, we're just modifying `.py` files.
+
+Given the constraints, here's my plan:
+1. Inline `_multinomial_loss` into `_multinomial_loss_grad` to avoid function call overhead
+2. Use in-place operations where possible to reduce temporary allocations
+
+Actually, I want to double-check the exact behavior. Looking at the original code, does anything call `_multinomial_loss` directly? Yes - in `_logistic_regression_path` for `newton-cg`:
+```python
+elif solver == "newton-cg":
+    def func(x, *args):
+        return _multinomial_loss(x, *args)[0]
+```
+
+So `_multinomial_loss` is used independently. We can't remove it.
+
+But we can still optimize `_multinomial_loss_grad` by inlining.
+
+Actually wait, let me re-read the newton-cg path:
+```python
+elif solver == "newton-cg":
+    def func(x, *args):
+        return _multinomial_loss(x, *args)[0]
+
+    def grad(x, *args):
+        return _multinomial_loss_grad(x, *args)[1]
+
+    hess = _multinomial_grad_hess
+```
+
+For newton-cg, `func` and `grad` are separate! So `_multinomial_loss` computes loss, and `_multinomial_loss_grad` computes both. This means for newton-cg, there's redundant computation of `p`. The scipy doc for newton-cg says it may call `func` and `grad` separately or with the same `x`.
+
+Hmm, but we're asked to optimize lbfgs specifically. For lbfgs with `jac=True`, scipy only calls `func` which returns (loss, grad).
+
+So for lbfgs path, the inline optimization of `_multinomial_loss_grad` is the best bet.
+
+Let me also look at memory. Is there a way to reduce peak memory? For large `n_samples * n_classes`, the `p` array is large. In `_multinomial_loss_grad`, `p` is returned but for lbfgs path discarded.
+
+One trick: in the `func` wrapper for lbfgs, we could use out parameters or a different function. But the wrapper is:
+```python
+def func(x, *args):
+    return _multinomial_loss_grad(x, *args)[0:2]
+```
+
+We could create a separate function `_multinomial_loss_grad_lbfgs` that doesn't compute/return `p`. But that duplicates code.
+
+Or, we can optimize `_multinomial_loss_grad` to accept an optional parameter or to not return `p` when not needed. But that changes the function signature which might break tests.
+
+Actually, looking at tests - we can't modify tests, but we can modify internal functions as long as public API is preserved. The test expectations might depend on exact output of internal functions? The problem says "Preserve exact semantics and outputs" and "Do not modify tests or test expectations."
+
+So we need to preserve `_multinomial_loss_grad` return value as (loss, grad, p).
+
+Hmm, but the question says "Optimize `LogisticRegression.fit` when using lbfgs solver". So we need to make the lbfgs path faster.
+
+Let me look at what happens in `_logistic_regression_path` more carefully. For lbfgs:
+
+```python
+if solver == "lbfgs":
+    iprint = [-1, 50, 1, 100, 101][
+        np.searchsorted(np.array([0, 1, 2, 3]), verbose)
+    ]
+    opt_res = optimize.minimize(
+        func,
+        w0,
+        method="L-BFGS-B",
+        jac=True,
+        args=(X, target, 1.0 / C, sample_weight),
+        options={"iprint": iprint, "gtol": tol, "maxiter": max_iter},
+    )
+```
+
+So `func` is called repeatedly with `args = (X, target, 1.0 / C, sample_weight)`.
+
+One optimization: pre-broadcast `sample_weight` to have shape `(n_samples, 1)` in `args` so we don't do it repeatedly in `_multinomial_loss_grad`. But wait, the function signature takes `sample_weight` as 1D and reshapes it. Changing `args` to pass pre-reshaped would require changing the function.
+
+Actually, we can pass a tuple that includes the reshaped sample_weight. But we'd need to change `_multinomial_loss_grad` signature or handling.
+
+Looking at `func(x, *args)` - `args` is `(X, target, 1.0 / C, sample_weight)`. The function does `sample_weight = sample_weight[:, np.newaxis]`. If we could pass `(X, target, 1.0 / C, sample_weight[:, np.newaxis])`, it would skip this.
+
+But that changes the args structure and would break newton-cg too unless we also change there.
+
+Actually, a cleaner approach: in `_logistic_regression_path`, for the lbfgs and newton-cg paths, we can pre-process sample_weight. But this might affect other callers.
+
+Wait, let me trace. For lbfgs with multiclass="multinomial", `target = Y_multi` and `sample_weight` is the same. The `func` is called from scipy with `func(x, *args)`.
+
+Hmm, I think the cleanest high-impact optimization is:
+
+In `_multinomial_loss_grad`, inline the `_multinomial_loss` call and optimize the memory layout.
+
+But actually, let me look at whether there are bigger algorithmic wins. The L-BFGS-B algorithm itself is in scipy, so we can't change it. But we can optimize the function evaluation.
+
+Hmm, one thing I notice: in `_multinomial_loss`, after computing `p = safe_sparse_dot(X, w.T)`, the result `p` has shape `(n_samples, n_classes)`. The `logsumexp(p, axis=1)` computes the log-sum-exp across classes. Then `p -= logsumexp(...)[:, np.newaxis]` normalizes. Then `np.exp(p, p)` converts log-probs to probs.
+
+For the gradient, `_multinomial_loss_grad` computes `diff = sample_weight * (p - Y)`. This is the derivative of the cross-entropy. Then `grad = X.T @ diff + alpha * w`.
+
+Is there any redundant computation? The `logsumexp` and `exp` are both O(n_samples * n_classes). Could we use `softmax` which is more numerically stable and potentially faster?
+
+Actually, `logsumexp` is used for the loss, and then `np.exp` for the probs. We could use `scipy.special.softmax`... no, sklearn avoids depending on scipy.special where possible, and `logsumexp` already imported from `sklearn.utils.fixes` is likely `scipy.special.logsumexp`.
+
+Wait, let me check: `from scipy.special import logsumexp` or similar? In the file, it's probably imported. Looking at the context... not shown, but `logsumexp` is used.
+
+I think we should look at using `softmax` which can be more efficient since it computes both in one go. But `logsumexp` is already optimized in scipy.
+
+Actually, a better idea: use `sklearn.utils.extmath.softmax` or similar? No, let's not add new imports if not needed.
+
+Let me now write the actual code change. I'll inline `_multinomial_loss` into `_multinomial_loss_grad`:
+
+Actually, I realize I need to also check if we can optimize `_multinomial_loss` itself for the newton-cg path. But the question specifically asks for lbfgs optimization.
+
+Let me make the change to `_multinomial_loss_grad`:
+
+```python
+def _multinomial_loss_grad(w, X, Y, alpha, sample_weight):
+    n_classes = Y.shape[1]
+    n_features = X.shape[1]
+    fit_intercept = w.size == n_classes * (n_features + 1)
+    grad = np.zeros((n_classes, n_features + bool(fit_intercept)), dtype=X.dtype)
+
+    # Inline _multinomial_loss computation to avoid function call overhead
+    # and redundant sample_weight reshaping
+    w = w.reshape(n_classes, -1)
+    sample_weight_ = sample_weight[:, np.newaxis]
+    if fit_intercept:
+        intercept = w[:, -1]
+        w = w[:, :-1]
+    else:
+        intercept = 0
+    p = safe_sparse_dot(X, w.T)
+    p += intercept
+    p -= logsumexp(p, axis=1)[:, np.newaxis]
+    loss = -(sample_weight_ * Y * p).sum()
+    loss += 0.5 * alpha * squared_norm(w)
+    np.exp(p, p)
+    diff = sample_weight_ * (p - Y)
+    grad[:, :n_features] = safe_sparse_dot(diff.T, X)
+    grad[:, :n_features] += alpha * w
+    if fit_intercept:
+        grad[:, -1] = diff.sum(axis=0)
+    return loss, grad.ravel(), p
+```
+
+Wait, this still creates temporary `sample_weight_` and computes `diff` with a temporary. But we avoid the function call to `_multinomial_loss`.
+
+However, I want to think more carefully. The original `_multinomial_loss` does:
+```python
+sample_weight = sample_weight[:, np.newaxis]
+```
+
+And then the original `_multinomial_loss_grad` also does this. In my inlined version, I only do it once as `sample_weight_`. This is a win!
+
+Also, the original returns `w` from `_multinomial_loss` which is unused in `_multinomial_loss_grad`. We avoid that.
+
+And one more thing: `p` is modified in-place with `np.exp(p, p)` in `_multinomial_loss`. In the original, `p` is passed back and then `diff = sample_weight * (p - Y)` uses it. In my version, this is the same `p` array.
+
+Actually, let me verify - in the original:
+- `_multinomial_loss` computes `p` as log-probs, then does `p = np.exp(p, p)` to get probs
+- Returns `p` as probs
+- `_multinomial_loss_grad` receives `p` as probs, computes `diff = sample_weight * (p - Y)`
+
+In my inlined version, I do the same. Good.
+
+One more optimization: `diff = sample_weight_ * (p - Y)` creates temp for `p - Y` then another for `*`. Can we do better?
+
+We can use `np.subtract(p, Y, out=p)` to store in `p`, then `np.multiply(sample_weight_, p, out=p)`. But then `p` is modified to contain `diff`, not the original probs. Since we return `p` at the end, we'd be returning `diff` not probs.
+
+But wait - do we need to return the original `p`? The return contract is `p` as "Estimated class probabilities". If we return `diff`, that's wrong.
+
+Actually no - `diff = sample_weight * (p - Y)` is not the same as `p - Y`. We can't easily avoid temps without changing what's returned.
+
+Hmm, but we can allocate `diff` and use it:
+```python
+diff = p - Y
+diff *= sample_weight_  # in-place
+```
+
+This avoids one temporary: `p - Y` creates `diff`, then `diff *= sample_weight_` modifies in-place. But `p - Y` still creates a temp. Actually, `np.subtract(p, Y, out=diff)` with pre-allocated `diff` avoids the temp!
+
+```python
+diff = np.empty_like(p)
+np.subtract(p, Y, out=diff)
+diff *= sample_weight_
+```
+
+But `diff` then contains `sample_weight * (p - Y)`. And we need `diff` for the gradient. That's fine.
+
+Actually, let me check: earlier I had `grad = np.zeros(...)`. We can use `np.empty_like` for `diff`.
+
+But this is minor. The main win is avoiding the function call.
+
+Wait, I want to check one more thing. Is there in-place multiplication for `sample_weight_ * diff`? No, that's what `diff *= sample_weight_` does.
+
+OK, let me also look at whether `loss` computation can be optimized. `-(sample_weight_ * Y * p).sum()` - this does two multiplications and a sum. With `out` parameters or einsum? But numpy might optimize this.
+
+Actually, I just realized: `sample_weight_` is `(n_samples, 1)`, `Y` is `(n_samples, n_classes)`, `p` is `(n_samples, n_classes)`. So `sample_weight_ * Y` broadcasts. This is correct.
+
+For memory, `sample_weight_ * Y * p` creates temps. We can do:
+```python
+loss = -np.sum(sample_weight_ * Y * p)
+```
+
+Or use `einsum` for better memory? Probably not worth it.
+
+Let me also check if we can avoid computing `loss` when not needed. For lbfgs with `jac=True`, scipy needs both. So we need loss.
+
+Alright, I'll make the change to inline `_multinomial_loss` into `_multinomial_loss_grad`. But wait, I also need to make sure I don't break newton-cg which uses `_multinomial_loss` separately. The inlining only affects `_multinomial_loss_grad`, not `_multinomial_loss`.
+
+Actually, is there a way to optimize the lbfgs path specifically without changing the general `_multinomial_loss_grad`? We could change the `func` wrapper:
+
+```python
+if solver == "lbfgs":
+    def func(x, *args):
+        return _multinomial_loss_grad(x, *args)[0:2]
+```
+
+To use a specialized function. But we'd need to create that function.
+
+For simplicity and correctness, I'll just optimize `_multinomial_loss_grad` directly.
+
+Actually, let me think again. I want to make sure I understand what's slow. Profiling would show that the function call to `_multinomial_loss` from `_multinomial_loss_grad` is a bottleneck due to:
+1. Function call overhead (small but called thousands of times)
+2. Extra `sample_weight[:, np.newaxis]` (creates a view, cheap but extra)
+3. Returning `w` which is unused (minor)
+4. The tuple packing/unpacking
+
+The inline removes 1, 3, and partially 2 (we still need the view once).
+
+But is there a vectorization or bigger win? Let me think about the loss and grad computation together.
+
+Loss: `-(sample_weight * Y * p_log).sum() + 0.5 * alpha * ||w||^2` where `p_log` are log-probs
+Grad: with respect to w is `X.T @ (sample_weight * (p_prob - Y)) + alpha * w`
+
+We need both `p_log` for loss and `p_prob` for grad where `p_prob = exp(p_log)`.
+
+There's no avoiding both computations. But we can share the `p` array: compute log-probs, compute loss, then exponentiate in-place to get probs, then compute diff.
+
+This is what the current code does! It's already efficient in that sense.
+
+One more idea: can we use `numexpr` or parallelize? No, that introduces new dependencies.
+
+OK, I think the inline is the best we can do without changing semantics. But let me also look at whether there are issues with `dtype` or `order` that cause slowness.
+
+Actually, I want to check: in the original `_multinomial_loss_grad`:
+```python
+loss, p, w = _multinomial_loss(w, X, Y, alpha, sample_weight)
+# w here shadows the parameter w! But w is reshaped and without intercept
+```
+
+Wait, the `w` returned is the `w` from `_multinomial_loss`, which is `w[:, :-1]` if fit_intercept. This `w` is then unused! Because `grad[:, :n_features] += alpha * w` uses `w` from the outer scope? No, the parameter `w` was shadowed by the assignment `loss, p, w = ...`.
+
+Hmm wait, let me re-read the original more carefully:
+
+```python
+def _multinomial_loss_grad(w, X, Y, alpha, sample_weight):
+    n_classes = Y.shape[1]
+    n_features = X.shape[1]
+    fit_intercept = w.size == n_classes * (n_features + 1)
+    grad = np.zeros((n_classes, n_features + bool(fit_intercept)), dtype=X.dtype)
+    loss, p, w = _multinomial_loss(w, X, Y, alpha, sample_weight)
+    sample_weight = sample_weight[:, np.newaxis]
+    diff = sample_weight * (p - Y)
+    grad[:, :n_features] = safe_sparse_dot(diff.T, X)
+    grad[:, :n_features] += alpha * w
+    if fit_intercept:
+        grad[:, -1] = diff.sum(axis=0)
+    return loss, grad.ravel(), p
+```
+
+After `loss, p, w = _multominial_loss(...)`, the local `w` is now the one returned by `_multinomial_loss`, which is `w[:, :-1]` (without intercept). Then `grad[:, :n_features] += alpha * w` uses this `w`.
+
+In my inlined version, I need to make sure `w` is the same. Let me trace through `_multinomial_loss`:
+
+```python
+def _multinomial_loss(w, X, Y, alpha, sample_weight):
+    ...
+    w = w.reshape(n_classes, -1)
+    ...
+    if fit_intercept:
+        intercept = w[:, -1]
+        w = w[:, :-1]
+    else:
+        intercept = 0
+    ...
+    return loss, p, w
+```
+
+So `w` returned is after removing intercept. Good, I need to match this.
+
+In my inlined version:
+```python
+w = w.reshape(n_classes, -1)
+...
+if fit_intercept:
+    intercept = w[:, -1]
+    w = w[:, :-1]
+else:
+    intercept = 0
+```
+
+After this, `w` is the same as what `_multinomial_loss` would return. Then `grad[:, :n_features] += alpha * w` uses this `w`. Correct!
+
+And `p` is computed the same way. `loss` is computed the same way.
+
+But wait - I need `sample_weight` reshaped for the loss computation AND for the `diff`. In the original, `_multinomial_loss` does `sample_weight = sample_weight[:, np.newaxis]` locally (doesn't affect outer), then `_multinomial_loss_grad` does it again. In my version, I do it once as `sample_weight_`.
+
+This is fine because the original computes `sample_weight * Y * p` with the local `sample_weight` in `_multinomial_loss`, and `diff = sample_weight * (p - Y)` with the outer `sample_weight` reshaped in `_multinomial_loss_grad`. Since both are the same operation, using `sample_weight_` once is correct.
+
+Actually, let me verify: in `_multinomial_loss`, the line is:
+```python
+loss = -(sample_weight * Y * p).sum()
+```
+
+Here `sample_weight` is the reshaped `(n_samples, 1)` version. In `_multinomial_loss_grad`:
+```python
+sample_weight = sample_weight[:, np.newaxis]
+diff = sample_weight * (p - Y)
+```
+
+`sample_weight` is also `(n_samples, 1)`. So yes, replacing both with `sample_weight_` is correct.
+
+OK, I'm now confident the inline is correct and beneficial. Let me write the exact search/replace.
+
+Actually, one more thing. Looking at the import section, I don't have it, but `logsumexp` and `squared_norm` are used. I need to make sure they remain available.
+
+For the search, I need to find the exact text. Looking at the original:
+
+```python
+def _multinomial_loss_grad(w, X, Y, alpha, sample_weight):
+    """Computes the multinomial loss, gradient and class probabilities.
+
+    Parameters
+    ----------
+    w : ndarray of shape (n_classes * n_features,) or
+        (n_classes * (n_features + 1),)
+        Coefficient vector.
+
+    X : {array-like, sparse matrix} of shape (n_samples, n_features)
+        Training data.
+
+    Y : ndarray of shape (n_samples, n_classes)
+        Transformed labels according to the output of LabelBinarizer.
+
+    alpha : float
+        Regularization parameter. alpha is equal to 1 / C.
+
+    sample_weight : array-like of shape (n_samples,)
+        Array of weights that are assigned to individual samples.
+
+    Returns
+    -------
+    loss : float
+        Multinomial loss.
+
+    grad : ndarray of shape (n_classes * n_features,) or \
+            (n_classes * (n_features + 1),)
+        Ravelled gradient of the multinomial loss.
+
+    p : ndarray of shape (n_samples, n_classes)
+        Estimated class probabilities
+
+    Reference
+    ---------
+    Bishop, C. M. (2006). Pattern recognition and machine learning.
+    Springer. (Chapter 4.3.4)
+    """
+    n_classes = Y.shape[1]
+    n_features = X.shape[1]
+    fit_intercept = w.size == n_classes * (n_features + 1)
+    grad = np.zeros((n_classes, n_features + bool(fit_intercept)), dtype=X.dtype)
+    loss, p, w = _multinomial_loss(w, X, Y, alpha, sample_weight)
+    sample_weight = sample_weight[:, np.newaxis]
+    diff = sample_weight * (p - Y)
+    grad[:, :n_features] = safe_sparse_dot(diff.T, X)
+    grad[:, :n_features] += alpha * w
+    if fit_intercept:
+        grad[:, -1] = diff.sum(axis=0)
+    return loss, grad.ravel(), p
+```
+
+My replacement:
+
+```python
+def _multinomial_loss_grad(w, X, Y, alpha, sample_weight):
+    """Computes the multinomial loss, gradient and class probabilities.
+
+    Parameters
+    ----------
+    w : ndarray of shape (n_classes * n_features,) or
+        (n_classes * (n_features + 1),)
+        Coefficient vector.
+
+    X : {array-like, sparse matrix} of shape (n_samples, n_features)
+        Training data.
+
+    Y : ndarray of shape (n_samples, n_classes)
+        Transformed labels according to the output of LabelBinarizer.
+
+    alpha : float
+        Regularization parameter. alpha is equal to 1 / C.
+
+    sample_weight : array-like of shape (n_samples,)
+        Array of weights that are assigned to individual samples.
+
+    Returns
+    -------
+    loss : float
+        Multinomial loss.
+
+    grad : ndarray of shape (n_classes * n_features,) or \
+            (n_classes * (n_features + 1),)
+        Ravelled gradient of the multinomial loss.
+
+    p : ndarray of shape (n_samples, n_classes)
+        Estimated class probabilities
+
+    Reference
+    ---------
+    Bishop, C. M. (2006). Pattern recognition and machine learning.
+    Springer. (Chapter 4.3.4)
+    """
+    n_classes = Y.shape[1]
+    n_features = X.shape[1]
+    fit_intercept = w.size == n_classes * (n_features + 1)
+    grad = np.zeros((n_classes, n_features + bool(fit_intercept)), dtype=X.dtype)
+    w = w.reshape(n_classes, -1)
+    sample_weight = sample_weight[:, np.newaxis]
+    if fit_intercept:
+        intercept = w[:, -1]
+        w = w[:, :-1]
+    else:
+        intercept = 0
+    p = safe_sparse_dot(X, w.T)
+    p += intercept
+    p -= logsumexp(p, axis=1)[:, np.newaxis]
+    loss = -(sample_weight * Y * p).sum()
+    loss += 0.5 * alpha * squared_norm(w)
+    np.exp(p, p)
+    diff = sample_weight * (p - Y)
+    grad[:, :n_features] = safe_sparse_dot(diff.T, X)
+    grad[:, :n_features] += alpha * w
+    if fit_intercept:
+        grad[:, -1] = diff.sum(axis=0)
+    return loss, grad.ravel(), p
+```
+
+This inlines `_multinomial_loss`, avoiding the function call and the redundant `sample_weight` reshape. It keeps the exact same semantics.
+
+Wait, I need to verify: in the original, `w` parameter to `_multinomial_loss_grad` is the full `w`. It gets reshaped to `(n_classes, n_features + 1)` or `(n_classes, n_features)`. Then in `_multinomial_loss`, it's further processed. In my inline, I do the same.
+
+Actually, I just realized: the original `_multinomial_loss` does `w = w.reshape(n_classes, -1)` on its parameter, which was passed from `_multinomial_loss_grad`. The `w` in `_multinomial_loss_grad` is still the original 1D `w` at that point (not modified in outer scope before call). Wait no - at this point in `_multinomial_loss_grad`, `w` is the function parameter (1D). Then `_multinomial_loss(w, ...)` is called with this 1D `w`. Inside `_multinomial_loss`, `w = w.reshape(n_classes, -1)`.
+
+Then after `loss, p, w = _multinomial_loss(...)`, the local `w` in `_multinomial_loss_grad` is now the reshaped and possibly intercept-removed `w` from `_multinomial_loss`.
+
+In my inline version, I do `w = w.reshape(n_classes, -1)` and then if `fit_intercept`, `w = w[:, :-1]`. This is the same. ✓
+
+Good. I think this is a solid optimization. The function call overhead might seem small, but for L-BFGS which calls this thousands of times, it adds up. More importantly, we avoid one `sample_weight[:, np.newaxis]` (which creates a view) and the tuple unpacking.
+
+Is there anything else? Let me think about whether we can also optimize `_multinomial_loss` itself, since `newton-cg` uses it. The question says "lbfgs solver" specifically, so I'll focus on that path.
+
+One more thing: can we optimize the `func` wrapper for lbfgs to avoid slicing?
+
+```python
+def func(x, *args):
+    return _multinomial_loss_grad(x, *args)[0:2]
+```
+
+This creates a 3-tuple and then a 2-tuple. We could define:
+```python
+def func(x, *args):
+    loss, grad, _ = _multinomial_loss_grad(x, *args)
+    return loss, grad
+```
+
+Or create a dedicated function. But this is minor.
+
+Actually, for newton-cg, the separate `func` and `grad` each call their own functions, which means redundant work. But we don't care for lbfgs.
+
+Let me also check if there's any issue with `copy=True` in `_check_sample_weight`. Looking at `_logistic_regression_path`:
+```python
+sample_weight = _check_sample_weight(sample_weight, X, dtype=X.dtype, copy=True)
+```
+
+This copies `sample_weight`. For large datasets, this is an extra allocation. Can we use `copy=False` to avoid it?
+
+But wait, the code later does `sample_weight *= class_weight_[le.fit_transform(y)]` which modifies in-place. If `sample_weight` was passed by the user, we shouldn't modify it. So `copy=True` is correct for safety.
+
+However, looking more carefully: `sample_weight = _check_sample_weight(sample_weight, X, dtype=X.dtype, copy=True)` - if `sample_weight` was None, this creates a new array of ones. If `sample_weight` was provided, it copies. Then later `sample_weight *= ...` in-place multiplies. This is correct.
+
+For memory, if the user passes `sample_weight`, we allocate a copy. If they don't, we allocate ones. Both are necessary.
+
+One more potential optimization: the line
+```python
+lbin = LabelBinarizer()
+Y_multi = lbin.fit_transform(y)
+if Y_multi.shape[1] == 1:
+    Y_multi = np.hstack([1 - Y_multi, Y_multi])
+```
+
+This happens in `_logistic_regression_path`. `Y_multi` could be large. But it's only done once. Fine.
+
+OK, I'm going with the inlining optimization. Let me prepare the exact search/replace block.
+
+Wait, I also want to check: is `_multinomial_loss_grad` used anywhere else besides `_logistic_regression_path` and `_multinomial_grad_hess`?
+
+In `_multinomial_grad_hess`:
+```python
+loss, grad, p = _multinomial_loss_grad(w, X, Y, alpha, sample_weight)
+```
+
+So it uses `p`. Our inline version still returns `p`. Good.
+
+And `_multinomial_loss` is used in `_logistic_regression_path` for newton-cg's `func`. We keep it. Good.
+
+Let me prepare the final answer.
+
+Actually, one more check: in my replacement, I use `np.exp(p, p)` which is in-place. The original `_multinomial_loss` does `p = np.exp(p, p)` which also returns the same array (in-place). Then returns it. Then `_multinomial_loss_grad` receives `p` and uses it. In my version, `p` is the same array, just like before. Good.
+
+And the loss is computed before the exp, using the log-probs `p`. Correct.
+
+OK, I'm confident. Let me write it out.
+
+sklearn/linear_model/_logistic.py
+[SEARCH]
+    n_classes = Y.shape[1]
+    n_features = X.shape[1]
+    fit_intercept = w.size == n_classes * (n_features + 1)
+    grad = np.zeros((n_classes, n_features + bool(fit_intercept)), dtype=X.dtype)
+    loss, p, w = _multinomial_loss(w, X, Y, alpha, sample_weight)
+    sample_weight = sample_weight[:, np.newaxis]
+    diff = sample_weight * (p - Y)
+    grad[:, :n_features] = safe_sparse_dot(diff.T, X)
+    grad[:, :n_features] += alpha * w
+    if fit_intercept:
+        grad[:, -1] = diff.sum(axis=0)
+    return loss, grad.ravel(), p
+[/SEARCH]
+[REPLACE]
+    n_classes = Y.shape[1]
+    n_features = X.shape[1]
+    fit_intercept = w.size == n_classes * (n_features + 1)
+    grad = np.zeros((n_classes, n_features + bool(fit_intercept)), dtype=X.dtype)
+    w = w.reshape(n_classes, -1)
+    sample_weight = sample_weight[:, np.newaxis]
+    if fit_intercept:
+        intercept = w[:, -1]
+        w = w[:, :-1]
+    else:
+        intercept = 0
+    p = safe_sparse_dot(X, w.T)
+    p += intercept
+    p -= logsumexp(p, axis=1)[:, np.newaxis]
+    loss = -(sample_weight * Y * p).sum()
+    loss += 0.5 * alpha * squared_norm(w)
+    np.exp(p, p)
+    diff = sample_weight * (p - Y)
+    grad[:, :n_features] = safe_sparse_dot(diff.T, X)
+    grad[:, :n_features] += alpha * w
+    if fit_intercept:
+        grad[:, -1] = diff.sum(axis=0)
+    return loss, grad.ravel(), p
+[/REPLACE]

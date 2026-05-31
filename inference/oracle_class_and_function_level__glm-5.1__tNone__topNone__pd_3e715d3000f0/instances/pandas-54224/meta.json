@@ -1,0 +1,10 @@
+{
+  "scenario_id": "pandas-54224",
+  "repo": "pandas-dev/pandas",
+  "seconds": 23.01409673690796,
+  "provider": "zhipu",
+  "model": "glm-5.1",
+  "temperature": null,
+  "top_p": null,
+  "prompt_dataset_path": "LLMs thesis/dataset/dataset__gran=class_and_function_level__tok=glm5.1__max=200000__imports=False__globals=False__sigs=False__changes=False.json"
+}

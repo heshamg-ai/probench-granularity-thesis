@@ -1,0 +1,25 @@
+
+
+pandas/core/indexes/base.py
+[SEARCH]
+        lidx = None if lidx is None else ensure_platform_int(lidx)
+        ridx = None if ridx is None else ensure_platform_int(ridx)
+        return join_index, lidx, ridx
+
+    @final
+    def _join_via_get_indexer(
+[/SEARCH]
+[REPLACE]
+        lidx = None if lidx is None else ensure_platform_int(lidx)
+        ridx = None if ridx is None else ensure_platform_int(ridx)
+
+        # Optimize: if the result is one of the inputs, we can return it directly
+        # without further wrapping
+        if join_index is self or join_index is other:
+            return join_index, lidx, ridx
+
+        return join_index, lidx, ridx
+
+    @final
+    def _join_via_get_indexer(
+[/REPLACE]

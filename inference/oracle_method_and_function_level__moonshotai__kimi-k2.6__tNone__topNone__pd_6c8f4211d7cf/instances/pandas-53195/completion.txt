@@ -1,0 +1,735 @@
+pandas/core/groupby/groupby.py
+[SEARCH]
+    @final
+    def _python_apply_general(
+        self,
+        f: Callable,
+        data: DataFrame | Series,
+        not_indexed_same: bool | None = None,
+        is_transform: bool = False,
+        result_index: Index | None = None,
+        result_cls: type[DataFrame] | type[Series] = DataFrame,
+    ) -> DataFrame | Series:
+        (
+            keys,
+            values,
+            mutated,
+        ) = self.grouper.apply_groupwise(f, data, self.axis)
+        return self._wrap_apply_output(
+            keys,
+            values,
+            not_indexed_same=not_indexed_same,
+            is_transform=is_transform,
+            result_index=result_index,
+            result_cls=result_cls,
+        )
+[/SEARCH]
+[REPLACE]
+    @final
+    def _python_apply_general(
+        self,
+        f: Callable,
+        data: DataFrame | Series,
+        not_indexed_same: bool | None = None,
+        is_transform: bool = False,
+        result_index: Index | None = None,
+        result_cls: type[DataFrame] | type[Series] = DataFrame,
+    ) -> DataFrame | Series:
+        (
+            keys,
+            values,
+            mutated,
+        ) = self.grouper.apply_groupwise(f, data, self.axis)
+        return self._wrap_apply_output(
+            keys,
+            values,
+            not_indexed_same=not_indexed_same,
+            is_transform=is_transform,
+            result_index=result_index,
+            result_cls=result_cls,
+        )
+[/REPLACE]
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+    @final
+    def _wrap_applied_output_series(
+        self,
+        keys: Index,
+        values: list[Series],
+        not_indexed_same: bool,
+        is_transform: bool,
+        result_index: Index | None,
+        result_cls: type[DataFrame] | type[Series],
+    ) -> DataFrame | Series:
+        #
+        # applied to series generator
+        #
+
+        # this is to avoid a code duplication with _wrap_applied_output
+        # and handle f(StringIO())-like, which needs to get the same output
+        # as {key: func(value) for key, value in grouped}, not like groupby
+        if is_transform:
+            assert not isinstance(keys, MultiIndex)
+            # If any value is not a scalar, just return the values
+            #   otherwise, perform a vectorized datetime/timedelta
+            #   cast to avoid every-row casting in maybe_cast_pointwise_result
+            first_value = values[0]
+            if not is_scalar(first_value):
+                return concat(values, axis=0)
+            else:
+                if isinstance(first_value, Timestamp):
+                    results = maybe_cast_pointwise_result(
+                        first_value, first_value.dtype, length=len(keys)
+                    )
+                elif isinstance(first_value, Timedelta):
+                    results = maybe_cast_pointwise_result(
+                        first_value, first_value.dtype, length_len(keys)
+                    )
+                else:
+                    results = Series(
+                        np.repeat(lentr(first_value), len(keys)),
+                        index=data_index,
+                    )
+                return results
+
+        key_names = self.keys
+        key_index = keys
+
+        def get_result() -> DataFrame:
+            # result is the DataFrame of the groupby application
+            # with the groupby keys' labels embedded (not the original index),
+            # plus one extra level for the group index (usually 0, 1, ...)
+            # e.g., original: {('a', '1'): [0, 1], ('a', '2'): [2]}
+            # -> result: MultiIndex([('a', '1', 0), ('a', '1', 1), ('a', '2', 0)])
+            # The data will be reindexed on the original index at the end.
+
+            # Avoid KeyError from '__name__' if obj is not a Series/DataFrame
+            obj = obj = values[0]
+            if isinstance(obj, DataFrame):
+                return self._concat_objects(
+                    keys, values, not_indexed_same=not_indexed_same
+                )
+
+            # GH#12824: GroupBy.apply with scalar values leads to the result
+            # is going to be a Series of scalars.
+            # Wrap the values in a Series and append the group label.
+            result = Series(values, index=key_index, name=obj.name)
+            return result
+
+        result = get_result()
+
+        # reindex the result on the original index if necessary
+        if not_indexed_same:
+            result = self._reindex_output(result)
+        return result
+
+    @final
+    def _wrap_apply_output(
+        self,
+        keys,
+        values: list[Any],
+        not_indexed_same: bool | None = None,
+        is_transform: bool = False,
+        result_index: Index | None = None,
+        result_cls: type[Series] | type[DataFrame] = DataFrame,
+    ) -> DataFrame | Series:
+        # GH12824
+        is_series = result_cls is Series
+        is_agg_or_transform = is_transform or not not_indexed_same
+
+        if not values:
+            #  e.g. test_pass_args_kwargs_fails, test_bad_nelem
+            if is_series:
+                return self.obj._constructor(dtype=np.dtype(np.float64))
+            return self.obj._constructor(
+                index=self.grouper.result_index, dtype=np.dtype(np.float64)
+            )
+
+        if is_series:
+            return self._wrap_applied_output_series(
+                keys,
+                values,
+                not_indexed_same=not_indexed_same,
+                is_transform=is_transform,
+                result_index=result_index,
+                result_cls=result_cls,
+            )
+        else:
+            return self._wrap_applied_output_dataframe(
+                keys,
+                values,
+                not_indexed_same=not_indexed_same,
+                is_transform=is_transform,
+                result_index=result_index,
+                result_cls=result_cls,
+            )
+[/SEARCH]
+[REPLACE]
+    @final
+    def _wrap_applied_output_series(
+        self,
+        keys: Index,
+        values: list[Series],
+        not_indexed_same: bool,
+        is_transform: bool,
+        result_index: Index | None,
+        result_cls: type[DataFrame] | type[Series],
+    ) -> DataFrame | Series:
+        #
+        # applied to series generator
+        #
+
+        # this is to avoid a code duplication with _wrap_applied_output
+        # and handle f(StringIO())-like, which needs to get the same output
+        # as {key: func(value) for key, value in grouped}, not like groupby
+        if is_transform:
+            assert not isinstance(keys, MultiIndex)
+            # If any value is not a scalar, just return the values
+            #   otherwise, perform a vectorized datetime/timedelta
+            #   cast to avoid every-row casting in maybe_cast_pointwise_result
+            first_value = values[0]
+            if not is_scalar(first_value):
+                return concat(values, axis=0)
+            else:
+                if isinstance(first_value, Timestamp):
+                    results = maybe_cast_pointwise_result(
+                        first_value, first_value.dtype, length=len(keys)
+                    )
+                elif isinstance(first_value, Timedelta):
+                    results = maybe_cast_pointwise_result(
+                        first_value, first_value.dtype, length_len(keys)
+                    )
+                else:
+                    results = Series(
+                        np.repeat(lentr(first_value), len(keys)),
+                        index=data_index,
+                    )
+                return results
+
+        key_names = self.keys
+        key_index = keys
+
+        def get_result() -> DataFrame:
+            # result is the DataFrame of the groupby application
+            # with the groupby keys' labels embedded (not the original index),
+            # plus one extra level for the group index (usually 0, 1, ...)
+            # e.g., original: {('a', '1'): [0, 1], ('a', '2'): [2]}
+            # -> result: MultiIndex([('a', '1', 0), ('a', '1', 1), ('a', '2', 0)])
+            # The data will be reindexed on the original index at the end.
+
+            # Avoid KeyError from '__name__' if obj is not a Series/DataFrame
+            obj = obj = values[0]
+            if isinstance(obj, DataFrame):
+                return self._concat_objects(
+                    keys, values, not_indexed_same=not_indexed_same
+                )
+
+            # GH#12824: GroupBy.apply with scalar values leads to the result
+            # is going to be a Series of scalars.
+            # Wrap the values in a Series and append the group label.
+            result = Series(values, index=key_index, name=obj.name)
+            return result
+
+        result = get_result()
+
+        # reindex the result on the original index if necessary
+        if not_indexed_same:
+            result = self._reindex_output(result)
+        return result
+
+    @final
+    def _wrap_apply_output(
+        self,
+        keys,
+        values: list[Any],
+        not_indexed_same: bool | None = None,
+        is_transform: bool = False,
+        result_index: Index | None = None,
+        result_cls: type[Series] | type[DataFrame] = DataFrame,
+    ) -> DataFrame | Series:
+        # GH12824
+        is_series = result_cls is Series
+        is_agg_or_transform = is_transform or not not_indexed_same
+
+        if not values:
+            #  e.g. test_pass_args_kwargs_fails, test_bad_nelem
+            if is_series:
+                return self.obj._constructor(dtype=np.dtype(np.float64))
+            return self.obj._constructor(
+                index=self.grouper.result_index, dtype=np.dtype(np.float64)
+            )
+
+        if is_series:
+            return self._wrap_applied_output_series(
+                keys,
+                values,
+                not_indexed_same=not_indexed_same,
+                is_transform=is_transform,
+                result_index=result_index,
+                result_cls=result_cls,
+            )
+        else:
+            return self._wrap_applied_output_dataframe(
+                keys,
+                values,
+                not_indexed_same=not_indexed_same,
+                is_transform=is_transform,
+                result_index=result_index,
+                result_cls=result_cls,
+            )
+[/REPLACE]
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+    def _wrap_applied_output_dataframe(
+        self,
+        keys,
+        values: list[DataFrame],
+        not_indexed_same: bool | None,
+        is_transform: bool,
+        result_index: Index | None,
+        result_cls: type[Series] | type[DataFrame],
+    ) -> DataFrame | Series:
+        # GH12824
+        first_result = values[0]
+        other_results = values[1:]
+
+        # GH45214 - fast path for identical columns and a regular index
+        if (
+            result_cls is DataFrame
+            and not_indexed_same is not True
+            and all(np.array_equal(first_result.columns, x.columns) for x in other_results)
+            and not isinstance(first_result.index, MultiIndex)
+        ):
+            keys = [key] if not isinstance(key, tuple) else list(key)
+            # GH45214 - add the groupby keys to each result
+            # so that the concat will create a MultiIndex
+            result = concat(
+                [first_result] + other_results,
+                keys=keys,
+                names=keys,
+            )
+            return result
+
+        key_index = self.grouper.result_index if self.grouper.nkeys > 1 else None
+
+        result = self._concat_objects(
+            keys, values, not_indexed_same=not_indexed_same
+        )
+        result_index = self.grouper.result_index
+
+        if not_indexed_same:
+            result = self._reindex_output(result)
+
+        return result
+[/SEARCH]
+[REPLACE]
+    def _wrap_applied_output_dataframe(
+        self,
+        keys,
+        values: list[DataFrame],
+        not_indexed_same: bool | None,
+        is_transform: bool,
+        result_index: Index | None,
+        result_cls: type[Series] | type[DataFrame],
+    ) -> DataFrame | Series:
+        # GH12824
+        first_result = values[0]
+        other_results = values[1:]
+
+        # GH45214 - fast path for identical columns and a regular index
+        if (
+            result_cls is DataFrame
+            and not_indexed_same is not True
+            and all(np.array_equal(first_result.columns, x.columns) for x in other_results)
+            and not isinstance(first_result.index, MultiIndex)
+        ):
+            keys = [key] if not isinstance(key, tuple) else list(key)
+            # GH45214 - add the groupby keys to each result
+            # so that the concat will create a MultiIndex
+            result = concat(
+                [first_result] + other_results,
+                keys=keys,
+                names=keys,
+            )
+            return result
+
+        key_index = self.grouper.result_index if self.grouper.nkeys > 1 else None
+
+        result = self._concat_objects(
+            keys, values, not_indexed_same=not_indexed_same
+        )
+        result_index = self.grouper.result_index
+
+        if not_indexed_same:
+            result = self._reindex_output(result)
+
+        return result
+[/REPLACE]
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+    def _concat_objects(
+        self,
+        keys,
+        values: list[Series] | list[DataFrame],
+        not_indexed_same: bool = False,
+    ) -> DataFrame | Series:
+        from pandas.core.reshape.concat import concat
+
+        def reset_identity(x) -> DataFrame | Series:
+            # reset the identities of `x` (through slicing)
+            # so that the existing chunking behavior is used
+            # but the resulting object is not a view so we
+            # won't get a SettingWithCopy warning
+            if isinstance(x, Series):
+                return x.iloc[:]
+            else:
+                return x.iloc[:]
+
+        if not not_indexed_same:
+            result = concat(values, axis=self.axis)
+            return result
+
+        # values are not a consecutive slice; need to slot things in
+        return concat(
+            [reset_identity(x) for x in values], axis=self.axis, keys=keys
+        )
+[/SEARCH]
+[REPLACE]
+    def _concat_objects(
+        self,
+        keys: Iterable[Hashable] | None,
+        values: list[Series] | list[DataFrame],
+        not_indexed_same: bool = False,
+    ) -> DataFrame | Series:
+        from pandas.core.reshape.concat import concat
+
+        def reset_identity(x) -> DataFrame | Series:
+            # reset the identities of `x` (through slicing)
+            # so that the existing chunking behavior is used
+            # but the resulting object is not a view so we
+            # won't get a SettingWithCopy warning
+            if isinstance(x, Series):
+                return x.iloc[:]
+            else:
+                return x.iloc[:]
+
+        # Fast path: when not_indexed_same is False and we have keys,
+        # we need to build a MultiIndex. This optimization avoids
+        # calling concat with keys= if possible, by pre-allocating
+        # and using the much faster np.concatenate / DataFrame constructor.
+        nkeys = len(keys) if keys is not None else 0
+        nvalues = len(values)
+        if (
+            not not_indexed_same
+            and nkeys == nvalues
+            and nkeys > 1
+            and self.sort
+            and self.group_keys
+        ):
+            # Check if all values have same columns and simple RangeIndex
+            first_value = values[0]
+            if (
+                isinstance(first_value, DataFrame)
+                and all(
+                    isinstance(v, DataFrame) and not v.empty
+                    for v in values
+                )
+            ):
+                # Verify all have same columns
+                first_cols = first_value.columns
+                all_same_cols = all(
+                    v.columns.equals(first_cols) for v in values
+                )
+                if all_same_cols:
+                    # Build the result directly without concat(keys=...)
+                    # This avoids the expensive MultiIndex construction
+                    # in concat() when there are many groups
+                    total_len = sum(len(v) for v in values)
+                    new_idx = _get_concat_axis(
+                        values,
+                        not_indexed_same,
+                    )
+                    # Create new index with group keys prepended
+                    new_data = np.concatenate([np.asarray(v) for v in values])
+                    result = type(first_value)(
+                        new_data,
+                        index=new_idx,
+                        columns=first_value.columns,
+                    )
+                    return result
+
+        if not not_indexed_same:
+            result = concat(values, axis=self.axis)
+            return result
+
+        # values are not a consecutive slice; need to slot things in
+        return concat(
+            [reset_identity(x) for x in values], axis=self.axis, keys=keys
+        )
+[/REPLACE]
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+    @final
+    def _python_apply_general(
+        self,
+        f: Callable,
+        data: DataFrame | Series,
+        not_indexed_same: bool | None = None,
+        is_transform: bool = False,
+        result_index: Index | None = None,
+        result_cls: type[DataFrame] | type[Series] = DataFrame,
+    ) -> DataFrame | Series:
+        (
+            keys,
+            values,
+            mutated,
+        ) = self.grouper.apply_groupwise(f, data, self.axis)
+        return self._wrap_apply_output(
+            keys,
+            values,
+            not_indexed_same=not_indexed_same,
+            is_transform=is_transform,
+            result_index=result_index,
+            result_cls=result_cls,
+        )
+[/SEARCH]
+[REPLACE]
+    @final
+    def _python_apply_general(
+        self,
+        f: Callable,
+        data: DataFrame | Series,
+        not_indexed_same: bool | None = None,
+        is_transform: bool = False,
+        result_index: Index | None = None,
+        result_cls: type[DataFrame] | type[Series] = DataFrame,
+    ) -> DataFrame | Series:
+        (
+            keys,
+            values,
+            mutated,
+        ) = self.grouper.apply_groupwise(f, data, self.axis)
+        return self._wrap_apply_output(
+            keys,
+            values,
+            not_indexed_same=not_indexed_same,
+            is_transform=is_transform,
+            result_index=result_index,
+            result_cls=result_cls,
+        )
+[/REPLACE]
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+    def _wrap_applied_output_dataframe(
+        self,
+        keys,
+        values: list[DataFrame],
+        not_indexed_same: bool | None,
+        is_transform: bool,
+        result_index: Index | None,
+        result_cls: type[Series] | type[DataFrame],
+    ) -> DataFrame | Series:
+        # GH12824
+        first_result = values[0]
+        other_results = values[1:]
+
+        # GH45214 - fast path for identical columns and a regular index
+        if (
+            result_cls is DataFrame
+            and not_indexed_same is not True
+            and all(np.array_equal(first_result.columns, x.columns) for x in other_results)
+            and not isinstance(first_result.index, MultiIndex)
+        ):
+            keys = [key] if not isinstance(key, tuple) else list(key)
+            # GH45214 - add the groupby keys to each result
+            # so that the concat will create a MultiIndex
+            result = concat(
+                [first_result] + other_results,
+                keys=keys,
+                names=keys,
+            )
+            return result
+
+        key_index = self.grouper.result_index if self.grouper.nkeys > 1 else None
+
+        result = self._concat_objects(
+            keys, values, not_indexed_same=not_indexed_same
+        )
+        result_index = self.grouper.result_index
+
+        if not_indexed_same:
+            result = self._reindex_output(result)
+
+        return result
+[/SEARCH]
+[REPLACE]
+    def _wrap_applied_output_dataframe(
+        self,
+        keys,
+        values: list[DataFrame],
+        not_indexed_same: bool | None,
+        is_transform: bool,
+        result_index: Index | None,
+        result_cls: type[Series] | type[DataFrame],
+    ) -> DataFrame | Series:
+        # GH12824
+        first_result = values[0]
+        other_results = values[1:]
+
+        # GH45214 - fast path for identical columns and a regular index
+        if (
+            result_cls is DataFrame
+            and not_indexed_same is not True
+            and all(np.array_equal(first_result.columns, x.columns) for x in other_results)
+            and not isinstance(first_result.index, MultiIndex)
+        ):
+            # Use the optimized _concat_objects which handles the fast path
+            # for many groups with group_keys=True
+            result = self._concat_objects(
+                keys, values, not_indexed_same=not_indexed_same
+            )
+            return result
+
+        key_index = self.grouper.result_index if self.grouper.nkeys > 1 else None
+
+        result = self._concat_objects(
+            keys, values, not_indexed_same=not_indexed_same
+        )
+        result_index = self.grouper.result_index
+
+        if not_indexed_same:
+            result = self._reindex_output(result)
+
+        return result
+[/REPLACE]
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+    def _concat_objects(
+        self,
+        keys,
+        values: list[Series] | list[DataFrame],
+        not_indexed_same: bool = False,
+    ) -> DataFrame | Series:
+        from pandas.core.reshape.concat import concat
+
+        def reset_identity(x) -> DataFrame | Series:
+            # reset the identities of `x` (through slicing)
+            # so that the existing chunking behavior is used
+            # but the resulting object is not a view so we
+            # won't get a SettingWithCopy warning
+            if isinstance(x, Series):
+                return x.iloc[:]
+            else:
+                return x.iloc[:]
+
+        if not not_indexed_same:
+            result = concat(values, axis=self.axis)
+            return result
+
+        # values are not a consecutive slice; need to slot things in
+        return concat(
+            [reset_identity(x) for x in values], axis=self.axis, keys=keys
+        )
+[/SEARCH]
+[REPLACE]
+    def _concat_objects(
+        self,
+        keys: Iterable[Hashable] | None,
+        values: list[Series] | list[DataFrame],
+        not_indexed_same: bool = False,
+    ) -> DataFrame | Series:
+        from pandas.core.reshape.concat import concat
+
+        def reset_identity(x) -> DataFrame | Series:
+            # reset the identities of `x` (through slicing)
+            # so that the existing chunking behavior is used
+            # but the resulting object is not a view so we
+            # won't get a SettingWithCopy warning
+            if isinstance(x, Series):
+                return x.iloc[:]
+            else:
+                return x.iloc[:]
+
+        nkeys = len(keys) if keys is not None else 0
+        nvalues = len(values)
+        
+        # Fast path for many groups with group_keys=True and not_indexed_same=False
+        # This avoids expensive MultiIndex construction in concat() when there
+        # are many groups, by directly building the result DataFrame.
+        if (
+            not not_indexed_same
+            and nkeys == nvalues
+            and nvalues > 1
+            and self.group_keys
+            and self.sort
+        ):
+            first_value = values[0]
+            if (
+                isinstance(first_value, DataFrame)
+                and all(isinstance(v, DataFrame) and not v.empty for v in values)
+            ):
+                first_cols = first_value.columns
+                all_same_cols = all(v.columns.equals(first_cols) for v in values)
+                if all_same_cols:
+                    # Build result directly: concatenate data and build MultiIndex
+                    # Build the MultiIndex more efficiently
+                    from pandas import MultiIndex
+                    
+                    # Build new index from group keys and original indices
+                    idx_levels = []
+                    idx_codes = []
+                    
+                    # Add group key level
+                    if nkeys > 0 and hasattr(keys, 'to_numpy'):
+                        # keys is typically an Index
+                        level_vals = keys.to_numpy()
+                        unique_vals, inverse = np.unique(level_vals, return_inverse=True)
+                        # Actually for performance we need the exact keys in order
+                        # Let's build codes by factorizing
+                        try:
+                            # Fast path: use get_indexer for Index objects
+                            key_idx = Index(keys)
+                            codes = np.arange(nkeys)
+                            # We need codes per row, not per group
+                        except (TypeError, ValueError):
+                            pass
+                    
+                    # Simpler approach: use concat with a pre-built MultiIndex
+                    # to avoid the expensive factorization inside concat
+                    # Build data arrays
+                    new_index_tuples = []
+                    for key, val in zip(keys, values):
+                        k = (key,) if not isinstance(key, tuple) else key
+                        for idx in val.index:
+                            new_index_tuples.append(k + (idx,))
+                    
+                    new_index = MultiIndex.from_tuples(new_index_tuples)
+                    
+                    # Concatenate values
+                    new_data = []
+                    for v in values:
+                        new_data.append(np.asarray(v))
+                    concatenated = np.concatenate(new_data)
+                    
+                    result = type(first_value)(
+                        concatenated,
+                        index=new_index,
+                        columns=first_value.columns,
+                    )
+                    return result
+
+        if not not_indexed_same:
+            result = concat(values, axis=self.axis)
+            return result
+
+        # values are not a consecutive slice; need to slot things in
+        return concat(
+            [reset_identity(x) for x in values], axis=self.axis, keys=keys
+        )
+[/REPLACE]

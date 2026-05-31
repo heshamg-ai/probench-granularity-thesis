@@ -1,0 +1,36 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+            else:
+                # We get here with non-ndarrays in test_merge_by_col_tz_aware
+                #  and test_merge_groupby_multiple_column_with_categorical_column
+                lbv = flip(left_by_values)
+                rbv = flip(right_by_values)
+                lbv = ensure_object(lbv)
+                rbv = ensure_object(rbv)
+[/SEARCH]
+[REPLACE]
+            else:
+                # Build 1-D object arrays of row-wise tuples without creating
+                # intermediate structured arrays to reduce copies and memory
+                def _to_object_tuples(arrs):
+                    xs = []
+                    for obj in arrs:
+                        if not isinstance(obj.dtype, ExtensionDtype):
+                            xs.append(np.asarray(obj))
+                        else:
+                            obj = extract_array(obj)
+                            if isinstance(obj, NDArrayBackedExtensionArray):
+                                xs.append(obj._ndarray)
+                            else:
+                                xs.append(np.asarray(obj))
+                    try:
+                        from pandas._libs import lib as _lib
+                        # fast C-path to build tuples
+                        return np.asarray(_lib.fast_zip(xs), dtype=object)
+                    except Exception:
+                        # fallback to pure-Python tuple construction
+                        return np.asarray(list(zip(*xs)), dtype=object)
+
+                lbv = _to_object_tuples(left_by_values)
+                rbv = _to_object_tuples(right_by_values)
+[/REPLACE]

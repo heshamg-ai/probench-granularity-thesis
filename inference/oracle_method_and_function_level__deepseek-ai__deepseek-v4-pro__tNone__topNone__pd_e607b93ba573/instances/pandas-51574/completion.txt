@@ -1,0 +1,12 @@
+pandas/core/generic.py
+[SEARCH]
+        cond = -cond if inplace else cond
+        cond = cond.reindex(self._info_axis, axis=self._info_axis_number, copy=False)
+[/SEARCH]
+[REPLACE]
+        cond = -cond if inplace else cond
+        # For ExtensionArray-backed cond, defer reindex to manager to avoid
+        # materializing a full dense boolean mask unnecessarily.
+        if not isinstance(cond._mgr, type(self._mgr)):
+            cond = cond.reindex(self._info_axis, axis=self._info_axis_number, copy=False)
+[/REPLACE]

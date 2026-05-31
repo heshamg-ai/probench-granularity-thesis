@@ -1,0 +1,65 @@
+xarray/core/dataset.py
+[SEARCH]
+            elif dtype_kind in "ObU" and (use_indexers.keys() & var.dims):
+[/SEARCH]
+[REPLACE]
+            elif dtype_kind in "ObU" and any(d in use_indexers for d in var.dims):
+[/REPLACE]
+
+xarray/core/dataset.py
+[SEARCH]
+        # Get the coords that also exist in the variables:
+        coord_names = obj._coord_names & variables.keys()
+        selected = self._replace_with_new_dims(
+            variables.copy(), coord_names, indexes=indexes
+        )
+
+        # Attach indexer as coordinate
+        for k, v in indexers.items():
+            assert isinstance(v, Variable)
+            if v.dims == (k,):
+                index = PandasIndex(v, k, coord_dtype=v.dtype)
+                index_vars = index.create_variables({k: v})
+                indexes[k] = index
+                variables.update(index_vars)
+            else:
+                variables[k] = v
+
+        # Extract coordinates from indexers
+        coord_vars, new_indexes = selected._get_indexers_coords_and_indexes(coords)
+        variables.update(coord_vars)
+        indexes.update(new_indexes)
+
+        coord_names = obj._coord_names & variables.keys() | coord_vars.keys()
+        return self._replace_with_new_dims(variables, coord_names, indexes=indexes)
+[/SEARCH]
+[REPLACE]
+        # Get the coords that also exist in the variables:
+        coord_names = obj._coord_names & variables.keys()
+
+        # Attach indexer as coordinate
+        for k, v in indexers.items():
+            assert isinstance(v, Variable)
+            if v.dims == (k,):
+                index = PandasIndex(v, k, coord_dtype=v.dtype)
+                index_vars = index.create_variables({k: v})
+                indexes[k] = index
+                variables.update(index_vars)
+            else:
+                variables[k] = v
+
+        # Extract coordinates from indexers only if any indexer is a DataArray
+        from xarray.core.dataarray import DataArray
+        if any(isinstance(v, DataArray) for v in coords.values()):
+            selected = self._replace_with_new_dims(
+                variables.copy(), coord_names, indexes=indexes
+            )
+            coord_vars, new_indexes = selected._get_indexers_coords_and_indexes(coords)
+            variables.update(coord_vars)
+            indexes.update(new_indexes)
+            coord_names = obj._coord_names & variables.keys() | coord_vars.keys()
+        else:
+            coord_names = obj._coord_names & variables.keys()
+
+        return self._replace_with_new_dims(variables, coord_names, indexes=indexes)
+[/REPLACE]

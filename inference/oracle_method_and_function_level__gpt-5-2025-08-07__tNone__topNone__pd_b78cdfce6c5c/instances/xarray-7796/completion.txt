@@ -1,0 +1,48 @@
+xarray/core/accessor_dt.py
+[SEARCH]
+    def _tslib_round_accessor(self, name: str, freq: str) -> T_DataArray:
+        obj_type = type(self._obj)
+        result = _round_field(self._obj.data, name, freq)
+        return obj_type(result, name=name, coords=self._obj.coords, dims=self._obj.dims)
+[/SEARCH]
+[REPLACE]
+    def _tslib_round_accessor(self, name: str, freq: str) -> T_DataArray:
+        obj_type = type(self._obj)
+        data = self._obj.data
+        if is_np_datetime_like(getattr(data, "dtype", None)):
+            result = _round_field(data, name, freq)
+        else:
+            result = _round_through_cftimeindex(data, name, freq)
+        return obj_type(result, name=name, coords=self._obj.coords, dims=self._obj.dims)
+[/REPLACE]
+
+xarray/core/accessor_dt.py
+[SEARCH]
+    return field_values.reshape(values.shape)
+[/SEARCH]
+[REPLACE]
+    return field_values.reshape(values.shape)
+
+def _round_through_cftimeindex(values, name, freq):
+    """Round CFTime-like arrays by constructing a CFTimeIndex and
+    calling the corresponding rounding method (floor/ceil/round).
+    Works with both NumPy and Dask arrays.
+    """
+    from xarray.coding.cftimeindex import CFTimeIndex
+
+    if is_duck_dask_array(values):
+        from dask.array import map_blocks
+
+        def _block_round(block, name, freq):
+            idx = CFTimeIndex(block.ravel())
+            method = getattr(idx, name)
+            out = method(freq).values
+            return out.reshape(block.shape)
+
+        return map_blocks(_block_round, values, name, freq, dtype=values.dtype)
+    else:
+        idx = CFTimeIndex(values.ravel())
+        method = getattr(idx, name)
+        out = method(freq).values
+        return out.reshape(values.shape)
+[/REPLACE]

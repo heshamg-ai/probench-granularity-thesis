@@ -1,0 +1,84 @@
+
+
+Looking at the `to_numpy` method in `pandas/core/base.py`, I need to optimize the case when converting to NumPy float dtype with `na_value=np.nan`. The current implementation copies values, fills NAs, then converts to dtype - resulting in multiple data passes and potential extra copies.
+
+The optimization will:
+1. Detect when target dtype is float and na_value is np.nan
+2. Use `np.where` to combine dtype conversion and NA filling in a single operation
+3. Avoid extra copies when not needed
+
+pandas/core/base.py
+[SEARCH]
+        if na_value is not lib.no_default:
+            values = self._values
+            if not can_hold_element(values, na_value):
+                # if we can't hold the na_value asarray either makes a copy or we
+                # error before modifying values. The asarray later on thus won't make
+                # another copy
+                values = np.asarray(values, dtype=dtype)
+            else:
+                values = values.copy()
+
+            values[np.asanyarray(self.isna())] = na_value
+        else:
+            values = self._values
+
+        result = np.asarray(values, dtype=dtype)
+
+        if (copy and na_value is lib.no_default) or (
+            not copy and using_copy_on_write()
+        ):
+            if np.shares_memory(self._values[:2], result[:2]):
+                # Take slices to improve performance of check
+                if using_copy_on_write() and not copy:
+                    result = result.view()
+                    result.flags.writeable = False
+                else:
+                    result = result.copy()
+
+        return result
+[/SEARCH]
+[REPLACE]
+        if na_value is not lib.no_default:
+            # Optimized path for converting to float with np.nan as na_value
+            if (
+                na_value is np.nan
+                and dtype is not None
+                and np.issubdtype(dtype, np.floating)
+            ):
+                values = self._values
+                if can_hold_element(values, na_value):
+                    # Use np.where to combine dtype conversion and NA filling
+                    # This avoids an extra copy compared to the original approach
+                    result = np.where(
+                        self.isna(), na_value, values.astype(dtype, copy=False)
+                    )[0]
+                else:
+                    # Conversion will create NaN for NA values automatically
+                    result = np.asarray(values, dtype=dtype)
+            else:
+                values = self._values
+                if not can_hold_element(values, na_value):
+                    values = np.asarray(values, dtype=dtype)
+                else:
+                    values = values.copy()
+
+                values[np.asanyarray(self.isna())] = na_value
+                result = np.asarray(values, dtype=dtype)
+        else:
+            values = self._values
+            result = np.asarray(values, dtype=dtype)
+
+        if (copy and na_value is lib.no_default) or (
+            not copy and using_copy_on_write()
+        ):
+            if np.shares_memory(self._values[:2], result[:2]):
+                # Take slices to improve performance of check
+                if using_copy_on_write() and not copy:
+                    result = result.view()
+                    result.flags.writeable = False
+                else:
+                    result = result.copy()
+
+        return result
+[/REPLACE]

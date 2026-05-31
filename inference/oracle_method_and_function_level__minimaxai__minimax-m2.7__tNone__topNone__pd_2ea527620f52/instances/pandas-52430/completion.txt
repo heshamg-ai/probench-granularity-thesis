@@ -1,0 +1,56 @@
+
+
+I'll analyze the `to_numpy` method in `pandas/core/base.py` to identify optimization opportunities for the specific case of converting to NumPy float dtype with `na_value=np.nan`.
+
+Looking at the current implementation:
+
+```python
+if na_value is not lib.no_default:
+    values = self._values
+    if not can_hold_element(values, na_value):
+        values = np.asarray(values, dtype=dtype)
+    else:
+        values = values.copy()
+
+    values[np.asanyarray(self.isna())] = na_value
+```
+
+The optimization opportunity is:
+1. When `can_hold_element` is True, we copy the entire array, then use boolean indexing to set individual positions
+2. This is two operations: copy + scatter assignment
+3. For float dtype with `na_value=np.nan`, we can use `np.where` which is a fused operation that's faster
+
+Let me implement the optimization:
+
+pandas/core/base.py
+[SEARCH]
+        if na_value is not lib.no_default:
+            values = self._values
+            if not can_hold_element(values, na_value):
+                # if we can't hold the na_value asarray either makes a copy or we
+                # error before modifying values. The asarray later on thus won't make
+                # another copy
+                values = np.asarray(values, dtype=dtype)
+            else:
+                values = values.copy()
+
+            values[np.asanyarray(self.isna())] = na_value
+[/SEARCH]
+[REPLACE]
+        if na_value is not lib.no_default:
+            values = self._values
+            if not can_hold_element(values, na_value):
+                # if we can't hold the na_value asarray either makes a copy or we
+                # error before modifying values. The asarray later on thus won't make
+                # another copy
+                values = np.asarray(values, dtype=dtype)
+            elif dtype is not None and np.issubdtype(dtype, np.floating) and (
+                na_value is np.nan or (hasattr(na_value, '__float__') and np.isnan(na_value))
+            ):
+                # Fast path: use np.where for float dtype with na_value=np.nan
+                # This avoids copy + scatter, using a single fused operation instead
+                values = np.where(np.asanyarray(self.isna()), np.nan, np.asarray(values, dtype=dtype))
+            else:
+                values = values.copy()
+                values[np.asanyarray(self.isna())] = na_value
+[/REPLACE]

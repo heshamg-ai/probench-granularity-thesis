@@ -1,0 +1,111 @@
+sklearn/linear_model/_quantile.py
+[SEARCH]
+        c = np.concatenate(
+            [
+                np.full(2 * n_params, fill_value=alpha),
+                sample_weight * self.quantile,
+                sample_weight * (1 - self.quantile),
+            ]
+        )
+[/SEARCH]
+[REPLACE]
+        c = np.empty(2 * n_params + 2 * n_indices, dtype=float)
+        c[:2 * n_params] = alpha
+        c[2 * n_params:2 * n_params + n_indices] = sample_weight * self.quantile
+        c[2 * n_params + n_indices:] = sample_weight * (1 - self.quantile)
+[/REPLACE]
+
+sklearn/linear_model/_quantile.py
+[SEARCH]
+        if sparse.issparse(X):
+            if self.solver not in ["highs-ds", "highs-ipm", "highs"]:
+                raise ValueError(
+                    f"Solver {self.solver} does not support sparse X. "
+                    "Use solver 'highs' for example."
+                )
+            # Note that highs methods do convert to csc.
+            # Therefore, we work with csc matrices as much as possible.
+            eye = sparse.eye(n_indices, dtype=X.dtype, format="csc")
+            if self.fit_intercept:
+                ones = sparse.csc_matrix(np.ones(shape=(n_indices, 1), dtype=X.dtype))
+                A_eq = sparse.hstack([ones, X, -ones, -X, eye, -eye], format="csc")
+            else:
+                A_eq = sparse.hstack([X, -X, eye, -eye], format="csc")
+        else:
+            eye = np.eye(n_indices)
+            if self.fit_intercept:
+                ones = np.ones((n_indices, 1))
+                A_eq = np.concatenate([ones, X, -ones, -X, eye, -eye], axis=1)
+            else:
+                A_eq = np.concatenate([X, -X, eye, -eye], axis=1)
+[/SEARCH]
+[REPLACE]
+        if sparse.issparse(X):
+            if self.solver not in ["highs-ds", "highs-ipm", "highs"]:
+                raise ValueError(
+                    f"Solver {self.solver} does not support sparse X. "
+                    "Use solver 'highs' for example."
+                )
+            # Note that highs methods do convert to csc.
+            # Therefore, we work with csc matrices as much as possible.
+            if self.fit_intercept:
+                ones = sparse.csc_matrix((n_indices, 1), dtype=X.dtype)
+                ones.data = np.ones(n_indices, dtype=X.dtype)
+                neg_X = -X
+                neg_ones = -ones
+                A_eq = sparse.hstack([ones, X, neg_ones, neg_X], format="csc")
+            else:
+                neg_X = -X
+                A_eq = sparse.hstack([X, neg_X], format="csc")
+            # Build and append the identity and negative identity blocks
+            eye_block = sparse.eye(n_indices, dtype=X.dtype, format="csc")
+            neg_eye_block = -eye_block
+            A_eq = sparse.hstack([A_eq, eye_block, neg_eye_block], format="csc")
+        else:
+            if self.fit_intercept:
+                ones = np.ones((n_indices, 1), dtype=float)
+                A_eq = np.empty((n_indices, 2 * n_params + 2 * n_indices), dtype=float)
+                A_eq[:, :1] = ones
+                A_eq[:, 1:n_params] = X
+                A_eq[:, n_params:n_params + 1] = -ones
+                A_eq[:, n_params + 1:2 * n_params] = -X
+                A_eq[:, 2 * n_params:2 * n_params + n_indices] = np.eye(n_indices, dtype=float)
+                A_eq[:, 2 * n_params + n_indices:] = -np.eye(n_indices, dtype=float)
+            else:
+                A_eq = np.empty((n_indices, 2 * n_params + 2 * n_indices), dtype=float)
+                A_eq[:, :n_params] = X
+                A_eq[:, n_params:2 * n_params] = -X
+                A_eq[:, 2 * n_params:2 * n_params + n_indices] = np.eye(n_indices, dtype=float)
+                A_eq[:, 2 * n_params + n_indices:] = -np.eye(n_indices, dtype=float)
+[/REPLACE]
+
+sklearn/linear_model/_quantile.py
+[SEARCH]
+        result = linprog(
+            c=c,
+            A_eq=A_eq,
+            b_eq=b_eq,
+            method=self.solver,
+            options=solver_options,
+        )
+[/SEARCH]
+[REPLACE]
+        if self.solver in ("highs-ds", "highs-ipm", "highs") and not sparse.issparse(A_eq):
+            from scipy.sparse import csc_matrix
+            A_eq_sparse = csc_matrix(A_eq)
+            result = linprog(
+                c=c,
+                A_eq=A_eq_sparse,
+                b_eq=b_eq,
+                method=self.solver,
+                options=solver_options,
+            )
+        else:
+            result = linprog(
+                c=c,
+                A_eq=A_eq,
+                b_eq=b_eq,
+                method=self.solver,
+                options=solver_options,
+            )
+[/REPLACE]

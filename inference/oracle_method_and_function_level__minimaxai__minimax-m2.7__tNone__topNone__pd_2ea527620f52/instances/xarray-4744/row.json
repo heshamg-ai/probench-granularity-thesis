@@ -1,0 +1,46 @@
+{
+  "id": 93,
+  "scenario_id": "xarray-4744",
+  "repo": "pydata/xarray",
+  "pr_number": 4744,
+  "baseline_sha": "bf0fe2caca1d2ebc4f1298f019758baa12f68b94",
+  "reference_sha": "fb48be973350c66c2bd1e48b3f8df8d9faad0524",
+  "task": "Optimize Dataset.__getitem__ for datasets with large number of variables",
+  "entry_point": "xarray.Dataset.__getitem__",
+  "whats_new": "Performance improvement when constructing DataArrays. Significantly speeds up repr for Datasets with large number of variables.",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/xarray-4744:baseline",
+      "digest": "sha256:950aa4a7debab42d6a7197d3d7885cefc86ae299097035ec886ebecb752458b1"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/xarray-4744:reference",
+      "digest": "sha256:a1dcce54ff092d2b4d3a2ac7dd7a60e6268793ea5eaafb61444c52c156b5a94d"
+    }
+  },
+  "params": [
+    {
+      "name": "n_variables",
+      "short_indicator": "nv",
+      "explanation": "Number of variables (regression noticeable with large numbers like 2000)",
+      "values": [
+        "100",
+        "1000"
+      ]
+    },
+    {
+      "name": "array_size",
+      "short_indicator": "sz",
+      "explanation": "Size of each variable's data array",
+      "values": [
+        "10",
+        "100"
+      ]
+    }
+  ],
+  "core_tests": [
+    "xarray/tests/test_dataset.py::TestDataset::test_virtual_variables_default_coords"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize xarray.Dataset.__getitem__ for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize Dataset.__getitem__ for datasets with large number of variables\nOptimization function: xarray.Dataset.__getitem__\n\n\n[start of xarray/core/dataset.py]\n### Relevant context\n#### Class `xarray.core.dataset.Dataset`\n**Class Signature**\n```python\nclass Dataset(Mapping, ImplementsDatasetReduce, DataWithCoords):\n```\n**Class Attributes**\n```python\n    _attrs: Optional[Dict[Hashable, Any]]\n    _cache: Dict[str, Any]\n    _coord_names: Set[Hashable]\n    _dims: Dict[Hashable, int]\n    _encoding: Optional[Dict[Hashable, Any]]\n    _indexes: Optional[Dict[Hashable, pd.Index]]\n    _variables: Dict[Hashable, Variable]\n    __slots__ = (\n        \"_attrs\",\n        \"_cache\",\n        \"_coord_names\",\n        \"_dims\",\n        \"_encoding\",\n        \"_file_obj\",\n        \"_indexes\",\n        \"_variables\",\n        \"__weakref__\",\n    )\n    _groupby_cls = groupby.DatasetGroupBy\n    _rolling_cls = rolling.DatasetRolling\n    _coarsen_cls = rolling.DatasetCoarsen\n    _resample_cls = resample.DatasetResample\n    _weighted_cls = weighted.DatasetWeighted\n    __hash__ = None  # type: ignore\n    plot = utils.UncachedAccessor(_Dataset_PlotMethods)\n```\n**Class __init__ method**\n```python\n    def __init__(\n        self,\n        # could make a VariableArgs to use more generally, and refine these\n        # categories\n        data_vars: Mapping[Hashable, Any] = None,\n        coords: Mapping[Hashable, Any] = None,\n        attrs: Mapping[Hashable, Any] = None,\n    ):\n        # TODO(shoyer): expose indexes as a public argument in __init__\n\n        if data_vars is None:\n            data_vars = {}\n        if coords is None:\n            coords = {}\n\n        both_data_and_coords = set(data_vars) & set(coords)\n        if both_data_and_coords:\n            raise ValueError(\n                \"variables %r are found in both data_vars and coords\"\n                % both_data_and_coords\n            )\n\n        if isinstance(coords, Dataset):\n            coords = coords.variables\n\n        variables, coord_names, dims, indexes, _ = merge_data_and_coords(\n            data_vars, coords, compat=\"broadcast_equals\"\n        )\n\n        self._attrs = dict(attrs) if attrs is not None else None\n        self._file_obj = None\n        self._encoding = None\n        self._variables = variables\n        self._coord_names = coord_names\n        self._dims = dims\n        self._indexes = indexes\n```\n##### Method `xarray.core.dataset.Dataset._construct_dataarray`\n```python\ndef _construct_dataarray(self, name: Hashable) -> \"DataArray\":\n        \"\"\"Construct a DataArray by indexing this dataset\"\"\"\n        from .dataarray import DataArray\n\n        try:\n            variable = self._variables[name]\n        except KeyError:\n            _, name, variable = _get_virtual_variable(\n                self._variables, name, self._level_coords, self.dims\n            )\n\n        needed_dims = set(variable.dims)\n\n        coords: Dict[Hashable, Variable] = {}\n        for k in self.coords:\n            if set(self.variables[k].dims) <= needed_dims:\n                coords[k] = self.variables[k]\n\n        if self._indexes is None:\n            indexes = None\n        else:\n            indexes = {k: v for k, v in self._indexes.items() if k in coords}\n\n        return DataArray(variable, coords, name=name, indexes=indexes, fastpath=True)\n```\n[end of xarray/core/dataset.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

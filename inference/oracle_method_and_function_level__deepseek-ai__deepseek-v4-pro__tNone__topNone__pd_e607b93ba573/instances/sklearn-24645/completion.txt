@@ -1,0 +1,77 @@
+sklearn/neighbors/_nearest_centroid.py
+[SEARCH]
+    def predict(self, X):
+        """Perform classification on an array of test vectors `X`.
+
+        The predicted class `C` for each sample in `X` is returned.
+
+        Parameters
+        ----------
+        X : {array-like, sparse matrix} of shape (n_samples, n_features)
+            Test samples.
+
+        Returns
+        -------
+        C : ndarray of shape (n_samples,)
+            The predicted classes.
+
+        Notes
+        -----
+        If the metric constructor parameter is `"precomputed"`, `X` is assumed
+        to be the distance matrix between the data to be predicted and
+        `self.centroids_`.
+        """
+        check_is_fitted(self)
+
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        return self.classes_[
+            pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)
+        ]
+[/SEARCH]
+[REPLACE]
+    def predict(self, X):
+        """Perform classification on an array of test vectors `X`.
+
+        The predicted class `C` for each sample in `X` is returned.
+
+        Parameters
+        ----------
+        X : {array-like, sparse matrix} of shape (n_samples, n_features)
+            Test samples.
+
+        Returns
+        -------
+        C : ndarray of shape (n_samples,)
+            The predicted classes.
+
+        Notes
+        -----
+        If the metric constructor parameter is `"precomputed"`, `X` is assumed
+        to be the distance matrix between the data to be predicted and
+        `self.centroids_`.
+        """
+        check_is_fitted(self)
+
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        # For the common Euclidean metric, use efficient squared Euclidean
+        # distances to avoid sqrt and extra memory overhead.  The argmin
+        # ordering is preserved because x -> x^2 is monotonic on R+.
+        if self.metric == "euclidean":
+            # pairwise euclidean distances via the expansion:
+            #   ||X - C||^2 = ||X||^2 + ||C||^2 - 2 * X @ C.T
+            XX = (X**2).sum(axis=1)
+            CC = (self.centroids_**2).sum(axis=1)
+            if sparse.issparse(X):
+                XC = X.dot(self.centroids_.T)
+            else:
+                XC = X @ self.centroids_.T
+            # scipy sparse returns a np.matrix for dot; ensure ndarray.
+            distances = XX.reshape(-1, 1) + CC.reshape(1, -1) - 2 * XC
+            # Avoid numerical noise producing tiny negatives
+            distances[distances < 0] = 0
+            return self.classes_[np.argmin(distances, axis=1)]
+
+        return self.classes_[
+            pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)
+        ]
+[/REPLACE]

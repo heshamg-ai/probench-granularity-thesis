@@ -1,0 +1,21 @@
+
+
+Looking at the code, I can optimize the `dtype` property in `NumericArray` by:
+1. Using `self._data.dtype.name` instead of `str(self._data.dtype)` (avoids function call overhead)
+2. Caching the dtype mapping lookup at the class level
+
+Let me implement this optimization:
+
+pandas/core/arrays/numeric.py
+[SEARCH]
+    @cache_readonly
+    def dtype(self) -> NumericDtype:
+        mapping = self._dtype_cls._str_to_dtype_mapping()
+        return mapping[str(self._data.dtype)]
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def dtype(self) -> NumericDtype:
+        mapping = self._dtype_cls._str_to_dtype_mapping()
+        return mapping[self._data.dtype.name]
+[/REPLACE]

@@ -1,0 +1,57 @@
+pandas/core/arrays/categorical.py
+[SEARCH]
+    @property
+    def categories(self) -> Index:
+        """
+        The categories of this categorical.
+
+        Setting assigns new values to each category (effectively a rename of
+        each individual category).
+
+        The returned dtype will reflect the original categories' dtype, not
+        the new values' dtype.
+
+        Returns
+        -------
+        Index
+            The categories as an Index.
+        """
+        dtype = self.dtype
+        return dtype.categories
+[/SEARCH]
+[REPLACE]
+    @property
+    def categories(self) -> Index:
+        """
+        The categories of this categorical.
+
+        Setting assigns new values to each category (effectively a rename of
+        each individual category).
+
+        The returned dtype will reflect the original categories' dtype, not
+        the new values' dtype.
+
+        Returns
+        -------
+        Index
+            The categories as an Index.
+        """
+        dtype = self.dtype
+        categories = dtype.categories
+        if (
+            isinstance(categories, RangeIndex)
+            or not len(categories)
+            or not categories._is_unique
+        ):
+            return categories
+        values = categories._values
+        if (
+            isinstance(values, np.ndarray)
+            and values.dtype == np.int64
+            and (values[0] == 0)
+            and (values[-1] == len(values) - 1)
+            and lib.is_monotonic(values, timelike=False)
+        ):
+            return RangeIndex(0, len(categories))
+        return categories
+[/REPLACE]

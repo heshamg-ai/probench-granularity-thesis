@@ -1,0 +1,75 @@
+pandas/core/frame.py
+[SEARCH]
+        def _dict_round(df: DataFrame, decimals):
+            for col, vals in df.items():
+                try:
+                    yield _series_round(vals, decimals[col])
+                except KeyError:
+                    yield vals
+
+        def _series_round(ser: Series, decimals: int) -> Series:
+            if is_integer_dtype(ser.dtype) or is_float_dtype(ser.dtype):
+                return ser.round(decimals)
+            return ser
+
+        nv.validate_round(args, kwargs)
+
+        if isinstance(decimals, (dict, Series)):
+            if isinstance(decimals, Series) and not decimals.index.is_unique:
+                raise ValueError("Index of decimals must be unique")
+            if is_dict_like(decimals) and not all(
+                is_integer(value) for _, value in decimals.items()
+            ):
+                raise TypeError("Values in decimals must be integers")
+            new_cols = list(_dict_round(self, decimals))
+        elif is_integer(decimals):
+            # Dispatch to Series.round
+            new_cols = [_series_round(v, decimals) for _, v in self.items()]
+        else:
+            raise TypeError("decimals must be an integer, a dict-like or a Series")
+
+        if len(new_cols) > 0:
+            return self._constructor(
+                concat(new_cols, axis=1), index=self.index, columns=self.columns
+            ).__finalize__(self, method="round")
+        else:
+            return self.copy(deep=False)
+[/SEARCH]
+[REPLACE]
+        nv.validate_round(args, kwargs)
+
+        if isinstance(decimals, Series):
+            if not decimals.index.is_unique:
+                raise ValueError("Index of decimals must be unique")
+            decimals = dict(decimals)
+        if isinstance(decimals, dict):
+            if not all(is_integer(value) for value in decimals.values()):
+                raise TypeError("Values in decimals must be integers")
+        elif not is_integer(decimals):
+            raise TypeError("decimals must be an integer, a dict-like or a Series")
+
+        if len(self.columns) == 0:
+            return self.copy(deep=False)
+
+        # Single integer decimals: use fast path on numeric blocks
+        if is_integer(decimals):
+            return self._constructor(
+                self._mgr.apply("round", decimals=decimals),
+                index=self.index,
+                columns=self.columns,
+            ).__finalize__(self, method="round")
+
+        # dict decimals: apply per column
+        new_cols = []
+        for col, vals in self.items():
+            try:
+                dec_val = decimals[col]
+            except KeyError:
+                new_cols.append(vals)
+            else:
+                new_cols.append(vals.round(dec_val))
+
+        return self._constructor(
+            concat(new_cols, axis=1), index=self.index, columns=self.columns
+        ).__finalize__(self, method="round")
+[/REPLACE]

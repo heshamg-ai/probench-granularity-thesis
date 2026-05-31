@@ -1,0 +1,127 @@
+pandas/core/arrays/string_arrow.py
+[SEARCH]
+    def _str_count(self, pat: str, flags: int = 0):
+        if flags:
+            return super()._str_count(pat, flags)
+        result = pc.count_substring_regex(self._pa_array, pat)
+        return self._convert_int_dtype(result)
+[/SEARCH]
+[REPLACE]
+    def _str_count(self, pat: str, flags: int = 0):
+        if flags:
+            return super()._str_count(pat, flags)
+        result = pc.count_substring_regex(self._pa_array, pat)
+        return self._convert_int_dtype(result)
+
+    def _str_get_dummies(self, sep="|"):
+        # Fast path for PyArrow-backed string arrays using split and is_in
+        if pa_version_under10p1:
+            return super()._str_get_dummies(sep)
+
+        arr = self._pa_array
+
+        # Handle all-NA case
+        if pc.is_null(arr).all().as_py():
+            from pandas import DataFrame
+            return DataFrame(np.zeros((len(arr), 0), dtype=np.uint8), dtype=np.uint8)
+
+        # Split strings by separator
+        split = pc.split_pattern(arr, pattern=sep)
+
+        # Collect unique dummy labels
+        dummy_set = set()
+        for chunk in split if isinstance(split, pa.ChunkedArray) else [split]:
+            for lst in chunk:
+                if lst is not None:
+                    dummy_set.update(lst.as_py())
+        labels = sorted(dummy_set)
+        n = len(arr)
+
+        if not labels:
+            from pandas import DataFrame
+            return DataFrame(np.zeros((n, 0), dtype=np.uint8), dtype=np.uint8)
+
+        # Build dummy columns using vectorized PyArrow is_in operations
+        from pandas import DataFrame
+        dummy_dict = {}
+        for label in labels:
+            is_in_result = pc.is_in(split, value_set=pa.array([label], type=pa.string()))
+            # is_in on list<strings> produces null for null entries; fill with False
+            is_in_result = is_in_result.fill_null(False)
+            dummy_dict[label] = np.array(is_in_result, dtype=np.uint8)
+
+        return DataFrame(dummy_dict, dtype=np.uint8)
+[/REPLACE]
+
+pandas/core/arrays/string_arrow.py
+[SEARCH]
+    def _reduce(
+        self, name: str, *, skipna: bool = True, keepdims: bool = False, **kwargs
+    ):
+        if name in ["any", "all"]:
+            if not skipna and name == "all":
+                nas = pc.invert(pc.is_null(self._pa_array))
+                arr = pc.and_kleene(nas, pc.not_equal(self._pa_array, ""))
+            else:
+                arr = pc.not_equal(self._pa_array, "")
+            return ArrowExtensionArray(arr)._reduce(
+                name, skipna=skipna, keepdims=keepdims, **kwargs
+            )
+        else:
+            return super()._reduce(name, skipna=skipna, keepdims=keepdims, **kwargs)
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies(self, sep="|"):
+        # Fast path for PyArrow-backed string arrays using split and is_in
+        if pa_version_under10p1:
+            return super()._str_get_dummies(sep)
+
+        arr = self._pa_array
+
+        # Handle all-NA case
+        if pc.is_null(arr).all().as_py():
+            from pandas import DataFrame
+            return DataFrame(np.zeros((len(arr), 0), dtype=np.uint8), dtype=np.uint8)
+
+        # Split strings by separator
+        split = pc.split_pattern(arr, pattern=sep)
+
+        # Collect unique dummy labels
+        dummy_set = set()
+        for chunk in split if isinstance(split, pa.ChunkedArray) else [split]:
+            for lst in chunk:
+                if lst is not None:
+                    dummy_set.update(lst.as_py())
+        labels = sorted(dummy_set)
+        n = len(arr)
+
+        if not labels:
+            from pandas import DataFrame
+            return DataFrame(np.zeros((n, 0), dtype=np.uint8), dtype=np.uint8)
+
+        # Build dummy columns using vectorized PyArrow is_in operations
+        from pandas import DataFrame
+        dummy_dict = {}
+        for label in labels:
+            is_in_result = pc.is_in(split, value_set=pa.array([label], type=pa.string()))
+            # is_in on list<strings> produces null for null entries; fill with False
+            is_in_result = is_in_result.fill_null(False)
+            dummy_dict[label] = np.array(is_in_result, dtype=np.uint8)
+
+        return DataFrame(dummy_dict, dtype=np.uint8)
+
+    def _reduce(
+        self, name: str, *, skipna: bool = True, keepdims: bool = False, **kwargs
+    ):
+        if name in ["any", "all"]:
+            if not skipna and name == "all":
+                nas = pc.invert(pc.is_null(self._pa_array))
+                arr = pc.and_kleene(nas, pc.not_equal(self._pa_array, ""))
+            else:
+                arr = pc.not_equal(self._pa_array, "")
+            return ArrowExtensionArray(arr)._reduce(
+                name, skipna=skipna, keepdims=keepdims, **kwargs
+            )
+        else:
+            return super()._reduce(name, skipna=skipna, keepdims=keepdims, **kwargs)
+[/REPLACE]

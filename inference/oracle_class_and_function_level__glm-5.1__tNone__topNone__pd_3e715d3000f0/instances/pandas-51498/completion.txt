@@ -1,0 +1,144 @@
+pandas/core/frame.py
+[SEARCH]
+        from pandas.core.reshape.concat import concat
+
+        def _dict_round(df: DataFrame, decimals):
+            for col, vals in df.items():
+                try:
+                    yield _series_round(vals, decimals[col])
+                except KeyError:
+                    yield vals
+
+        def _series_round(ser: Series, decimals: int) -> Series:
+            if is_integer_dtype(ser.dtype) or is_float_dtype(ser.dtype):
+                return ser.round(decimals)
+            return ser
+
+        nv.validate_round(args, kwargs)
+
+        if isinstance(decimals, (dict, Series)):
+            if isinstance(decimals, Series) and not decimals.index.is_unique:
+                raise ValueError("Index of decimals must be unique")
+            if is_dict_like(decimals) and not all(
+                is_integer(value) for _, value in decimals.items()
+            ):
+                raise TypeError("Values in decimals must be integers")
+            new_cols = list(_dict_round(self, decimals))
+        elif is_integer(decimals):
+            # Dispatch to Series.round
+            new_cols = [_series_round(v, decimals) for _, v in self.items()]
+        else:
+            raise TypeError("decimals must be an integer, a dict-like or a Series")
+
+        if len(new_cols) > 0:
+            return self._constructor(
+                concat(new_cols, axis=1), index=self.index, columns=self.columns
+            ).__finalize__(self, method="round")
+        else:
+            return self.copy(deep=False)
+[/SEARCH]
+[REPLACE]
+        from pandas.core.reshape.concat import concat
+
+        def _dict_round(df: DataFrame, decimals):
+            for col, vals in df.items():
+                try:
+                    yield _series_round(vals, decimals[col])
+                except KeyError:
+                    yield vals
+
+        def _series_round(ser: Series, decimals: int) -> Series:
+            if is_integer_dtype(ser.dtype) or is_float_dtype(ser.dtype):
+                return ser.round(decimals)
+            return ser
+
+        nv.validate_round(args, kwargs)
+
+        if isinstance(decimals, (dict, Series)):
+            if isinstance(decimals, Series) and not decimals.index.is_unique:
+                raise ValueError("Index of decimals must be unique")
+            if is_dict_like(decimals) and not all(
+                is_integer(value) for _, value in decimals.items()
+            ):
+                raise TypeError("Values in decimals must be integers")
+            new_cols = list(_dict_round(self, decimals))
+        elif is_integer(decimals):
+            # Fast path for integer decimals: operate directly on numeric blocks
+            # in the manager, avoiding Series overhead and concat.
+            result_mgr = self._mgr.round(decimals)
+            return self._constructor(result_mgr).__finalize__(self, method="round")
+        else:
+            raise TypeError("decimals must be an integer, a dict-like or a Series")
+
+        if len(new_cols) > 0:
+            return self._constructor(
+                concat(new_cols, axis=1), index=self.index, columns=self.columns
+            ).__finalize__(self, method="round")
+        else:
+            return self.copy(deep=False)
+[/REPLACE]
+pandas/core/internals/managers.py
+[SEARCH]
+    def to_native_types(self: T, **kwargs) -> T:
+        """
+        Convert values to native types (strings / python objects) that are used
+        in formatting (repr / csv).
+        """
+        return self.apply("to_native_types", **kwargs)
+[/SEARCH]
+[REPLACE]
+    def to_native_types(self: T, **kwargs) -> T:
+        """
+        Convert values to native types (strings / python objects) that are used
+        in formatting (repr / csv).
+        """
+        return self.apply("to_native_types", **kwargs)
+
+    def round(self: T, decimals: int) -> T:
+        """
+        Round numeric blocks to the given number of decimals.
+        """
+        return self.apply("round", decimals=decimals)
+[/REPLACE]
+pandas/core/internals/array_manager.py
+[SEARCH]
+    def to_native_types(self: T, **kwargs) -> T:
+        return self.apply(to_native_types, **kwargs)
+[/SEARCH]
+[REPLACE]
+    def to_native_types(self: T, **kwargs) -> T:
+        return self.apply(to_native_types, **kwargs)
+
+    def round(self: T, decimals: int) -> T:
+        return self.apply("round", decimals=decimals)
+[/REPLACE]
+pandas/core/internals/blocks.py
+[SEARCH]
+    def diff(self, n: int, axis: AxisInt = 1) -> list[Block]:
+        """return block for the diff of the values"""
+        # only reached with ndim == 2 and axis == 1
+        new_values = algos.diff(self.values, n, axis=axis)
+        return [self.make_block(values=new_values)]
+[/SEARCH]
+[REPLACE]
+    def diff(self, n: int, axis: AxisInt = 1) -> list[Block]:
+        """return block for the diff of the values"""
+        # only reached with ndim == 2 and axis == 1
+        new_values = algos.diff(self.values, n, axis=axis)
+        return [self.make_block(values=new_values)]
+
+    def round(self, decimals: int) -> list[Block]:
+        """
+        Round numeric values to the given number of decimals.
+
+        Non-numeric blocks are returned as-is (no-op).
+        """
+        if not (is_integer_dtype(self.dtype) or is_float_dtype(self.dtype)):
+            return [self]
+        values = self.values
+        if isinstance(values, ExtensionArray):
+            values = values._round(decimals)
+        else:
+            values = np.round(values, decimals)
+        return [self.make_block(values=values)]
+[/REPLACE]

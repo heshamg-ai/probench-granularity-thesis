@@ -1,0 +1,62 @@
+
+
+I need to analyze the code to understand the optimization opportunity. Looking at the `Aligner` class and the `align()` method, I can see several optimization opportunities related to alignment between indexed and non-indexed objects.
+
+Let me trace through the code to understand when unnecessary work is being done.
+
+Looking at the `align()` method, the main optimization opportunities are:
+
+1. When no explicit indexes are provided (`self.indexes` is empty) and all objects have the same shape, we can skip the expensive `reindex_all()` and just copy objects directly.
+
+2. The `_need_reindex()` check can identify when alignment is trivial, but this isn't used as an early exit in `align()`.
+
+Let me implement optimizations:
+
+xarray/core/alignment.py
+[SEARCH]
+    def align(self) -> None:
+        if not self.indexes and len(self.objects) == 1:
+            # fast path for the trivial case
+            (obj,) = self.objects
+            self.results = (obj.copy(deep=self.copy),)
+            return
+
+        self.find_matching_indexes()
+        self.find_matching_unindexed_dims()
+        self.assert_no_index_conflict()
+        self.align_indexes()
+        self.assert_unindexed_dim_sizes_equal()
+
+        if self.join == "override":
+            self.override_indexes()
+        else:
+            self.reindex_all()
+[/SEARCH]
+[REPLACE]
+    def align(self) -> None:
+        if not self.indexes and len(self.objects) == 1:
+            # fast path for the trivial case
+            (obj,) = self.objects
+            self.results = (obj.copy(deep=self.copy),)
+            return
+
+        self.find_matching_indexes()
+        self.find_matching_unindexed_dims()
+        self.assert_no_index_conflict()
+        self.align_indexes()
+        self.assert_unindexed_dim_sizes_equal()
+
+        if self.join == "override":
+            self.override_indexes()
+        else:
+            # Fast path: check if any reindexing is actually needed
+            # If not, avoid expensive reindex_callback by doing simple copies
+            need_any_reindex = any(self.reindex.values())
+            if not need_any_reindex:
+                # No reindexing needed - use shallow copies for efficiency
+                self.results = tuple(
+                    obj.copy(deep=self.copy) for obj in self.objects
+                )
+            else:
+                self.reindex_all()
+[/REPLACE]

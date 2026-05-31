@@ -1,0 +1,58 @@
+  pandas/core/reshape/merge.py [SEARCH]    if isinstance(lk.dtype, DatetimeTZDtype) and isinstance(rk.dtype, DatetimeTZDtype):
+        # Extract the ndarray (UTC-localized) values
+        # Note: we dont need the dtypes to match, as these can still be compared
+        lk, rk = cast("DatetimeArray", lk)._ensure_matching_resos(rk)
+        lk = cast("DatetimeArray", lk)._ndarray
+        rk = cast("DatetimeArray", rk)._ndarray
+    elif (
+        isinstance(lk.dtype, CategoricalDtype)
+        and isinstance(rk.dtype, CategoricalDtype)
+        and lk.dtype == rk.dtype
+    ):
+[/SEARCH] [REPLACE]    if isinstance(lk.dtype, DatetimeTZDtype) and isinstance(rk.dtype, DatetimeTZDtype):
+        # Extract the ndarray (UTC-localized) values
+        # Note: we dont need the dtypes to match, as these can still be compared
+        lk, rk = cast("DatetimeArray", lk)._ensure_matching_resos(rk)
+        lk = cast("DatetimeArray", lk)._ndarray
+        rk = cast("DatetimeArray", rk)._ndarray
+    elif isinstance(lk.dtype, np.dtype) and lk.dtype.kind == "M" and isinstance(rk.dtype, np.dtype) and rk.dtype.kind == "M":
+        # Both are datetime64[ns] (or similar resolution) ndarrays
+        # No timezone, so we can use the underlying ndarrays directly
+        # Ensure matching resolutions for consistent comparison
+        if lk.dtype != rk.dtype:
+            # Convert to common resolution (higher resolution is finer)
+            if lk.dtype.itemsize > rk.dtype.itemsize:
+                rk = rk.astype(lk.dtype)
+            elif rk.dtype.itemsize > lk.dtype.itemsize:
+                lk = lk.astype(rk.dtype)
+            else:
+                # Same itemsize but different resolution, e.g., datetime64[s] vs datetime64[ms]
+                # Both 8 bytes, pick the more precise one or just cast to lk's dtype
+                rk = rk.astype(lk.dtype)
+    elif (
+        isinstance(lk.dtype, CategoricalDtype)
+        and isinstance(rk.dtype, CategoricalDtype)
+        and lk.dtype == rk.dtype
+    ):
+[/REPLACE]
+
+pandas/core/reshape/merge.py [SEARCH]    klass, lk, rk = _convert_arrays_and_get_rizer_klass(lk, rk)
+    rizer = klass(max(len(lk), len(rk)))
+    if isinstance(lk, BaseMaskedArray):
+[/SEARCH] [REPLACE]    klass, lk, rk = _convert_arrays_and_get_rizer_klass(lk, rk)
+    # Optimization: if both are datetime64 ndarrays with same resolution (including tz-aware
+    # already converted above), use the 64-bit integer view directly for factorization.
+    # This avoids object-dtype fallback and uses faster hasher.
+    if (
+        isinstance(lk, np.ndarray)
+        and isinstance(rk, np.ndarray)
+        and lk.dtype.kind == "M"
+        and rk.dtype == lk.dtype
+    ):
+        # View as int64 for factorization; NaT will be iNaT (-2**63) which hashes fine
+        lk = lk.view(np.int64)
+        rk = rk.view(np.int64)
+        klass = _hashtable.Factorizer
+    rizer = klass(max(len(lk), len(rk)))
+    if isinstance(lk, BaseMaskedArray):
+[/REPLACE]

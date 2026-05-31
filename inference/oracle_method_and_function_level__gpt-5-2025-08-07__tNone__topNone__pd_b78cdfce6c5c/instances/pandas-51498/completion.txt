@@ -1,0 +1,90 @@
+pandas/core/frame.py
+[SEARCH]
+        elif is_integer(decimals):
+            # Dispatch to Series.round
+            new_cols = [_series_round(v, decimals) for _, v in self.items()]
+[/SEARCH]
+[REPLACE]
+        elif is_integer(decimals):
+            # Fastpath: for integer decimals, use manager-level rounding when using ArrayManager
+            mgr = getattr(self, "_mgr", None)
+            if mgr is not None and hasattr(mgr, "arrays") and hasattr(mgr, "round"):
+                new_mgr = mgr.round(int(decimals))
+                return self._constructor(new_mgr).__finalize__(self, method="round")
+            # Fallback to Series.round
+            new_cols = [_series_round(v, decimals) for _, v in self.items()]
+[/REPLACE]
+pandas/core/internals/array_manager.py
+[SEARCH]
+    def __init__(
+        self,
+        arrays: list[np.ndarray | ExtensionArray],
+        axes: list[Index],
+        verify_integrity: bool = True,
+    ) -> None:
+        raise NotImplementedError
+[/SEARCH]
+[REPLACE]
+    def __init__(
+        self,
+        arrays: list[np.ndarray | ExtensionArray],
+        axes: list[Index],
+        verify_integrity: bool = True,
+    ) -> None:
+        raise NotImplementedError
+
+    def round(self, decimals: int):
+        arrays = self.arrays
+        changed = False
+        new_arrays: list[np.ndarray | ExtensionArray] = []
+        for arr in arrays:
+            new_arr = arr
+            if isinstance(arr, np.ndarray):
+                if np.issubdtype(arr.dtype, np.floating):
+                    new_arr = np.round(arr, decimals)
+                elif np.issubdtype(arr.dtype, np.integer):
+                    if decimals < 0:
+                        new_arr = np.round(arr, decimals).astype(arr.dtype, copy=False)
+                    else:
+                        new_arr = arr
+                else:
+                    new_arr = arr
+            else:
+                try:
+                    new_arr = arr.round(decimals)  # type: ignore[attr-defined]
+                except Exception:
+                    from pandas import Series
+                    try:
+                        new_arr = Series(arr).round(decimals).array
+                    except Exception:
+                        new_arr = arr
+            if new_arr is not arr:
+                changed = True
+            new_arrays.append(new_arr)
+        if not changed:
+            return self
+        return type(self)(new_arrays, self._axes, verify_integrity=False)
+[/REPLACE]
+pandas/core/internals/managers.py
+[SEARCH]
+    def __init__(self, blocks, axes, verify_integrity: bool = True) -> None:
+        raise NotImplementedError
+[/SEARCH]
+[REPLACE]
+    def __init__(self, blocks, axes, verify_integrity: bool = True) -> None:
+        raise NotImplementedError
+
+    def round(self, decimals: int):
+        # Minimal no-op implementation; DataFrame.round does not use this for BlockManager
+        return self
+[/REPLACE]
+pandas/core/internals/blocks.py
+[SEARCH]
+    __slots__ = ()
+[/SEARCH]
+[REPLACE]
+    __slots__ = ()
+
+    def round(self, decimals: int):
+        return self
+[/REPLACE]

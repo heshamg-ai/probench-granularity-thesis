@@ -1,0 +1,19 @@
+
+
+Looking at the code, I can see that `IntegerArray` inherits from `BaseMaskedArray` and uses its `reshape` method. The current implementation always creates a new instance without considering the `copy` parameter, which can be optimized.
+
+Let me find the exact location of the `reshape` method in the masked.py file.
+
+pandas/core/arrays/masked.py
+[SEARCH]
+    def reshape(self, *args, **kwargs) -> Self:
+        data = self._data.reshape(*args, **kwargs)
+        mask = self._mask.reshape(*args, **kwargs)
+        return type(self)(data, mask)
+[/SEARCH]
+[REPLACE]
+    def reshape(self, *args, **kwargs) -> Self:
+        data = self._data.reshape(*args, **kwargs)
+        mask = self._mask.reshape(*args, **kwargs)
+        return type(self)(data, mask, copy=False)
+[/REPLACE]

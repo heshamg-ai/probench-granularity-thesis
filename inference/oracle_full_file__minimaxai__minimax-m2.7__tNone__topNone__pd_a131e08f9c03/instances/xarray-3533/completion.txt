@@ -1,0 +1,124 @@
+
+
+Looking at the code, I can see that `DataArray.isel` currently converts to a temporary Dataset, calls `Dataset.isel`, then converts back - which is heavyweight for simple integer indexing on small arrays.
+
+Let me examine the current implementation more closely and create an optimized fast path.
+
+xarray/core/dataarray.py
+[SEARCH]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/SEARCH]
+[REPLACE]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        
+        # Fast path for simple integer indexing on small arrays
+        # Check if all indexers are integers (or can be converted to integers)
+        if not drop:
+            all_int = True
+            for k, v in indexers.items():
+                if isinstance(v, integer_types):
+                    pass  # already an integer
+                elif isinstance(v, np.ndarray):
+                    if v.ndim != 0 or v.dtype.kind not in 'iu':
+                        all_int = False
+                        break
+                else:
+                    try:
+                        int(v)
+                    except (TypeError, ValueError):
+                        all_int = False
+                        break
+            
+            if all_int and len(indexers) > 0:
+                # All indexers are effectively integers - use optimized path
+                # This avoids the overhead of converting to/from Dataset
+                from .variable import Variable
+                from .indexes import propagate_indexes
+                
+                # Get the indexed variable
+                key = tuple(indexers.get(dim, slice(None)) for dim in self.dims)
+                indexed_var = self.variable[key]
+                
+                # Determine which dimensions are being indexed away
+                int_dims = set()
+                for dim, idx in indexers.items():
+                    if isinstance(idx, integer_types):
+                        int_dims.add(dim)
+                    elif isinstance(idx, np.ndarray) and idx.ndim == 0:
+                        int_dims.add(dim)
+                    else:
+                        try:
+                            int(idx)
+                            int_dims.add(dim)
+                        except (TypeError, ValueError):
+                            pass
+                
+                # Build new coordinates
+                new_coords = {}
+                for name, coord_var in self._coords.items():
+                    coord_dims = set(coord_var.dims)
+                    # If coordinate depends on any dimension being indexed away
+                    if coord_dims & int_dims:
+                        # Need to check if we can extract from this coordinate
+                        if coord_dims <= int_dims:
+                            # All dims are being indexed, coordinate becomes scalar
+                            coord_key = tuple(indexers.get(d, slice(None)) for d in coord_var.dims)
+                            scalar_val = coord_var.variable[coord_key]
+                            if hasattr(scalar_val, 'data'):
+                                scalar_val = scalar_val.data
+                            if isinstance(scalar_val, np.ndarray):
+                                if scalar_val.size == 1:
+                                    scalar_val = scalar_val.item()
+                            if scalar_val is not None:
+                                new_coords[name] = Variable([], scalar_val)
+                        else:
+                            # Partial dimension - need to subset
+                            coord_key = tuple(indexers.get(d, slice(None)) for d in coord_var.dims)
+                            subset = coord_var.variable[coord_key]
+                            new_coords[name] = subset
+                    else:
+                        # Coordinate doesn't depend on indexed dimensions
+                        new_coords[name] = coord_var
+                
+                # Get new indexes
+                new_indexes = propagate_indexes(self._indexes, exclude=int_dims)
+                
+                return self._replace(
+                    variable=indexed_var,
+                    coords=new_coords,
+                    indexes=new_indexes,
+                )
+        
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/REPLACE]

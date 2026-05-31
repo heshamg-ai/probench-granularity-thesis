@@ -1,0 +1,32 @@
+ xarray/core/common.py
+[SEARCH]
+    def _ipython_key_completions_(self) -> List[str]:
+        """Provide method for the key-autocompletions in IPython.
+
+        See http://ipython.readthedocs.io/en/stable/config/integrating.html#tab-completion
+        For the details.
+        """
+        item_lists = [
+            item
+            for sublist in self._item_sources
+            for item in sublist
+            if isinstance(item, str)
+        ]
+        return list(set(item_lists))
+[/SEARCH]
+[REPLACE]
+    def _ipython_key_completions_(self) -> List[str]:
+        """Provide method for the key-autocompletions in IPython.
+
+        See http://ipython.readthedocs.io/en/stable/config/integrating.html#tab-completion
+        For the details.
+        """
+        seen: set = set()
+        result: List[str] = []
+        for sublist in self._item_sources:
+            for item in sublist:
+                if isinstance(item, str) and item not in seen:
+                    seen.add(item)
+                    result.append(item)
+        return result
+[/REPLACE]

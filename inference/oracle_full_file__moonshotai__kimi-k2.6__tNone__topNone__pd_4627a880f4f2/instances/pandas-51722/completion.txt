@@ -1,0 +1,147 @@
+ Looking at the `quantile` method in `DataFrameGroupBy`, I can identify several optimization opportunities:
+
+1. **Avoid redundant `np.asarray` and copies**: The `pre_processor` converts arrays unnecessarily in some paths.
+2. **Optimize `lexsort` for 2D arrays**: The current code broadcasts labels to 2D which is memory-intensive.
+3. **Avoid unnecessary reshape operations**: The output reshaping can be optimized.
+4. **Use `np.asarray` more carefully**: Avoid copies when data is already contiguous.
+
+The key optimizations are:
+1. In `pre_processor`: avoid converting to `np.asarray` when we can use `.to_numpy()` directly or when array is already suitable.
+2. In `blk_func`: avoid broadcasting `labels_for_lexsort` to 2D - use a simpler approach for lexsort.
+3. Reduce memory allocations by reusing arrays where possible.
+
+Let me trace through the code carefully to make surgical optimizations:
+
+```python
+pandas/core/groupby/groupby.py
+[SEARCH]
+        def blk_func(values: ArrayLike) -> ArrayLike:
+            orig_vals = values
+            if isinstance(values, BaseMaskedArray):
+                mask = values._mask
+                result_mask = np.zeros((ngroups, nqs), dtype=np.bool_)
+            else:
+                mask = isna(values)
+                result_mask = None
+
+            is_datetimelike = needs_i8_conversion(values.dtype)
+
+            vals, inference = pre_processor(values)
+
+            ncols = 1
+            if vals.ndim == 2:
+                ncols = vals.shape[0]
+                shaped_labels = np.broadcast_to(
+                    labels_for_lexsort, (ncols, len(labels_for_lexsort))
+                )
+            else:
+                shaped_labels = labels_for_lexsort
+
+            out = np.empty((ncols, ngroups, nqs), dtype=np.float64)
+
+            # Get an index of values sorted by values and then labels
+            order = (vals, shaped_labels)
+            sort_arr = np.lexsort(order).astype(np.intp, copy=False)
+
+            if is_datetimelike:
+                # This casting needs to happen after the lexsort in order
+                # to ensure that NaTs are placed at the end and not the front
+                vals = vals.view("i8").astype(np.float64)
+
+            if vals.ndim == 1:
+                # Ea is always 1d
+                func(
+                    out[0],
+                    values=vals,
+                    mask=mask,
+                    sort_indexer=sort_arr,
+                    result_mask=result_mask,
+                )
+            else:
+                for i in range(ncols):
+                    func(out[i], values=vals[i], mask=mask[i], sort_indexer=sort_arr[i])
+
+            if vals.ndim == 1:
+                out = out.ravel("K")
+                if result_mask is not None:
+                    result_mask = result_mask.ravel("K")
+            else:
+                out = out.reshape(ncols, ngroups * nqs)
+
+            return post_processor(out, inference, result_mask, orig_vals)
+[/SEARCH]
+[REPLACE]
+        def blk_func(values: ArrayLike) -> ArrayLike:
+            orig_vals = values
+            if isinstance(values, BaseMaskedArray):
+                mask = values._mask
+                result_mask = np.zeros((ngroups, nqs), dtype=np.bool_)
+            else:
+                mask = isna(values)
+                result_mask = None
+
+            is_datetimelike = needs_i8_conversion(values.dtype)
+
+            vals, inference = pre_processor(values)
+
+            ncols = 1
+            if vals.ndim == 2:
+                ncols = vals.shape[0]
+
+            out = np.empty((ncols, ngroups, nqs), dtype=np.float64)
+
+            # Get an index of values sorted by values and then labels
+            # For 2D, we process each column separately to avoid broadcasting
+            # labels to 2D, which saves memory.
+            if vals.ndim == 1:
+                sort_arr = np.lexsort((vals, labels_for_lexsort)).astype(
+                    np.intp, copy=False
+                )
+
+                if is_datetimelike:
+                    # This casting needs to happen after the lexsort in order
+                    # to ensure that NaTs are placed at the end and not the front
+                    vals = vals.view("i8").astype(np.float64)
+
+                func(
+                    out[0],
+                    values=vals,
+                    mask=mask,
+                    sort_indexer=sort_arr,
+                    result_mask=result_mask,
+                )
+                out = out.ravel("K")
+                if result_mask is not None:
+                    result_mask = result_mask.ravel("K")
+            else:
+                if is_datetimelike:
+                    # lexsort before view/astype to preserve NaT ordering
+                    for i in range(ncols):
+                        sort_arr = np.lexsort((vals[i], labels_for_lexsort)).astype(
+                            np.intp, copy=False
+                        )
+                        cast_vals = vals[i].view("i8").astype(np.float64)
+                        func(
+                            out[i],
+                            values=cast_vals,
+                            mask=mask[i],
+                            sort_indexer=sort_arr,
+                            result_mask=result_mask,
+                        )
+                else:
+                    for i in range(ncols):
+                        sort_arr = np.lexsort((vals[i], labels_for_lexsort)).astype(
+                            np.intp, copy=False
+                        )
+                        func(
+                            out[i],
+                            values=vals[i],
+                            mask=mask[i],
+                            sort_indexer=sort_arr,
+                            result_mask=result_mask,
+                        )
+                out = out.reshape(ncols, ngroups * nqs)
+
+            return post_processor(out, inference, result_mask, orig_vals)
+[/REPLACE]
+```

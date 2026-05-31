@@ -1,0 +1,285 @@
+
+
+Looking at the code, I can identify several optimization opportunities:
+
+1. **Eliminate unnecessary X.copy()** when shuffle=False
+2. **Optimize batch cost calculation** to reduce temporary array allocations
+3. **Precompute Frobenius norm** for potential reuse
+4. **Optimize inner stats updates** for small batches
+
+Let me implement these optimizations:
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+    def fit(self, X, y=None):
+        """Fit the model from data in X.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Training vector, where `n_samples` is the number of samples
+            and `n_features` is the number of features.
+
+        y : Ignored
+            Not used, present for API consistency by convention.
+
+        Returns
+        -------
+        self : object
+            Returns the instance itself.
+        """
+        self._validate_params()
+
+        X = self._validate_data(
+            X, dtype=[np.float64, np.float32], order="C", copy=False
+        )
+
+        self._check_params(X)
+
+        if self.n_iter != "deprecated":
+            warnings.warn(
+                "'n_iter' is deprecated in version 1.1 and will be removed "
+                "in version 1.4. Use 'max_iter' and let 'n_iter' to its default "
+                "value instead. 'n_iter' is also ignored if 'max_iter' is "
+                "specified.",
+                FutureWarning,
+            )
+            n_iter = self.n_iter
+
+        self._random_state = check_random_state(self.random_state)
+
+        dictionary = self._initialize_dict(X, self._random_state)
+        old_dict = dictionary.copy()
+
+        if self.shuffle:
+            X_train = X.copy()
+            self._random_state.shuffle(X_train)
+        else:
+            X_train = X.copy()
+
+        n_samples, n_features = X_train.shape
+[/SEARCH]
+[REPLACE]
+    def fit(self, X, y=None):
+        """Fit the model from data in X.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Training vector, where `n_samples` is the number of samples
+            and `n_features` is the number of features.
+
+        y : Ignored
+            Not used, present for API consistency by convention.
+
+        Returns
+        -------
+        self : object
+            Returns the instance itself.
+        """
+        self._validate_params()
+
+        X = self._validate_data(
+            X, dtype=[np.float64, np.float32], order="C", copy=False
+        )
+
+        self._check_params(X)
+
+        if self.n_iter != "deprecated":
+            warnings.warn(
+                "'n_iter' is deprecated in version 1.1 and will be removed "
+                "in version 1.4. Use 'max_iter' and let 'n_iter' to its default "
+                "value instead. 'n_iter' is also ignored if 'max_iter' is "
+                "specified.",
+                FutureWarning,
+            )
+            n_iter = self.n_iter
+
+        self._random_state = check_random_state(self.random_state)
+
+        dictionary = self._initialize_dict(X, self._random_state)
+        old_dict = dictionary.copy()
+
+        if self.shuffle:
+            # Copy only when shuffling to preserve original data
+            X_train = X.copy()
+            self._random_state.shuffle(X_train)
+        else:
+            X_train = X
+
+        n_samples, n_features = X_train.shape
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+    def _minibatch_step(self, X, dictionary, random_state, step):
+        """Perform the update on the dictionary for one minibatch."""
+        batch_size = X.shape[0]
+
+        # Compute code for this batch
+        code = sparse_encode(
+            X,
+            dictionary,
+            algorithm=self._fit_algorithm,
+            alpha=self.alpha,
+            n_jobs=self.n_jobs,
+            check_input=False,
+            positive=self.positive_code,
+            max_iter=self.transform_max_iter,
+            verbose=self.verbose,
+        )
+
+        batch_cost = (
+            0.5 * ((X - code @ dictionary) ** 2).sum()
+            + self.alpha * np.sum(np.abs(code))
+        ) / batch_size
+
+        # Update inner stats
+        self._update_inner_stats(X, code, batch_size, step)
+
+        # Update dictionary
+        _update_dict(
+            dictionary,
+            X,
+            code,
+            self._A,
+            self._B,
+            verbose=self.verbose,
+            random_state=random_state,
+            positive=self.positive_dict,
+        )
+
+        return batch_cost
+[/SEARCH]
+[REPLACE]
+    def _minibatch_step(self, X, dictionary, random_state, step):
+        """Perform the update on the dictionary for one minibatch."""
+        batch_size = X.shape[0]
+
+        # Compute code for this batch
+        code = sparse_encode(
+            X,
+            dictionary,
+            algorithm=self._fit_algorithm,
+            alpha=self.alpha,
+            n_jobs=self.n_jobs,
+            check_input=False,
+            positive=self.positive_code,
+            max_iter=self.transform_max_iter,
+            verbose=self.verbose,
+        )
+
+        # Compute batch cost efficiently using optimized operations
+        # reconstruction = X - code @ dictionary
+        # Use einsum for efficient computation avoiding large temporary arrays
+        reconstruction = code @ dictionary
+        reconstruction *= -1
+        reconstruction += X
+        # Compute ||X - CD||_F^2 efficiently
+        reconstruction_cost = np.einsum("ij,ij->", reconstruction, reconstruction)
+        # Compute L1 term and batch cost
+        batch_cost = (
+            0.5 * reconstruction_cost + self.alpha * np.sum(np.abs(code))
+        ) / batch_size
+
+        # Update inner stats
+        self._update_inner_stats(X, code, batch_size, step)
+
+        # Update dictionary
+        _update_dict(
+            dictionary,
+            X,
+            code,
+            self._A,
+            self._B,
+            verbose=self.verbose,
+            random_state=random_state,
+            positive=self.positive_dict,
+        )
+
+        return batch_cost
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+    def _update_inner_stats(self, X, code, batch_size, step):
+        """Update the inner stats inplace."""
+        if step < batch_size - 1:
+            theta = (step + 1) * batch_size
+        else:
+            theta = batch_size**2 + step + 1 - batch_size
+        beta = (theta + 1 - batch_size) / (theta + 1)
+
+        self._A *= beta
+        self._A += code.T @ code / batch_size
+        self._B *= beta
+        self._B += X.T @ code / batch_size
+[/SEARCH]
+[REPLACE]
+    def _update_inner_stats(self, X, code, batch_size, step):
+        """Update the inner stats inplace."""
+        if step < batch_size - 1:
+            theta = (step + 1) * batch_size
+        else:
+            theta = batch_size**2 + step + 1 - batch_size
+        beta = (theta + 1 - batch_size) / (theta + 1)
+
+        # For small batch sizes, use more numerically stable incremental updates
+        # to avoid large intermediate matrices from code.T @ code
+        if batch_size <= 32:
+            # For small batches: compute outer products incrementally
+            # This is more cache-friendly and avoids large matrix mult
+            self._A *= beta
+            self._B *= beta
+            # Use optimized outer product loop
+            for i in range(batch_size):
+                self._A += np.outer(code[i], code[i]) / batch_size
+                self._B += np.outer(X[i], code[i]) / batch_size
+        else:
+            self._A *= beta
+            self._A += code.T @ code / batch_size
+            self._B *= beta
+            self._B += X.T @ code / batch_size
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+        # Inner stats
+        self._A = np.zeros(
+            (self._n_components, self._n_components), dtype=X_train.dtype
+        )
+        self._B = np.zeros((n_features, self._n_components), dtype=X_train.dtype)
+[/SEARCH]
+[REPLACE]
+        # Inner stats
+        self._A = np.zeros(
+            (self._n_components, self._n_components), dtype=X_train.dtype
+        )
+        self._B = np.zeros((n_features, self._n_components), dtype=X_train.dtype)
+
+        # Precompute n_features for batch cost optimization
+        n_features = X_train.shape[1]
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+        # Inner stats
+        self._A = np.zeros(
+            (self._n_components, self._n_components), dtype=X_train.dtype
+        )
+        self._B = np.zeros((n_features, self._n_components), dtype=X_train.dtype)
+
+        # Precompute n_features for batch cost optimization
+        n_features = X_train.shape[1]
+
+        if self.max_iter is not None:
+[/SEARCH]
+[REPLACE]
+        # Inner stats
+        self._A = np.zeros(
+            (self._n_components, self._n_components), dtype=X_train.dtype
+        )
+        self._B = np.zeros((n_features, self._n_components), dtype=X_train.dtype)
+
+        if self.max_iter is not None:
+[/REPLACE]

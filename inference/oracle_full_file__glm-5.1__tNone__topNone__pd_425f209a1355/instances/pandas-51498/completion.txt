@@ -1,0 +1,36 @@
+pandas/core/frame.py
+[SEARCH]
+        elif is_integer(decimals):
+            # Dispatch to Series.round
+            new_cols = [_series_round(v, decimals) for _, v in self.items()]
+        else:
+            raise TypeError("decimals must be an integer, a dict-like or a Series")
+
+        if len(new_cols) > 0:
+            return self._constructor(
+                concat(new_cols, axis=1), index=self.index, columns=self.columns
+            ).__finalize__(self, method="round")
+        else:
+            return self.copy(deep=False)
+[/SEARCH]
+[REPLACE]
+        elif is_integer(decimals):
+            # Fastpath for integer decimals: apply rounding directly to
+            # numeric block arrays, avoiding per-column Series overhead.
+            result = self.copy(deep=False)
+            for i in range(len(self.columns)):
+                arr = result._mgr.iget_values(i)
+                if is_float_dtype(arr.dtype):
+                    result._iset_item_mgr(i, np.round(arr, decimals))
+                elif is_integer_dtype(arr.dtype) and decimals >= 0:
+                    # integer dtypes are already rounded to 0 decimals
+                    pass
+                else:
+                    result.iloc[:, i] = _series_round(
+                        self.iloc[:, i], decimals
+                    )
+        else:
+            raise TypeError("decimals must be an integer, a dict-like or a Series")
+
+        return result
+[/REPLACE]

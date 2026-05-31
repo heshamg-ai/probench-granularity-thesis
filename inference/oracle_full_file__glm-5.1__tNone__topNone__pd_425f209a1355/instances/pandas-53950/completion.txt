@@ -1,0 +1,15 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        if method is not None:
+            fallback_performancewarning()
+            return super().fillna(value=value, method=method, limit=limit)
+[/SEARCH]
+[REPLACE]
+        if method is not None:
+            if limit is None:
+                if method == "pad":
+                    return type(self)(pc.fill_null_forward(self._pa_array))
+                elif method == "backfill":
+                    return type(self)(pc.fill_null_backward(self._pa_array))
+            return super().fillna(value=value, method=method, limit=limit)
+[/REPLACE]

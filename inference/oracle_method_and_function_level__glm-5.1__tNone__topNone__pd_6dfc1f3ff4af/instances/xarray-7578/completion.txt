@@ -1,0 +1,18 @@
+xarray/core/rolling.py
+[SEARCH]
+        attrs = self.obj.attrs if keep_attrs else {}
+
+        return Dataset(dataset, coords=self.obj.coords, attrs=attrs).isel(
+            {d: slice(None, None, s) for d, s in zip(self.dim, strides)}
+        )
+[/SEARCH]
+[REPLACE]
+        attrs = self.obj.attrs if keep_attrs else {}
+
+        stride_isel = {d: slice(None, None, s) for d, s in zip(self.dim, strides) if s != 1}
+
+        result = Dataset(dataset, coords=self.obj.coords, attrs=attrs)
+        if stride_isel:
+            result = result.isel(stride_isel)
+        return result
+[/REPLACE]

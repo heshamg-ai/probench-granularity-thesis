@@ -1,0 +1,55 @@
+{
+  "id": 45,
+  "scenario_id": "pandas-55131",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 55131,
+  "baseline_sha": "13b132e7d154cee2b6daf3133a283d745fee4def",
+  "reference_sha": "51812d495d2dcf7cd017179e0f784b2524d1438d",
+  "task": "Optimize DataFrame.groupby.max when aggregating PyArrow-backed timestamp/duration dtypes",
+  "entry_point": "pandas.core.groupby.DataFrameGroupBy.max",
+  "whats_new": "Performance improvement in DataFrame.groupby when aggregating pyarrow timestamp and duration dtypes",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-55131:baseline",
+      "digest": "sha256:f9e7c0e9ee071f0a7f74d121f1feaa0c4a93c8aefcb1a971da1c2355b9ca23a0"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-55131:reference",
+      "digest": "sha256:f9674cb8a74bfc8bf3c5260df69217ea8eecbc7fd5f7300c32a2b85365c5426b"
+    }
+  },
+  "params": [
+    {
+      "name": "DataFrame Length",
+      "short_indicator": "L",
+      "explanation": "Number of rows in the DataFrame.",
+      "values": [
+        "10000",
+        "100000",
+        "1000000"
+      ]
+    },
+    {
+      "name": "Group Cardinality",
+      "short_indicator": "G",
+      "explanation": "Number of unique groups in the 'group' column.",
+      "values": [
+        "10",
+        "100",
+        "1000"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/extension/test_arrow.py::TestArrowArray::test_in_numeric_groupby",
+    "pandas/tests/extension/test_arrow.py::TestArrowArray::test_groupby_agg_extension",
+    "pandas/tests/groupby/test_timegrouper.py::TestGroupBy::test_first_last_max_min_on_time_data",
+    "pandas/tests/groupby/test_timegrouper.py::TestGroupBy::test_groupby_max_datetime64",
+    "pandas/tests/groupby/test_timegrouper.py::TestGroupBy::test_groupby_with_timezone_selection",
+    "pandas/tests/groupby/transform/test_transform.py::test_groupby_transform_timezone_column",
+    "pandas/tests/groupby/test_min_max.py::test_groupby_min_max_nullable",
+    "pandas/tests/groupby/test_min_max.py::test_min_max_nullable_uint64_empty_group"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.core.groupby.DataFrameGroupBy.max for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize DataFrame.groupby.max when aggregating PyArrow-backed timestamp/duration dtypes\nOptimization function: pandas.core.groupby.DataFrameGroupBy.max\n\n\n[start of pandas/core/arrays/arrow/array.py]\n### Relevant context\n#### Class `pandas.core.arrays.arrow.array.ArrowExtensionArray`\n**Class Signature**\n```python\nclass ArrowExtensionArray(OpsMixin, ExtensionArraySupportsAnyAll, ArrowStringArrayMixin, BaseStringArrayMethods):\n```\n**Class Attributes**\n```python\n    _pa_array: pa.ChunkedArray\n    _dtype: ArrowDtype\n    _dt_dayofweek = _dt_day_of_week\n    _dt_weekday = _dt_day_of_week\n    _dt_dayofyear = _dt_day_of_year\n    _dt_daysinmonth = _dt_days_in_month\n```\n**Class __init__ method**\n```python\n    def __init__(self, values: pa.Array | pa.ChunkedArray) -> None:\n        if pa_version_under7p0:\n            msg = \"pyarrow>=7.0.0 is required for PyArrow backed ArrowExtensionArray.\"\n            raise ImportError(msg)\n        if isinstance(values, pa.Array):\n            self._pa_array = pa.chunked_array([values])\n        elif isinstance(values, pa.ChunkedArray):\n            self._pa_array = values\n        else:\n            raise ValueError(\n                f\"Unsupported type '{type(values)}' for ArrowExtensionArray\"\n            )\n        self._dtype = ArrowDtype(self._pa_array.type)\n```\n##### Method `pandas.core.arrays.arrow.array.ArrowExtensionArray._groupby_op`\n```python\ndef _groupby_op(\n        self,\n        *,\n        how: str,\n        has_dropped_na: bool,\n        min_count: int,\n        ngroups: int,\n        ids: npt.NDArray[np.intp],\n        **kwargs,\n    ):\n        if isinstance(self.dtype, StringDtype):\n            return super()._groupby_op(\n                how=how,\n                has_dropped_na=has_dropped_na,\n                min_count=min_count,\n                ngroups=ngroups,\n                ids=ids,\n                **kwargs,\n            )\n\n        masked = self._to_masked()\n\n        result = masked._groupby_op(\n            how=how,\n            has_dropped_na=has_dropped_na,\n            min_count=min_count,\n            ngroups=ngroups,\n            ids=ids,\n            **kwargs,\n        )\n        if isinstance(result, np.ndarray):\n            return result\n        return type(self)._from_sequence(result, copy=False)\n```\n[end of pandas/core/arrays/arrow/array.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

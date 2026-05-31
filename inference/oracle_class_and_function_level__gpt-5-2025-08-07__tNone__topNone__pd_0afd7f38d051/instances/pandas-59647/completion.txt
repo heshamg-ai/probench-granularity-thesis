@@ -1,0 +1,31 @@
+pandas/core/dtypes/dtypes.py
+[SEARCH]
+        else:
+            # from here on, dtype is a CategoricalDtype
+            dtype = cast(CategoricalDtype, dtype)
+
+        # update categories/ordered unless they've been explicitly passed as None
+        new_categories = (
+            dtype.categories if dtype.categories is not None else self.categories
+        )
+        new_ordered = dtype.ordered if dtype.ordered is not None else self.ordered
+
+        return CategoricalDtype(new_categories, new_ordered)
+[/SEARCH]
+[REPLACE]
+        else:
+            # from here on, dtype is a CategoricalDtype
+            dtype = cast(CategoricalDtype, dtype)
+
+        # fastpath: if dtype already provides both categories and ordered, return it
+        if dtype.categories is not None and dtype.ordered is not None:
+            return dtype
+
+        # update categories/ordered unless they've been explicitly passed as None
+        new_categories = (
+            dtype.categories if dtype.categories is not None else self.categories
+        )
+        new_ordered = dtype.ordered if dtype.ordered is not None else self.ordered
+
+        return CategoricalDtype(new_categories, new_ordered)
+[/REPLACE]

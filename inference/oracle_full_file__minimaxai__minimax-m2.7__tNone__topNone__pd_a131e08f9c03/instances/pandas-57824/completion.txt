@@ -1,0 +1,60 @@
+
+
+Looking at the code, I need to add a `round` method to `RangeIndex` that preserves the RangeIndex type when possible. Since RangeIndex contains only integers, and rounding integers doesn't change their values (when `decimals >= 0`) or results in integers (when `decimals < 0`), we can return `self` directly.
+
+Let me implement this optimization:
+
+pandas/core/indexes/range.py
+[SEARCH]
+    # --------------------------------------------------------------------
+    # Reductions
+
+    def all(self, *args, **kwargs) -> bool:
+        return 0 not in self._range
+[/SEARCH]
+[REPLACE]
+    def round(self, decimals: int = 0) -> Self:
+        """
+        Round the values in the RangeIndex to the given number of decimals.
+
+        Parameters
+        ----------
+        decimals : int, optional
+            Number of decimal places to round to. If decimals is negative,
+            it specifies the number of positions to the left of the decimal point.
+
+        Returns
+        -------
+        RangeIndex
+            Returns self because RangeIndex contains integers and rounding
+            integers does not change their values.
+
+        See Also
+        --------
+        Index.round : Return a rounded Index.
+        Series.round : Round values of a Series.
+
+        Examples
+        --------
+        >>> idx = pd.RangeIndex(5)
+        >>> idx.round(decimals=2)
+        RangeIndex(start=0, stop=5, step=1)
+        """
+        # RangeIndex contains only integers, and rounding integers doesn't
+        # change their values (or results in integers when decimals < 0),
+        # so we can return self directly to preserve the RangeIndex type.
+        if len(self) == 0:
+            return self
+        result = self[0]
+        if is_float(result):
+            # Only possible if start is a float, which shouldn't happen for
+            # RangeIndex, but handle it defensively
+            return super().round(decimals)
+        return self
+
+    # --------------------------------------------------------------------
+    # Reductions
+
+    def all(self, *args, **kwargs) -> bool:
+        return 0 not in self._range
+[/REPLACE]

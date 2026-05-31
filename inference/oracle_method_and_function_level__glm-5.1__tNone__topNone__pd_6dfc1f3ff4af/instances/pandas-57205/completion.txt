@@ -1,0 +1,80 @@
+pandas/core/internals/construction.py
+[SEARCH]
+    if columns is not None:
+        from pandas.core.series import Series
+
+        arrays = Series(data, index=columns, dtype=object)
+        missing = arrays.isna()
+        if index is None:
+            # GH10856
+            # raise ValueError if only scalars in dict
+            index = _extract_index(arrays[~missing])
+        else:
+            index = ensure_index(index)
+
+        # no obvious "empty" int column
+        if missing.any() and not is_integer_dtype(dtype):
+            nan_dtype: DtypeObj
+
+            if dtype is not None:
+                # calling sanitize_array ensures we don't mix-and-match
+                #  NA dtypes
+                midxs = missing.values.nonzero()[0]
+                for i in midxs:
+                    arr = sanitize_array(arrays.iat[i], index, dtype=dtype)
+                    arrays.iat[i] = arr
+            else:
+                # GH#1783
+                nan_dtype = np.dtype("object")
+                val = construct_1d_arraylike_from_scalar(np.nan, len(index), nan_dtype)
+                nmissing = missing.sum()
+                if copy:
+                    rhs = [val] * nmissing
+                else:
+                    # GH#45369
+                    rhs = [val.copy() for _ in range(nmissing)]
+                arrays.loc[missing] = rhs
+
+        arrays = list(arrays)
+        columns = ensure_index(columns)
+[/SEARCH]
+[REPLACE]
+    if columns is not None:
+        columns = ensure_index(columns)
+        col_list = list(columns)
+        arrays = [data.get(k) for k in col_list]
+        missing = [x is None for x in arrays]
+        has_missing = any(missing)
+        if index is None:
+            # GH10856
+            # raise ValueError if only scalars in dict
+            present_arrays = [x for x, m in zip(arrays, missing) if not m]
+            index = _extract_index(present_arrays)
+        else:
+            index = ensure_index(index)
+
+        # no obvious "empty" int column
+        if has_missing and not is_integer_dtype(dtype):
+            nan_dtype: DtypeObj
+
+            if dtype is not None:
+                # calling sanitize_array ensures we don't mix-and-match
+                #  NA dtypes
+                midxs = [i for i, m in enumerate(missing) if m]
+                for i in midxs:
+                    arr = sanitize_array(arrays[i], index, dtype=dtype)
+                    arrays[i] = arr
+            else:
+                # GH#1783
+                nan_dtype = np.dtype("object")
+                val = construct_1d_arraylike_from_scalar(np.nan, len(index), nan_dtype)
+                nmissing = sum(missing)
+                if copy:
+                    replacement = val
+                else:
+                    # GH#45369
+                    replacement = val.copy()
+                for i, m in enumerate(missing):
+                    if m:
+                        arrays[i] = replacement
+[/REPLACE]

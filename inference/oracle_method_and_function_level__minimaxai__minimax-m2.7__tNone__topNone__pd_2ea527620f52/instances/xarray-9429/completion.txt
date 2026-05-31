@@ -1,0 +1,53 @@
+
+
+Looking at the code, I need to see more context around how cftime objects are handled. Let me search for relevant parts that might need optimization.
+
+xarray/groupers.py
+[SEARCH]
+def factorize(self, group: T_Group) -> EncodedGroups:
+        self._init_properties(group)
+        full_index, first_items, codes_ = self._get_index_and_items()
+        sbins = first_items.values.astype(np.int64)
+        group_indices: GroupIndices = tuple(
+            [slice(i, j) for i, j in zip(sbins[:-1], sbins[1:])]
+            + [slice(sbins[-1], None)]
+        )
+
+        unique_coord = Variable(
+            dims=group.name, data=first_items.index, attrs=group.attrs
+        )
+        codes = group.copy(data=codes_.reshape(group.shape))
+
+        return EncodedGroups(
+            codes=codes,
+            group_indices=group_indices,
+            full_index=full_index,
+            unique_coord=unique_coord,
+            coords=_coordinates_from_variable(unique_coord),
+        )
+[/SEARCH]
+[REPLACE]
+def factorize(self, group: T_Group) -> EncodedGroups:
+        self._init_properties(group)
+        full_index, first_items, codes_ = self._get_index_and_items()
+        sbins = first_items.values.astype(np.int64)
+        group_indices: GroupIndices = tuple(
+            [slice(i, j) for i, j in zip(sbins[:-1], sbins[1:])]
+            + [slice(sbins[-1], None)]
+        )
+
+        unique_values = first_items.index
+        unique_coord = Variable(
+            dims=group.name, data=unique_values, attrs=group.attrs
+        )
+        # Avoid full copy by using Variable constructor directly
+        codes = Variable(dims=group.dims, data=codes_.reshape(group.shape), attrs=group.attrs)
+
+        return EncodedGroups(
+            codes=codes,
+            group_indices=group_indices,
+            full_index=full_index,
+            unique_coord=unique_coord,
+            coords=_coordinates_from_variable(unique_coord),
+        )
+[/REPLACE]

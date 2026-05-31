@@ -1,0 +1,70 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def round(self, decimals: int = 0) -> Self:
+        """
+        Round each value in the Index to the given number of decimals.
+
+        Parameters
+        ----------
+        decimals : int, optional
+            Number of decimal places to round to. If decimals is negative,
+            it specifies the number of positions to the left of the decimal point.
+
+        Returns
+        -------
+        Index
+            A new Index with the rounded values.
+
+        Examples
+        --------
+        >>> import pandas as pd
+        >>> idx = pd.Index([10.1234, 20.5678, 30.9123, 40.4567, 50.7890])
+        >>> idx.round(decimals=2)
+        Index([10.12, 20.57, 30.91, 40.46, 50.79], dtype='float64')
+
+        """
+        return self._constructor(self.to_series().round(decimals))
+[/SEARCH]
+[REPLACE]
+    def round(self, decimals: int = 0) -> Self:
+        """
+        Round each value in the Index to the given number of decimals.
+
+        Parameters
+        ----------
+        decimals : int, optional
+            Number of decimal places to round to. If decimals is negative,
+            it specifies the number of positions to the left of the decimal point.
+
+        Returns
+        -------
+        Index
+            A new Index with the rounded values.
+
+        Examples
+        --------
+        >>> import pandas as pd
+        >>> idx = pd.Index([10.1234, 20.5678, 30.9123, 40.4567, 50.7890])
+        >>> idx.round(decimals=2)
+        Index([10.12, 20.57, 30.91, 40.46, 50.79], dtype='float64')
+
+        """
+        if decimals >= 0:
+            return self._view()
+        start = self.start
+        stop = self.stop
+        step = self.step
+        if decimals < 0:
+            factor = 10 ** (-decimals)
+            new_start = (start // factor) * factor
+            new_step = step
+            if step % factor == 0:
+                new_step = step
+                new_stop = new_start + len(self) * new_step
+            else:
+                new_stop = ((stop - 1) // factor + 1) * factor
+                new_step = factor
+            new_range = range(new_start, new_stop, new_step)
+            return type(self)._simple_new(new_range, name=self._name)
+        return self._view()
+[/REPLACE]

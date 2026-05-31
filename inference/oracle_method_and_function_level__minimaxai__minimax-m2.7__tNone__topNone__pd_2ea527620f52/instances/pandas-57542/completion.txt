@@ -1,0 +1,46 @@
+
+
+Looking at the code context, I need to find where `_get_group_names` is used and modify the logic to use RangeIndex for unnamed capture groups. Let me search for the usage of this function in the accessor.py file.
+
+pandas/core/strings/accessor.py
+[SEARCH]
+    def _get_group_names(regex: re.Pattern) -> list[Hashable]:
+        """
+        Get named groups from compiled regex.
+
+        Unnamed groups are numbered.
+
+        Parameters
+        ----------
+        regex : compiled regex
+
+        Returns
+        -------
+        list of column labels
+        """
+        names = {v: k for k, v in regex.groupindex.items()}
+        return [names.get(1 + i, i) for i in range(regex.groups)]
+[/SEARCH]
+[REPLACE]
+    def _get_group_names(regex: re.Pattern) -> list[Hashable] | RangeIndex:
+        """
+        Get named groups from compiled regex.
+
+        Unnamed groups are numbered.
+
+        Parameters
+        ----------
+        regex : compiled regex
+
+        Returns
+        -------
+        list of column labels
+        """
+        names = {v: k for k, v in regex.groupindex.items()}
+        if names:
+            # Has named groups - return list
+            return [names.get(1 + i, i) for i in range(regex.groups)]
+        else:
+            # No named groups - return RangeIndex for efficiency
+            return RangeIndex(regex.groups)
+[/REPLACE]

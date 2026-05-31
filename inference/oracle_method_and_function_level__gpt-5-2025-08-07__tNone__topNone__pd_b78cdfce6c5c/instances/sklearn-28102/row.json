@@ -1,0 +1,49 @@
+{
+  "id": 88,
+  "scenario_id": "sklearn-28102",
+  "repo": "scikit-learn/scikit-learn",
+  "pr_number": 28102,
+  "baseline_sha": "548fc6fb680acbd26ed5213a1e7ace59722c0641",
+  "reference_sha": "5aebdcd8b4f2fc3f0bafa7fcfeacd1b356356750",
+  "task": "Optimize _find_binning_thresholds when processing large arrays with NaN values",
+  "entry_point": "sklearn.ensemble._hist_gradient_boosting.binning._find_binning_thresholds",
+  "whats_new": ":class:`ensemble.HistGradientBoostingClassifier` and :class:`ensemble.HistGradientBoostingRegressor` are now a tiny bit faster by pre-sorting the data before finding the thresholds for binning.",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/sklearn-28102:baseline",
+      "digest": "sha256:f768163cc1c4c469e6e8aa78bd0e3d1f56aa4cc28811631d041761e63c438d7c"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/sklearn-28102:reference",
+      "digest": "sha256:6e378d28e72aff1fd6c36fa5131135576125eb4b2054b3683e1da7757791ecfa"
+    }
+  },
+  "params": [
+    {
+      "name": "n_samples",
+      "short_indicator": "N",
+      "explanation": "Number of samples",
+      "values": [
+        "1000000",
+        "10000000"
+      ]
+    },
+    {
+      "name": "NA Percentage",
+      "short_indicator": "NAP",
+      "explanation": "Percentage of NA/masked values",
+      "values": [
+        "0.1",
+        "0.5"
+      ]
+    }
+  ],
+  "core_tests": [
+    "sklearn/ensemble/_hist_gradient_boosting/tests/test_binning.py::test_find_binning_thresholds_low_n_bins",
+    "sklearn/ensemble/_hist_gradient_boosting/tests/test_binning.py::test_find_binning_thresholds_random_data",
+    "sklearn/ensemble/_hist_gradient_boosting/tests/test_binning.py::test_find_binning_thresholds_regular_data",
+    "sklearn/ensemble/_hist_gradient_boosting/tests/test_binning.py::test_find_binning_thresholds_small_regular_data"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize sklearn.ensemble._hist_gradient_boosting.binning._find_binning_thresholds for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize _find_binning_thresholds when processing large arrays with NaN values\nOptimization function: sklearn.ensemble._hist_gradient_boosting.binning._find_binning_thresholds\n\n\n[start of sklearn/ensemble/_hist_gradient_boosting/binning.py]\n### Relevant context\n#### Function `sklearn.ensemble._hist_gradient_boosting.binning._find_binning_thresholds`\n```python\ndef _find_binning_thresholds(col_data, max_bins):\n    \"\"\"Extract quantiles from a continuous feature.\n\n    Missing values are ignored for finding the thresholds.\n\n    Parameters\n    ----------\n    col_data : array-like, shape (n_samples,)\n        The continuous feature to bin.\n    max_bins: int\n        The maximum number of bins to use for non-missing values. If for a\n        given feature the number of unique values is less than ``max_bins``,\n        then those unique values will be used to compute the bin thresholds,\n        instead of the quantiles\n\n    Return\n    ------\n    binning_thresholds : ndarray of shape(min(max_bins, n_unique_values) - 1,)\n        The increasing numeric values that can be used to separate the bins.\n        A given value x will be mapped into bin value i iff\n        bining_thresholds[i - 1] < x <= binning_thresholds[i]\n    \"\"\"\n    # ignore missing values when computing bin thresholds\n    missing_mask = np.isnan(col_data)\n    if missing_mask.any():\n        col_data = col_data[~missing_mask]\n    col_data = np.ascontiguousarray(col_data, dtype=X_DTYPE)\n    distinct_values = np.unique(col_data)\n    if len(distinct_values) <= max_bins:\n        midpoints = distinct_values[:-1] + distinct_values[1:]\n        midpoints *= 0.5\n    else:\n        # We sort again the data in this case. We could compute\n        # approximate midpoint percentiles using the output of\n        # np.unique(col_data, return_counts) instead but this is more\n        # work and the performance benefit will be limited because we\n        # work on a fixed-size subsample of the full data.\n        percentiles = np.linspace(0, 100, num=max_bins + 1)\n        percentiles = percentiles[1:-1]\n        midpoints = percentile(col_data, percentiles, method=\"midpoint\").astype(X_DTYPE)\n        assert midpoints.shape[0] == max_bins - 1\n\n    # We avoid having +inf thresholds: +inf thresholds are only allowed in\n    # a \"split on nan\" situation.\n    np.clip(midpoints, a_min=None, a_max=ALMOST_INF, out=midpoints)\n    return midpoints\n```\n[end of sklearn/ensemble/_hist_gradient_boosting/binning.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

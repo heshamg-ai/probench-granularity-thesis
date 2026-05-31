@@ -1,0 +1,25 @@
+pandas/core/arrays/masked.py
+[SEARCH]
+    def reshape(self, *args, **kwargs) -> Self:
+        data = self._data.reshape(*args, **kwargs)
+        mask = self._mask.reshape(*args, **kwargs)
+        return type(self)(data, mask)
+[/SEARCH]
+[REPLACE]
+    def reshape(self, *args, **kwargs) -> Self:
+        # Fastpath: if requested shape equals current shape and no kwargs,
+        # we can return a new wrapper around the same underlying arrays
+        # without calling np.reshape (avoids overhead while preserving
+        # behavior of returning a new object sharing data/mask).
+        if not kwargs:
+            # Determine requested shape without triggering numpy's reshape
+            if len(args) == 1 and isinstance(args[0], tuple):
+                new_shape = args[0]
+            else:
+                new_shape = args
+            if isinstance(new_shape, tuple) and -1 not in new_shape and new_shape == self._data.shape:
+                return type(self)(self._data, self._mask)
+        data = self._data.reshape(*args, **kwargs)
+        mask = self._mask.reshape(*args, **kwargs)
+        return type(self)(data, mask)
+[/REPLACE]

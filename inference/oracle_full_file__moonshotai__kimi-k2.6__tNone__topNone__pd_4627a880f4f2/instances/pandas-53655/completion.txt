@@ -1,0 +1,86 @@
+ pandas/core/arrays/arrow/array.py [SEARCH]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        result_data = []
+        for lst in split.to_pylist():
+            if lst is None:
+                result_data.append([False] * len(uniques_sorted))
+            else:
+                res = pc.is_in(uniques_sorted, pa.array(set(lst)))
+                result_data.append(res.to_pylist())
+        result = type(self)(pa.array(result_data))
+        return result, uniques_sorted.to_pylist()
+[/SEARCH] [REPLACE]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep)
+        flat_split = split.flatten()
+        uniques = pc.unique(flat_split)
+        uniques_sorted = pc.take(uniques, pc.array_sort_indices(uniques))
+
+        # Build a dictionary mapping each unique value to its column index
+        # This is more efficient than repeated Python-side lookups
+        n_uniques = len(uniques_sorted)
+        n_rows = len(self._pa_array)
+
+        # Create boolean mask for each unique value using list element comparison
+        # Use utf8 comparison against the flattened splits, then reconstruct rows
+        result_data = []
+        for i in range(n_uniques):
+            unique_val = uniques_sorted[i]
+            # Check if each element in the split lists equals unique_val
+            # split is a ListArray, we need to compare element-wise
+            eq_mask = pc.equal(flat_split, unique_val)
+            # Group back into lists and check if any element is True
+            # Use list_parent_indices to know which row each element belongs to
+            parent_indices = flat_split.value_parent_indices()
+            # Cast to int64 for aggregation
+            parent_indices = pc.cast(parent_indices, pa.int64())
+
+            # Sum up equality per row
+            # Initialize with zeros, then scatter the eq_mask values
+            zero_arr = pa.array([0] * n_rows, type=pa.int64())
+            ones = pc.cast(eq_mask, pa.int64())
+            sum_per_row = pc.sum_list(
+                pc.make_struct(parent_indices, ones).values
+            )
+
+            # Actually, use a simpler approach with list offsets
+            result_data.append(eq_mask)
+
+        # Let's use a cleaner vectorized approach
+        # For each row, we want a boolean array of length n_uniques
+        # Build using split pattern and list membership
+
+        # Recompute more efficiently
+        split_combined = split.combine_chunks()
+        offsets = split_combined.offsets
+        values = split_combined.values
+
+        # For each unique, find positions where it appears
+        result_mat = np.zeros((n_rows, n_uniques), dtype=bool)
+
+        for col_idx in range(n_uniques):
+            unique_val = uniques_sorted[col_idx].as_py()
+            if unique_val is None:
+                continue
+            # Find matching positions in values
+            matches = pc.equal(values, unique_val)
+            # Get row indices for matches
+            match_indices = pc.indices_nonzero(matches)
+            if len(match_indices) == 0:
+                continue
+            # Map element indices to row indices using binary search on offsets
+            # offsets[i] == cumulative length, so row for index j is found by
+            # finding largest i where offsets[i] <= j
+            match_indices_np = match_indices.to_numpy()
+            offsets_np = offsets.to_numpy()
+
+            # Vectorized row index computation
+            row_indices = np.searchsorted(offsets_np, match_indices_np + 1, side='right') - 1
+            result_mat[row_indices, col_idx] = True
+
+        result = type(self)(pa.array(result_mat.tolist()))
+        return result, [val.as_py() for val in uniques_sorted]
+[/REPLACE]

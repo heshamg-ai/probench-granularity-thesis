@@ -1,0 +1,48 @@
+xarray/core/dataset.py
+[SEARCH]
+        validated_indexers = {
+            k: _validate_interp_indexer(maybe_variable(obj, k), v)
+            for k, v in indexers.items()
+        }
+[/SEARCH]
+[REPLACE]
+        validated_indexers = {
+            k: _validate_interp_indexer(maybe_variable(obj, k), v)
+            for k, v in indexers.items()
+        }
+
+        # Fast-path: if no variables depend on the interpolated dimensions,
+        # we can skip localization and per-variable processing.
+        affected_dims = set(indexers)
+        has_dependent_vars = any(
+            (name not in indexers) and any(dim in affected_dims for dim in var.dims)
+            for name, var in obj._variables.items()
+        )
+        if not has_dependent_vars:
+            variables: dict[Hashable, Variable] = {
+                name: var for name, var in obj._variables.items() if name not in indexers
+            }
+            indexes = {k: v for k, v in obj._indexes.items() if k not in indexers}
+            coord_names = obj._coord_names & variables.keys()
+            selected = self._replace_with_new_dims(
+                variables.copy(), coord_names, indexes=indexes
+            )
+            # Attach indexer as coordinate
+            for k, v in indexers.items():
+                assert isinstance(v, Variable)
+                if v.dims == (k,):
+                    index = PandasIndex(v, k, coord_dtype=v.dtype)
+                    index_vars = index.create_variables({k: v})
+                    indexes[k] = index
+                    variables.update(index_vars)
+                else:
+                    variables[k] = v
+
+            # Extract coordinates from indexers
+            coord_vars, new_indexes = selected._get_indexers_coords_and_indexes(coords)
+            variables.update(coord_vars)
+            indexes.update(new_indexes)
+
+            coord_names = obj._coord_names & variables.keys() | coord_vars.keys()
+            return self._replace_with_new_dims(variables, coord_names, indexes=indexes)
+[/REPLACE]

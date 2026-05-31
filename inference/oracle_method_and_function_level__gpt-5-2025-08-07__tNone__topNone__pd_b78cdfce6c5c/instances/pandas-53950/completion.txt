@@ -1,0 +1,61 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        if method is not None:
+            fallback_performancewarning()
+            return super().fillna(value=value, method=method, limit=limit)
+[/SEARCH]
+[REPLACE]
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        fill_value = convert_fill_value(value, self._pa_array.type, self.dtype)
+[/SEARCH]
+[REPLACE]
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+            if method is None:
+                return type(self)(pc.fill_null(self._pa_array, fill_value=fill_value))
+[/SEARCH]
+[REPLACE]
+            if method is None:
+                fill_value = convert_fill_value(value, self._pa_array.type, self.dtype)
+                return type(self)(pc.fill_null(self._pa_array, fill_value=fill_value))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+            elif method == "pad":
+[/SEARCH]
+[REPLACE]
+            elif method in ("pad", "ffill"):
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+            elif method == "backfill":
+[/SEARCH]
+[REPLACE]
+            elif method in ("backfill", "bfill"):
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        except pa.ArrowNotImplementedError:
+            # ArrowNotImplementedError: Function 'coalesce' has no kernel
+            #   matching input types (duration[ns], duration[ns])
+            # TODO: remove try/except wrapper if/when pyarrow implements
+            #   a kernel for duration types.
+            pass
+[/SEARCH]
+[REPLACE]
+        except pa.ArrowNotImplementedError:
+            # ArrowNotImplementedError: Function 'coalesce' has no kernel
+            #   matching input types (duration[ns], duration[ns])
+            # TODO: remove try/except wrapper if/when pyarrow implements
+            #   a kernel for duration types.
+            if method is not None:
+                fallback_performancewarning()
+[/REPLACE]

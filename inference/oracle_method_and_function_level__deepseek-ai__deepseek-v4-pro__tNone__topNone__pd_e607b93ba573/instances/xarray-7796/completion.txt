@@ -1,0 +1,66 @@
+xarray/core/accessor_dt.py
+[SEARCH]
+def _access_through_cftimeindex(values, name):
+    """Coerce an array of datetime-like values to a CFTimeIndex
+    and access requested datetime component
+    """
+    from xarray.coding.cftimeindex import CFTimeIndex
+
+    values_as_cftimeindex = CFTimeIndex(values.ravel())
+    if name == "season":
+        months = values_as_cftimeindex.month
+        field_values = _season_from_months(months)
+    elif name == "date":
+        raise AttributeError(
+            "'CFTimeIndex' object has no attribute `date`. Consider using the floor method instead, for instance: `.time.dt.floor('D')`."
+        )
+    else:
+        field_values = getattr(values_as_cftimeindex, name)
+    return field_values.reshape(values.shape)
+[/SEARCH]
+[REPLACE]
+def _access_through_cftimeindex(values, name):
+    """Coerce an array of datetime-like values to a CFTimeIndex
+    and access requested datetime component
+    """
+    from xarray.coding.cftimeindex import CFTimeIndex
+
+    values_as_cftimeindex = CFTimeIndex(values.ravel())
+    if name == "season":
+        months = values_as_cftimeindex.month
+        field_values = _season_from_months(months)
+    elif name == "date":
+        raise AttributeError(
+            "'CFTimeIndex' object has no attribute `date`. Consider using the floor method instead, for instance: `.time.dt.floor('D')`."
+        )
+    else:
+        field_values = getattr(values_as_cftimeindex, name)
+    return field_values.reshape(values.shape)
+
+
+def _round_field(values, name, freq):
+    """Round datetime-like values to the specified frequency.
+
+    Uses CFTimeIndex for cftime values and pandas Series `.dt` accessor
+    for numpy datetime64 values.
+    """
+    if is_np_datetime_like(values.dtype):
+        return _round_through_series(values, name, freq)
+    return _round_through_cftimeindex(values, name, freq)
+
+
+def _round_through_series(values, name, freq):
+    """Round numpy datetime64 values via pandas Series `.dt` accessor."""
+    import pandas as pd
+
+    return getattr(pd.Series(values.ravel()).dt, name)(freq).values.reshape(values.shape)
+
+
+def _round_through_cftimeindex(values, name, freq):
+    """Round cftime values via CFTimeIndex."""
+    from xarray.coding.cftimeindex import CFTimeIndex
+
+    values_as_cftimeindex = CFTimeIndex(values.ravel())
+    field_values = getattr(values_as_cftimeindex, name)(freq)
+    return field_values.reshape(values.shape)
+[/REPLACE]

@@ -1,0 +1,80 @@
+
+
+sklearn/neighbors/_nearest_centroid.py
+[SEARCH]
+    def predict(self, X):
+        """Perform classification on an array of test vectors `X`.
+
+        The predicted class `C` for each sample in `X` is returned.
+
+        Parameters
+        ----------
+        X : {array-like, sparse matrix} of shape (n_samples, n_features)
+            Test samples.
+
+        Returns
+        -------
+        C : ndarray of shape (n_samples,)
+            The predicted classes.
+
+        Notes
+        -----
+        If the metric constructor parameter is `"precomputed"`, `X` is assumed
+        to be the distance matrix between the data to be predicted and
+        `self.centroids_`.
+        """
+        check_is_fitted(self)
+
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        return self.classes_[
+            pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)
+        ]
+[/SEARCH]
+[REPLACE]
+    def predict(self, X):
+        """Perform classification on an array of test vectors `X`.
+
+        The predicted class `C` for each sample in `X` is returned.
+
+        Parameters
+        ----------
+        X : {array-like, sparse matrix} of shape (n_samples, n_features)
+            Test samples.
+
+        Returns
+        -------
+        C : ndarray of shape (n_samples,)
+            The predicted classes.
+
+        Notes
+        -----
+        If the metric constructor parameter is `"precomputed"`, `X` is assumed
+        to be the distance matrix between the data to be predicted and
+        `self.centroids_`.
+        """
+        check_is_fitted(self)
+
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        # Fast path for precomputed distances (X is already the distance matrix)
+        if self.metric == "precomputed":
+            return self.classes_[X.argmin(axis=1)]
+
+        # Fast path for euclidean metric using optimized computation
+        # ||x - c||^2 = ||x||^2 + ||c||^2 - 2 * <x, c>
+        if self.metric == "euclidean":
+            # Use squared distances to avoid expensive sqrt
+            # For each sample: d^2(x, c) = ||x||^2 + ||c||^2 - 2 * x @ c.T
+            X_sq = np.asarray(np.sum(X**2, axis=1)).ravel()
+            centroids_sq = np.asarray(np.sum(self.centroids_**2, axis=1)).ravel()
+            # Compute dot product: X @ centroids.T
+            # Use GEMM (optimized matrix multiplication)
+            distances_sq = (
+                X_sq[:, np.newaxis] + centroids_sq - 2 * X.dot(self.centroids_.T)
+            )
+            return self.classes_[distances_sq.argmin(axis=1)]
+
+        # Fall back to pairwise_distances for other metrics
+        return self.classes_[
+            pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)
+        ]
+[/REPLACE]

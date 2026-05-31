@@ -1,0 +1,66 @@
+
+
+Looking at the code, I can see that `factorize` for object columns goes through `_check_object_for_strings` which uses `lib.infer_dtype` to check if values are strings. This is expensive for object columns that are known to NOT contain strings.
+
+Let me analyze the flow and find optimization opportunities:
+
+1. `factorize` calls `factorize_array` for numpy arrays
+2. `factorize_array` calls `_get_hashtable_algo` 
+3. `_get_hashtable_algo` calls `_check_object_for_strings` which calls `lib.infer_dtype`
+
+For object columns that we know don't contain strings (e.g., tuples, mixed types, etc.), we can skip the `infer_dtype` call entirely and use `PyObjectHashTable` directly.
+
+The key optimization is to detect when we can skip the `infer_dtype` check and use `PyObjectHashTable` directly.
+
+pandas/core/algorithms.py
+[SEARCH]
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+    return ndtype
+[/SEARCH]
+[REPLACE]
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        # Optimization: check first element to determine if it could be a string
+        # This is much faster than infer_dtype for arrays that are clearly not strings
+        if len(values) > 0:
+            first_val = values[0]
+            if isinstance(first_val, str):
+                # First element is a string, need to verify all are strings
+                if lib.infer_dtype(values, skipna=False) in ["string"]:
+                    ndtype = "string"
+            # else: first element is not a string, skip infer_dtype for performance
+    return ndtype
+[/REPLACE]

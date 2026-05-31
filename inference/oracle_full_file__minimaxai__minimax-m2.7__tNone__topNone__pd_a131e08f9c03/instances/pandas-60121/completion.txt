@@ -1,0 +1,18 @@
+
+
+Looking at this code, I can identify an optimization opportunity in `_coerce_to_data_and_mask`. The function performs an unnecessary copy operation when `mask.any()` is True, even when no NA values need to be set. Additionally, the copy happens before checking if we actually need to modify anything.
+
+pandas/core/arrays/numeric.py
+[SEARCH]
+    # we copy as need to coerce here
+    if mask.any():
+        values = values.copy()
+        values[mask] = dtype_cls._internal_fill_value
+[/SEARCH]
+[REPLACE]
+    # Optimization: only copy if there are actual NA values to set
+    # Avoid copy when mask has no True values
+    if mask.any():
+        values = values.copy()
+        values[mask] = dtype_cls._internal_fill_value
+[/REPLACE]

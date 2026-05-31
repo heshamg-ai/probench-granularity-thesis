@@ -1,0 +1,69 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+    def intersection(self, other, sort=False):
+        self._validate_sort_keyword(sort)
+        self._assert_can_do_setop(other)
+        other, result_names = self._convert_can_do_setop(other)
+
+        if self.equals(other):
+            if self.has_duplicates:
+                return self.unique()._get_reconciled_name_object(other)
+            return self._get_reconciled_name_object(other)
+
+        if len(self) == 0 or len(other) == 0:
+            return self[:0].rename(result_names)
+
+        if not is_dtype_equal(self.dtype, other.dtype):
+            this = self.astype("O")
+            other = other.astype("O")
+            return this.intersection(other, sort=sort)
+
+        if self.is_monotonic_increasing and other.is_monotonic_increasing:
+            try:
+                result = self._inner_indexer(other)[0]
+            except TypeError:
+                pass
+            else:
+                return self._wrap_setop_result(other, result)
+
+        # TODO: Is it worthwhile to implement a faster path for intersection
+        # of monotonic MultiIndexes with non-empty intersection?
+        return self._intersection_via_merge(other, sort)
+[/SEARCH]
+[REPLACE]
+    def intersection(self, other, sort=False):
+        self._validate_sort_keyword(sort)
+        self._assert_can_do_setop(other)
+        other, result_names = self._convert_can_do_setop(other)
+
+        if self.equals(other):
+            if self.has_duplicates:
+                return self.unique()._get_reconciled_name_object(other)
+            return self._get_reconciled_name_object(other)
+
+        if len(self) == 0 or len(other) == 0:
+            return self[:0].rename(result_names)
+
+        if not is_dtype_equal(self.dtype, other.dtype):
+            this = self.astype("O")
+            other = other.astype("O")
+            return this.intersection(other, sort=sort)
+
+        if self.is_monotonic_increasing and other.is_monotonic_increasing:
+            if len(self) <= len(other):
+                try:
+                    result = self._inner_indexer(other)[0]
+                except TypeError:
+                    pass
+                else:
+                    return self._wrap_setop_result(other, result)
+            else:
+                try:
+                    result = other._inner_indexer(self)[0]
+                except TypeError:
+                    pass
+                else:
+                    return other._wrap_setop_result(self, result)
+
+        return self._intersection_via_merge(other, sort)
+[/REPLACE]

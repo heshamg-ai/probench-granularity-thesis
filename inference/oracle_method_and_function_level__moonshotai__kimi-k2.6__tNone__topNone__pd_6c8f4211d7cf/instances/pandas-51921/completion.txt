@@ -1,0 +1,201 @@
+pandas/core/algorithms.py
+[SEARCH]
+def factorize(
+    values,
+    sort: bool = False,
+    use_na_sentinel: bool = True,
+    size_hint: int | None = None,
+) -> tuple[np.ndarray, np.ndarray | BaseMaskedArray | Index | range]:
+    """
+    Encode the object as an enumerated type or categorical variable.
+...
+    if (
+        isinstance(values, ABCHashtable)
+        or isinstance(values, ABCMultiIndex)
+        or isinstance(values, ABCDataFrame)
+    ):
+        raise TypeError(
+            "'values' must be missing or None, a scalar, or an array-like object. "
+            f"You passed a '{type(values).__name__}' object."
+        )
+
+    values = extract_array(values, extract_numpy=True)
+
+    # If neither method works, we resort to _factorize_ndarray
+    codes, uniques = _factorize_ndarray(
+        values,
+        use_na_sentinel=use_na_sentinel,
+    )
+
+    if sort and len(uniques) > 0:
+        uniques = np.sort(uniques)
+
+    codes = coerce_indexer_dtype(codes, uniques)
+    return codes, uniques
+[/SEARCH]
+[REPLACE]
+def factorize(
+    values,
+    sort: bool = False,
+    use_na_sentinel: bool = True,
+    size_hint: int | None = None,
+) -> tuple[np.ndarray, np.ndarray | BaseMaskedArray | Index | range]:
+    """
+    Encode the object as an enumerated type or categorical variable.
+...
+    if (
+        isinstance(values, ABCHashtable)
+        or isinstance(values, ABCMultiIndex)
+        or isinstance(values, ABCDataFrame)
+    ):
+        raise TypeError(
+            "'values' must be missing or None, a scalar, or an array-like object. "
+            f"You passed a '{type(values).__name__}' object."
+        )
+
+    values = extract_array(values, extract_numpy=True)
+
+    # If neither method works, we resort to _factorize_ndarray
+    codes, uniques = _factorize_ndarray(
+        values,
+        use_na_sentinel=use_na_sentinel,
+    )
+
+    if sort and len(uniques) > 0:
+        uniques = np.sort(uniques)
+
+    codes = coerce_indexer_dtype(codes, uniques)
+    return codes, uniques
+[/REPLACE]
+
+pandas/core/algorithms.py
+[SEARCH]
+def _factorize_ndarray(
+    values: np.ndarray,
+    use_na_sentinel: bool = True,
+) -> tuple[np.ndarray, np.ndarray | BaseMaskedArray]:
+    """
+    Hash table-based factorization for 1D ndarray.
+
+    Parameters
+    ----------
+    values: np.ndarray
+        The values to factorize.
+    use_na_sentinel: bool, default True
+        Whether to use a NA sentinel or propagate NA values.
+
+    Returns
+    -------
+    codes : ndarray
+    uniques : ndarray
+    """
+    original = values
+    values, dtype, ndtype = _ensure_data(values)
+
+    # factorize using appropriate hashtable
+    use_table = isinstance(values, np.ndarray) and values.dtype.kind in ["m", "M"]
+    if use_table:
+        # datetime-likes
+        table = htable.NaiveHashTable(len(values))
+    else:
+        ndtype = _check_object_for_strings(values)
+        if ndtype == "string":
+            table = htable.StringHashTable(len(values))
+            ndtype = "object"
+        else:
+            table = htable.ObjectHashTable(len(values))
+            ndtype = "string"
+
+    codes, uniques = table.get_labels(values, uniques=None, dereference=False)
+
+    return _reconstruct_data(uniques, original, ndtype), codes
+[/SEARCH]
+[REPLACE]
+def _factorize_ndarray(
+    values: np.ndarray,
+    use_na_sentinel: bool = True,
+) -> tuple[np.ndarray, np.ndarray | BaseMaskedArray]:
+    """
+    Hash table-based factorization for 1D ndarray.
+
+    Parameters
+    ----------
+    values: np.ndarray
+        The values to factorize.
+    use_na_sentinel: bool, default True
+        Whether to use a NA sentinel or propagate NA values.
+
+    Returns
+    -------
+    codes : ndarray
+    uniques : ndarray
+    """
+    original = values
+    values, dtype, ndtype = _ensure_data(values)
+
+    # factorize using appropriate hashtable
+    use_table = isinstance(values, np.ndarray) and values.dtype.kind in ["m", "M"]
+    if use_table:
+        # datetime-likes
+        table = htable.NaiveHashTable(len(values))
+    else:
+        ndtype = _check_object_for_strings(values)
+        if ndtype == "string":
+            table = htable.StringHashTable(len(values))
+            ndtype = "object"
+        elif ndtype == "object":
+            table = htable.ObjectHashTable(len(values))
+        else:
+            raise AssertionError(f"unexpected ndtype {ndtype!r}")
+
+    codes, uniques = table.get_labels(values, uniques=None, dereference=False)
+
+    return _reconstruct_data(uniques, original, ndtype), codes
+[/REPLACE]
+
+pandas/core/algorithms.py
+[SEARCH]
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+    return ndtype
+[/SEARCH]
+[REPLACE]
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        inferred = lib.infer_dtype(values, skipna=False)
+        if inferred in ("string", "empty", "bytes", "mixed"):
+            ndtype = "string"
+    return ndtype
+[/REPLACE]

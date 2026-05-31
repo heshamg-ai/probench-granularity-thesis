@@ -1,0 +1,30 @@
+
+
+Looking at the code, the optimization target is the `elif is_extension_array_dtype(dtype) and self.ndim > 1:` branch in the `astype` method. The current implementation iterates through columns using `self.iloc[:, i]` which creates intermediate Series objects with overhead.
+
+The key optimization is to use more efficient iteration and potentially leverage the BlockManager's block-level operations directly. Let me implement the optimization:
+
+```python
+pandas/core/generic.py
+[SEARCH]
+        elif is_extension_array_dtype(dtype) and self.ndim > 1:
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: use iloc to handle duplicate column names
+            # TODO(EA2D): special case not needed with 2D EAs
+            results = [
+                self.iloc[:, i].astype(dtype, copy=copy)
+                for i in range(len(self.columns))
+            ]
+[/SEARCH]
+[REPLACE]
+        elif is_extension_array_dtype(dtype) and self.ndim > 1:
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: use iloc to handle duplicate column names
+            # TODO(EA2D): special case not needed with 2D EAs
+            # Optimize by iterating through blocks directly when possible
+            # and avoiding iloc overhead for each column
+            results = [
+                col.astype(dtype, copy=copy)
+                for col in self._iter_col()
+            ]
+[/REPLACE]

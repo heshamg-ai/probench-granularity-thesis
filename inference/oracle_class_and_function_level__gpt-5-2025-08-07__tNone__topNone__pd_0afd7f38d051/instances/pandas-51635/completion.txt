@@ -1,0 +1,11 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        fill_value = convert_fill_value(value, self._pa_array.type, self.dtype)
+[/SEARCH]
+[REPLACE]
+        fill_value = convert_fill_value(value, self._pa_array.type, self.dtype)
+
+        # fastpath: if there are no nulls, return self unchanged
+        if self._pa_array.null_count == 0:
+            return self.copy()
+[/REPLACE]

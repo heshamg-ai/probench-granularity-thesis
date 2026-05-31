@@ -1,0 +1,45 @@
+
+
+Let me analyze the code to find the right place to optimize `Series.ffill` for PyArrow-backed extension dtypes. I need to look at the `fillna` method implementation in `ArrowExtensionArray`.
+
+Based on the code, I can see that when `method="pad"` (which is ffill), the current implementation has a fallback to the parent class. Let me find the exact location where we can optimize.
+
+Looking at the `fillna` method:
+```python
+if method is not None:
+    fallback_performancewarning()
+    return super().fillna(value=value, method=method, limit=limit)
+```
+
+This is suboptimal because it:
+1. Issues a performance warning 
+2. Falls back to slow object-dtype conversion
+
+But there's already a try block that calls `pc.fill_null_forward` - we just need to move the method handling before the limit check and remove the unnecessary fallback_performancewarning.
+
+Let me create the optimization:
+[START pandas/core/arrays/arrow/array.py]
+[SEARCH]
+        if limit is not None:
+            return super().fillna(value=value, method=method, limit=limit)
+
+        if method is not None:
+            fallback_performancewarning()
+            return super().fillna(value=value, method=method, limit=limit)
+[/SEARCH]
+[REPLACE]
+        if method is not None:
+            if limit is not None:
+                return super().fillna(value=value, method=method, limit=limit)
+            try:
+                if method == "pad":
+                    return type(self)(pc.fill_null_forward(self._pa_array))
+                elif method == "backfill":
+                    return type(self)(pc.fill_null_backward(self._pa_array))
+            except pa.ArrowNotImplementedError:
+                pass
+            return super().fillna(value=value, method=method, limit=limit)
+
+        if limit is not None:
+            return super().fillna(value=value, method=method, limit=limit)
+[/REPLACE]

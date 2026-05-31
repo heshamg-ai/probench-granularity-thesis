@@ -1,0 +1,41 @@
+pandas/core/base.py
+[SEARCH]
+        if na_value is not lib.no_default:
+            values = self._values
+            if not can_hold_element(values, na_value):
+                # if we can't hold the na_value asarray either makes a copy or we
+                # error before modifying values. The asarray later on thus won't make
+                # another copy
+                values = np.asarray(values, dtype=dtype)
+            else:
+                values = values.copy()
+
+            values[np.asanyarray(self.isna())] = na_value
+        else:
+            values = self._values
+[/SEARCH]
+[REPLACE]
+        if na_value is not lib.no_default:
+            values = self._values
+
+            is_na = self.isna()
+            has_na = is_na.any()
+
+            if has_na:
+                if not can_hold_element(values, na_value):
+                    # if we can't hold the na_value asarray either makes a copy or we
+                    # error before modifying values. The asarray later on thus won't make
+                    # another copy
+                    values = np.asarray(values, dtype=dtype)
+                else:
+                    values = values.copy()
+
+                values[np.asanyarray(is_na)] = na_value
+            elif not can_hold_element(values, na_value):
+                # if we can't hold the na_value asarray either makes a copy or we
+                # error before modifying values. The asarray later on thus won't make
+                # another copy
+                values = np.asarray(values, dtype=dtype)
+        else:
+            values = self._values
+[/REPLACE]

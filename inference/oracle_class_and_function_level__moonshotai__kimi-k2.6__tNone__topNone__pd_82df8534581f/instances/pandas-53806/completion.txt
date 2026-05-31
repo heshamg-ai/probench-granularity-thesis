@@ -1,0 +1,238 @@
+pandas/core/groupby/methods.py
+[SEARCH]
+    @pin_acceimport_copy
+    def size(self) -> DataFrame | Series:
+        result = self.grouper.size()
+
+        return self._wrap_transformed_output(
+            result, selection=self._obj_with_exclusions
+        )
+[/SEARCH]
+[REPLACE]
+    @pin_acceimport_copy
+    def size(self) -> DataFrame | Series:
+        result = self.grouper.size()
+
+        return self._wrap_transformed_output(
+            result, selection=self._obj_with_exclusions
+        )
+[/REPLACE]
+
+pandas/core/groupby/ops.py
+[SEARCH]
+    def size(self) -> Series:
+        result: Series | DataFrame
+        if isinstance(self._groupings[0].grouping_vector, ops.BaseGrouper):
+            result = self._cython_operation("size", min_count=0, needs_mask=True)
+        else:
+            result = self._cython_operation("size", min_count=0)
+        return result
+[/SEARCH]
+[REPLACE]
+    def size(self) -> Series:
+        result: Series | DataFrame
+        ngroups = self.ngroups
+        if ngroups == 0:
+            return Series(dtype="int64")
+        if len(self._groupings) == 1 and self._is_monotonic:
+            # Fast path for single grouping key with known sort order.
+            # This avoids the cost of factorization when we already have
+            # a sorted group structure and can compute sizes via diff.
+            values = self._get_compressed_labels()[0]
+            if len(values) == 0:
+                return Series(dtype="int64")
+            # values are group ids in sorted order; compute run lengths
+            # by finding where the group id changes.
+            boundaries = np.concatenate(([0], np.where(np.diff(values) != 0)[0] + 1, [len(values)]))
+            sizes = np.diff(boundaries)
+            result = Series(sizes, index=np.arange(len(sizes)))
+            result.index = self.result_index
+            return result
+        if isinstance(self._groupings[0].grouping_vector, ops.BaseGrouper):
+            result = self._cython_operation("size", min_count=0, needs_mask=True)
+        else:
+            result = self._cython_operation("size", min_count=0)
+        return result
+[/REPLACE]
+
+pandas/core/groupby/ops.py
+[SEARCH]
+    @cache_readonly
+    def _is_monotonic(self) -> bool:
+        return self.group_keys_seq[0].is_monotonic_increasing
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def _is_monotonic(self) -> bool:
+        return self.group_keys_seq[0].is_monotonic_increasing
+[/REPLACE]
+
+pandas/core/groupby/ops.py
+[SEARCH]
+    @cache_readonly
+    def _is_monotonic(self) -> bool:
+        return Index(self.codes).is_monotonic_increasing
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def _is_monotonic(self) -> bool:
+        return Index(self.codes).is_monotonic_increasing
+[/REPLACE]
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+    def size(self) -> DataFrame | Series:
+        result = self.grouper.size()
+
+        # GH#15028
+        if isinstance(self.obj, Series):
+            result.name = self.obj.name
+
+        return self._reindex_output(result, fill_value=0)
+[/SEARCH]
+[REPLACE]
+    def size(self) -> DataFrame | Series:
+        result = self.grouper.size()
+
+        # GH#15028
+        if isinstance(self.obj, Series):
+            result.name = self.obj.name
+
+        return self._reindex_output(result, fill_value=0)
+[/REPLACE]
+
+pandas/core/groupby/generic.py
+[SEARCH]
+    @doc(DataFrameGroupBy.size)
+    def size(self) -> DataFrame:
+        result = self.grouper.size()
+        return self._wrap_transformed_output(
+            result, selection=self._obj_with_exclusions
+        )
+[/SEARCH]
+[REPLACE]
+    @doc(DataFrameGroupBy.size)
+    def size(self) -> DataFrame:
+        result = self.grouper.size()
+        return self._wrap_transformed_output(
+            result, selection=self._obj_with_exclusions
+        )
+[/REPLACE]
+
+pandas/core/groupby/ops.py
+[SEARCH]
+    @property
+    def ngroups(self) -> int:
+        return len(self.result_index)
+[/SEARCH]
+[REPLACE]
+    @property
+    def ngroups(self) -> int:
+        return len(self.result_index)
+[/REPLACE]
+
+pandas/core/groupby/ops.py
+[SEARCH]
+    @cache_readonly
+    def result_index(self) -> Index:
+        if len(self._groupings) == 1:
+            return self.groupings[0].grouping_vector.result_index
+
+        codes = (level.codes for level in self.groupings)
+        levels = (level.grouping_vector.result_index for level in self.groupings)
+
+        return MultiIndex(
+            levels=levels,
+            codes=codes,
+            names=[level.name for level in self.groupings],
+            verify_integrity=False,
+        )
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def result_index(self) -> Index:
+        if len(self._groupings) == 1:
+            return self.groupings[0].grouping_vector.result_index
+
+        codes = (level.codes for level in self.groupings)
+        levels = (level.grouping_vector.result_index for level in self.groupings)
+
+        return MultiIndex(
+            levels=levels,
+            codes=codes,
+            names=[level.name for level in self.groupings],
+            verify_integrity=False,
+        )
+[/REPLACE]
+
+pandas/core/groupby/ops.py
+[SEARCH]
+    @cache_readonly
+    def codes(self) -> npt.NDArray[np.intp]:
+        return self.codes_and_uniques[0]
+
+    @cache_readonly
+    def group_keys_seq(self):
+        if len(self._groupings) == 1:
+            return [self.groupings[0].grouping_vector.result_index]
+        else:
+            return [g.grouping_vector.result_index for g in self.groupings]
+
+    @cache_readonly
+    def codes_and_uniques(self) -> tuple[np.ndarray, np.ndarray]:
+        if len(self._groupings) == 1:
+            codes = self.groupings[0].codes
+            uniques = self.groupings[0].group_index
+            return (codes, uniques)
+
+        codes = self.levels
+        uniques = self.result_index
+        return (codes, uniques)
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def codes(self) -> npt.NDArray[np.intp]:
+        return self.codes_and_uniques[0]
+
+    @cache_readonly
+    def group_keys_seq(self):
+        if len(self._groupings) == 1:
+            return [self.groupings[0].grouping_vector.result_index]
+        else:
+            return [g.grouping_vector.result_index for g in self.groupings]
+
+    @cache_readonly
+    def codes_and_uniques(self) -> tuple[np.ndarray, np.ndarray]:
+        if len(self._groupings) == 1:
+            codes = self.groupings[0].codes
+            uniques = self.groupings[0].group_index
+            return (codes, uniques)
+
+        codes = self.levels
+        uniques = self.result_index
+        return (codes, uniques)
+[/REPLACE]
+
+pandas/core/groupby/ops.py
+[SEARCH]
+    @cache_readonly
+    def _is_monotonic(self) -> bool:
+        return Index(self.codes).is_monotonic_increasing
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def _is_monotonic(self) -> bool:
+        return Index(self.codes).is_monotonic_increasing
+[/REPLACE]
+
+pandas/core/groupby/ops.py
+[SEARCH]
+    @cache_readonly
+    def _is_monotonic(self) -> bool:
+        return self.group_keys_seq[0].is_monotonic_increasing
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def _is_monotonic(self) -> bool:
+        return self.group_keys_seq[0].is_monotonic_increasing
+[/REPLACE]

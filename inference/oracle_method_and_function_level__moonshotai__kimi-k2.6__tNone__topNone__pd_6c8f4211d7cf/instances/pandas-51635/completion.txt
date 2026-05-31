@@ -1,0 +1,54 @@
+ pandas/core/arrays/arrow/array.py
+[SEARCH]
+    @doc(ExtensionArray.fillna)
+    def fillna(
+        self,
+        value: object | ArrayLike | None = None,
+        method: FillnaOptions | None = None,
+        limit: int | None = None,
+    ) -> Self:
+        value, method = validate_fillna_kwargs(value, method)
+
+        if limit is not None:
+            return super().fillna(value=value, method=method, limit=limit)
+
+        if method is not None:
+            fallback_performancewarning()
+            return super().fillna(value=value, method=method, limit=limit)
+
+        if is_array_like(value):
+            value = cast(ArrayLike, value)
+            if len(value) != len(self):
+                raise ValueError(
+                    f"Length of 'value' does not match. Got ({len(value)}) "
+                    f" expected {len(self)}"
+                )
+[/SEARCH]
+[REPLACE]
+    @doc(ExtensionArray.fillna)
+    def fillna(
+        self,
+        value: object | ArrayLike | None = None,
+        method: FillnaOptions | None = None,
+        limit: int | None = None,
+    ) -> Self:
+        value, method = validate_fillna_kwargs(value, method)
+
+        if limit is not None:
+            return super().fillna(value=value, method=method, limit=limit)
+
+        if method is not None:
+            fallback_performancewarning()
+            return super().fillna(value=value, method=method, limit=limit)
+
+        if self._pa_array.null_count == 0:
+            return type(self)(self._pa_array)
+
+        if is_array_like(value):
+            value = cast(ArrayLike, value)
+            if len(value) != len(self):
+                raise ValueError(
+                    f"Length of 'value' does not match. Got ({len(value)}) "
+                    f" expected {len(self)}"
+                )
+[/REPLACE]

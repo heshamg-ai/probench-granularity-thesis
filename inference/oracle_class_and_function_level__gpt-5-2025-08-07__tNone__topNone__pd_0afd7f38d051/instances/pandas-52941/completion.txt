@@ -1,0 +1,25 @@
+pandas/core/generic.py
+[SEARCH]
+        if items is not None:
+            name = self._get_axis_name(axis)
+            # error: Keywords must be strings
+            return self.reindex(  # type: ignore[misc]
+                **{name: [r for r in items if r in labels]}  # type: ignore[arg-type]
+            )
+[/SEARCH]
+[REPLACE]
+        if items is not None:
+            name = self._get_axis_name(axis)
+            # Fast path: build selection using vectorized indexer to avoid per-item membership checks
+            if len(labels) == 0:
+                selected = []
+            else:
+                items_idx = items if isinstance(items, Index) else ensure_index(items)
+                indexer = labels.get_indexer_for(items_idx)
+                mask = indexer != -1
+                selected = items_idx[mask].tolist()
+            # error: Keywords must be strings
+            return self.reindex(  # type: ignore[misc]
+                **{name: selected}  # type: ignore[arg-type]
+            )
+[/REPLACE]

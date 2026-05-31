@@ -1,0 +1,146 @@
+pandas/core/internals/managers.py
+[SEARCH]
+    def fast_xs(self, loc: int) -> SingleBlockManager:
+        """
+        Return the array corresponding to `frame.iloc[loc]`.
+
+        Parameters
+        ----------
+        loc : int
+
+        Returns
+        -------
+        np.ndarray or ExtensionArray
+        """
+        if len(self.blocks) == 1:
+            # TODO: this could be wrong if blk.mgr_locs is not slice(None)-like;
+            #  is this ruled out in the general case?
+            result = self.blocks[0].iget((slice(None), loc))
+            # in the case of a single block, the new block is a view
+            bp = BlockPlacement(slice(0, len(result)))
+            block = new_block(
+                result,
+                placement=bp,
+                ndim=1,
+                refs=self.blocks[0].refs,
+            )
+            return SingleBlockManager(block, self.axes[0])
+
+        dtype = interleaved_dtype([blk.dtype for blk in self.blocks])
+
+        n = len(self)
+
+        # GH#46406
+        immutable_ea = isinstance(dtype, ExtensionDtype) and dtype._is_immutable
+
+        if isinstance(dtype, ExtensionDtype) and not immutable_ea:
+            cls = dtype.construct_array_type()
+            result = cls._empty((n,), dtype=dtype)
+        else:
+            # error: Argument "dtype" to "empty" has incompatible type
+            # "Union[Type[object], dtype[Any], ExtensionDtype, None]"; expected
+            # "None"
+            result = np.empty(
+                n, dtype=object if immutable_ea else dtype  # type: ignore[arg-type]
+            )
+            result = ensure_wrapped_if_datetimelike(result)
+
+        for blk in self.blocks:
+            # Such assignment may incorrectly coerce NaT to None
+            # result[blk.mgr_locs] = blk._slice((slice(None), loc))
+            for i, rl in enumerate(blk.mgr_locs):
+                result[rl] = blk.iget((i, loc))
+
+        if immutable_ea:
+            dtype = cast(ExtensionDtype, dtype)
+            result = dtype.construct_array_type()._from_sequence(result, dtype=dtype)
+
+        bp = BlockPlacement(slice(0, len(result)))
+        block = new_block(result, placement=bp, ndim=1)
+        return SingleBlockManager(block, self.axes[0])
+[/SEARCH]
+[REPLACE]
+    def fast_xs(self, loc: int) -> SingleBlockManager:
+        """
+        Return the array corresponding to `frame.iloc[loc]`.
+
+        Parameters
+        ----------
+        loc : int
+
+        Returns
+        -------
+        np.ndarray or ExtensionArray
+        """
+        if len(self.blocks) == 1:
+            # TODO: this could be wrong if blk.mgr_locs is not slice(None)-like;
+            #  is this ruled out in the general case?
+            result = self.blocks[0].iget((slice(None), loc))
+            # in the case of a single block, the new block is a view
+            bp = BlockPlacement(slice(0, len(result)))
+            block = new_block(
+                result,
+                placement=bp,
+                ndim=1,
+                refs=self.blocks[0].refs,
+            )
+            return SingleBlockManager(block, self.axes[0])
+
+        # Fast path: if all blocks are 1D-only EA (no consolidation needed),
+        # we can directly gather scalars into a pre-allocated object array
+        # without computing the interleaved_dtype.
+        all_ea = True
+        for blk in self.blocks:
+            if not is_1d_only_ea_dtype(blk.dtype):
+                all_ea = False
+                break
+
+        if all_ea:
+            n = len(self)
+            result = np.empty(n, dtype=object)
+            for blk in self.blocks:
+                blk_vals = blk.values
+                scalar = blk_vals[loc]
+                for rl in blk.mgr_locs:
+                    result[rl] = scalar
+            dtype = interleaved_dtype([blk.dtype for blk in self.blocks])
+            if isinstance(dtype, ExtensionDtype) and not dtype._is_immutable:
+                cls = dtype.construct_array_type()
+                result = cls._from_sequence(result, dtype=dtype)
+            bp = BlockPlacement(slice(0, len(result)))
+            block = new_block(result, placement=bp, ndim=1)
+            return SingleBlockManager(block, self.axes[0])
+
+        dtype = interleaved_dtype([blk.dtype for blk in self.blocks])
+
+        n = len(self)
+
+        # GH#46406
+        immutable_ea = isinstance(dtype, ExtensionDtype) and dtype._is_immutable
+
+        if isinstance(dtype, ExtensionDtype) and not immutable_ea:
+            cls = dtype.construct_array_type()
+            result = cls._empty((n,), dtype=dtype)
+        else:
+            # error: Argument "dtype" to "empty" has incompatible type
+            # "Union[Type[object], dtype[Any], ExtensionDtype, None]"; expected
+            # "None"
+            result = np.empty(
+                n, dtype=object if immutable_ea else dtype  # type: ignore[arg-type]
+            )
+            result = ensure_wrapped_if_datetimelike(result)
+
+        for blk in self.blocks:
+            # Such assignment may incorrectly coerce NaT to None
+            # result[blk.mgr_locs] = blk._slice((slice(None), loc))
+            for i, rl in enumerate(blk.mgr_locs):
+                result[rl] = blk.iget((i, loc))
+
+        if immutable_ea:
+            dtype = cast(ExtensionDtype, dtype)
+            result = dtype.construct_array_type()._from_sequence(result, dtype=dtype)
+
+        bp = BlockPlacement(slice(0, len(result)))
+        block = new_block(result, placement=bp, ndim=1)
+        return SingleBlockManager(block, self.axes[0])
+[/REPLACE]

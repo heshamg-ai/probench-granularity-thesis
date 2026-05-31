@@ -1,0 +1,25 @@
+{
+  "run_id": "oracle_class_and_function_level__gpt-5-2025-08-07__tNone__topNone__pd_0afd7f38d051",
+  "provider": "openai_chat",
+  "model": "gpt-5-2025-08-07",
+  "temperature": null,
+  "top_p": null,
+  "max_tokens": null,
+  "prompt_dataset_path": "prompt_oracle_gpt52_class_and_function_level.json",
+  "prompt_dataset_meta": {
+    "builder": "oracle",
+    "granularity": "class_and_function_level",
+    "tokenizer": "cl100k",
+    "max_tokens": 200000,
+    "include_module_globals": false,
+    "include_imports": false,
+    "include_code_signatures": false,
+    "include_change_summary": false,
+    "dataset_path": "data/dataset_25_04_finalized.json",
+    "truncation_filtered_count": 0,
+    "truncation_filtered": [],
+    "schema_version": 1,
+    "created_at": "2026-05-17T10:07:56Z",
+    "prompt_dataset_id": "pd_0afd7f38d051"
+  }
+}

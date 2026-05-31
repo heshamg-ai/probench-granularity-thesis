@@ -1,0 +1,53 @@
+xarray/core/dataarray.py
+[SEARCH]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/SEARCH]
+[REPLACE]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+
+        # Fast path for the common case of integer indexing on small arrays:
+        # Avoids the overhead of converting to/from a Dataset when all
+        # indexers are integers (basic indexing), which eliminates
+        # dictionary copies and reconstruction for simple scalar selection.
+        if (
+            not drop
+            and all(isinstance(v, int) for v in indexers.values())
+            and len(indexers) == self.ndim
+        ):
+            var_indexers = {k: v for k, v in indexers.items()}
+            variable = self._variable.isel(indexers=var_indexers)
+            return self._replace_maybe_drop_dims(variable)
+
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/REPLACE]

@@ -1,0 +1,29 @@
+pandas/core/sorting.py
+[SEARCH]
+    target = ensure_key_mapped(target, key, levels=level)  # type:ignore[assignment]
+    target = target._sort_levels_monotonic()
+[/SEARCH]
+[REPLACE]
+    target = ensure_key_mapped(target, key, levels=level)  # type:ignore[assignment]
+    # Fastpath: if already sorted (common case), avoid any further work.
+    if level is None and key is None and isinstance(target, ABCMultiIndex):
+        asc_all_true = (
+            (isinstance(ascending, bool) and ascending)
+            or (isinstance(ascending, list) and all(ascending))
+        )
+        if asc_all_true and na_position == "last":
+            # Already lexsorted with monotonic-increasing levels and no missing codes
+            if (
+                target._is_lexsorted()
+                and all(lev.is_monotonic_increasing for lev in target.levels)
+                and not any((-1 in code) for code in target.codes)
+            ):
+                return None
+    # Only normalize levels when necessary for MultiIndex with no specific level;
+    # otherwise preserve previous behavior.
+    if isinstance(target, ABCMultiIndex) and level is None:
+        if not all(lev.is_monotonic_increasing for lev in target.levels):
+            target = target._sort_levels_monotonic()
+    else:
+        target = target._sort_levels_monotonic()
+[/REPLACE]

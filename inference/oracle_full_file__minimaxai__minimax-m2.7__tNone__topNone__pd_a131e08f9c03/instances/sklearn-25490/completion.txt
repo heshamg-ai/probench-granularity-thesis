@@ -1,0 +1,551 @@
+
+
+Looking at the `MiniBatchDictionaryLearning.fit` method, I can identify several optimization opportunities for small batch sizes. The key bottlenecks are:
+
+1. Redundant matrix computations in sparse_encode (Gram and covariance matrices are recomputed each time)
+2. The batch cost computation performs extra matrix multiplications
+3. Inefficient memory usage with intermediate arrays
+
+Let me implement the optimizations:
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+    def fit(self, X, y=None):
+        """Fit the model from data in X.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Training vector, where `n_samples` is the number of samples
+            and `n_features` is the number of features.
+
+        y : Ignored
+            Not used, present for API consistency by convention.
+
+        Returns
+        -------
+        self : object
+            Returns the instance itself.
+        """
+        self._validate_params()
+
+        X = self._validate_data(
+            X, dtype=[np.float64, np.float32], order="C", copy=False
+        )
+
+        self._check_params(X)
+
+        if self.n_iter != "deprecated":
+            warnings.warn(
+                "'n_iter' is deprecated in version 1.1 and will be removed "
+                "in version 1.4. Use 'max_iter' and let 'n_iter' to its default "
+                "value instead. 'n_iter' is also ignored if 'max_iter' is "
+                "specified.",
+                FutureWarning,
+            )
+            n_iter = self.n_iter
+
+        self._random_state = check_random_state(self.random_state)
+
+        dictionary = self._initialize_dict(X, self._random_state)
+        old_dict = dictionary.copy()
+
+        if self.shuffle:
+            X_train = X.copy()
+            self._random_state.shuffle(X_train)
+        else:
+            X_train = X
+
+        n_samples, n_features = X_train.shape
+
+        if self.verbose:
+            print("[dict_learning]")
+
+        # Inner stats
+        self._A = np.zeros(
+            (self._n_components, self._n_components), dtype=X_train.dtype
+        )
+        self._B = np.zeros((n_features, self._n_components), dtype=X_train.dtype)
+
+        if self.max_iter is not None:
+
+            # Attributes to monitor the convergence
+            self._ewa_cost = None
+            self._ewa_cost_min = None
+            self._no_improvement = 0
+
+            batches = gen_batches(n_samples, self._batch_size)
+            batches = itertools.cycle(batches)
+            n_steps_per_iter = int(np.ceil(n_samples / self._batch_size))
+            n_steps = self.max_iter * n_steps_per_iter
+
+            i = -1  # to allow max_iter = 0
+
+            for i, batch in zip(range(n_steps), batches):
+                X_batch = X_train[batch]
+
+                batch_cost = self._minibatch_step(
+                    X_batch, dictionary, self._random_state, i
+                )
+
+                if self._check_convergence(
+                    X_batch, batch_cost, dictionary, old_dict, n_samples, i, n_steps
+                ):
+                    break
+
+                # XXX callback param added for backward compat in #18975 but a common
+                # unified callback API should be preferred
+                if self.callback is not None:
+                    self.callback(locals())
+
+                old_dict[:] = dictionary
+
+            self.n_steps_ = i + 1
+            self.n_iter_ = np.ceil(self.n_steps_ / n_steps_per_iter)
+        else:
+            # TODO remove this branch in 1.3
+            n_iter = 1000 if self.n_iter == "deprecated" else self.n_iter
+
+            batches = gen_batches(n_samples, self._batch_size)
+            batches = itertools.cycle(batches)
+
+            for i, batch in zip(range(n_iter), batches):
+                self._minibatch_step(X_train[batch], dictionary, self._random_state, i)
+
+                trigger_verbose = self.verbose and i % ceil(100.0 / self.verbose) == 0
+                if self.verbose > 10 or trigger_verbose:
+                    print(f"{i} batches processed.")
+
+                if self.callback is not None:
+                    self.callback(locals())
+
+            self.n_steps_ = n_iter
+            self.n_iter_ = np.ceil(n_iter / int(np.ceil(n_samples / self._batch_size)))
+
+        self.components_ = dictionary
+
+        return self
+[/SEARCH]
+[REPLACE]
+    def fit(self, X, y=None):
+        """Fit the model from data in X.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            Training vector, where `n_samples` is the number of samples
+            and `n_features` is the number of features.
+
+        y : Ignored
+            Not used, present for API consistency by convention.
+
+        Returns
+        -------
+        self : object
+            Returns the instance itself.
+        """
+        self._validate_params()
+
+        X = self._validate_data(
+            X, dtype=[np.float64, np.float32], order="C", copy=False
+        )
+
+        self._check_params(X)
+
+        if self.n_iter != "deprecated":
+            warnings.warn(
+                "'n_iter' is deprecated in version 1.1 and will be removed "
+                "in version 1.4. Use 'max_iter' and let 'n_iter' to its default "
+                "value instead. 'n_iter' is also ignored if 'max_iter' is "
+                "specified.",
+                FutureWarning,
+            )
+            n_iter = self.n_iter
+
+        self._random_state = check_random_state(self.random_state)
+
+        dictionary = self._initialize_dict(X, self._random_state)
+        old_dict = dictionary.copy()
+
+        if self.shuffle:
+            X_train = X.copy()
+            self._random_state.shuffle(X_train)
+        else:
+            X_train = X
+
+        n_samples, n_features = X_train.shape
+
+        if self.verbose:
+            print("[dict_learning]")
+
+        # Inner stats
+        self._A = np.zeros(
+            (self._n_components, self._n_components), dtype=X_train.dtype
+        )
+        self._B = np.zeros((n_features, self._n_components), dtype=X_train.dtype)
+
+        # Precompute Gram matrix for small batch optimization
+        # This is computed once and reused in sparse_encode to avoid
+        # redundant dictionary @ dictionary.T computations
+        gram = dictionary @ dictionary.T
+
+        if self.max_iter is not None:
+
+            # Attributes to monitor the convergence
+            self._ewa_cost = None
+            self._ewa_cost_min = None
+            self._no_improvement = 0
+
+            batches = gen_batches(n_samples, self._batch_size)
+            batches = itertools.cycle(batches)
+            n_steps_per_iter = int(np.ceil(n_samples / self._batch_size))
+            n_steps = self.max_iter * n_steps_per_iter
+
+            i = -1  # to allow max_iter = 0
+
+            for i, batch in zip(range(n_steps), batches):
+                X_batch = X_train[batch]
+
+                batch_cost = self._minibatch_step(
+                    X_batch, dictionary, self._random_state, i, gram=gram
+                )
+
+                # Update Gram matrix for next iteration
+                gram = dictionary @ dictionary.T
+
+                if self._check_convergence(
+                    X_batch, batch_cost, dictionary, old_dict, n_samples, i, n_steps
+                ):
+                    break
+
+                # XXX callback param added for backward compat in #18975 but a common
+                # unified callback API should be preferred
+                if self.callback is not None:
+                    self.callback(locals())
+
+                old_dict[:] = dictionary
+
+            self.n_steps_ = i + 1
+            self.n_iter_ = np.ceil(self.n_steps_ / n_steps_per_iter)
+        else:
+            # TODO remove this branch in 1.3
+            n_iter = 1000 if self.n_iter == "deprecated" else self.n_iter
+
+            batches = gen_batches(n_samples, self._batch_size)
+            batches = itertools.cycle(batches)
+
+            for i, batch in zip(range(n_iter), batches):
+                self._minibatch_step(X_train[batch], dictionary, self._random_state, i, gram=gram)
+                # Update Gram matrix for next iteration
+                gram = dictionary @ dictionary.T
+
+                trigger_verbose = self.verbose and i % ceil(100.0 / self.verbose) == 0
+                if self.verbose > 10 or trigger_verbose:
+                    print(f"{i} batches processed.")
+
+                if self.callback is not None:
+                    self.callback(locals())
+
+            self.n_steps_ = n_iter
+            self.n_iter_ = np.ceil(n_iter / int(np.ceil(n_samples / self._batch_size)))
+
+        self.components_ = dictionary
+
+        return self
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+    def _minibatch_step(self, X, dictionary, random_state, step):
+        """Perform the update on the dictionary for one minibatch."""
+        batch_size = X.shape[0]
+
+        # Compute code for this batch
+        code = sparse_encode(
+            X,
+            dictionary,
+            algorithm=self._fit_algorithm,
+            alpha=self.alpha,
+            n_jobs=self.n_jobs,
+            check_input=False,
+            positive=self.positive_code,
+            max_iter=self.transform_max_iter,
+            verbose=self.verbose,
+        )
+
+        batch_cost = (
+            0.5 * ((X - code @ dictionary) ** 2).sum()
+            + self.alpha * np.sum(np.abs(code))
+        ) / batch_size
+
+        # Update inner stats
+        self._update_inner_stats(X, code, batch_size, step)
+
+        # Update dictionary
+        _update_dict(
+            dictionary,
+            X,
+            code,
+            self._A,
+            self._B,
+            verbose=self.verbose,
+            random_state=random_state,
+            positive=self.positive_dict,
+        )
+
+        return batch_cost
+[/SEARCH]
+[REPLACE]
+    def _minibatch_step(self, X, dictionary, random_state, step, gram=None):
+        """Perform the update on the dictionary for one minibatch."""
+        batch_size = X.shape[0]
+
+        # Compute code for this batch, passing precomputed gram matrix
+        # for small batch optimization to avoid redundant computations
+        code = sparse_encode(
+            X,
+            dictionary,
+            gram=gram,
+            algorithm=self._fit_algorithm,
+            alpha=self.alpha,
+            n_jobs=self.n_jobs,
+            check_input=False,
+            positive=self.positive_code,
+            max_iter=self.transform_max_iter,
+            verbose=self.verbose,
+        )
+
+        # Compute reconstruction using optimized matrix multiplication order
+        # For small batch sizes, this reduces overhead
+        X_diff = X - code @ dictionary
+
+        # Compute batch cost using the precomputed difference
+        batch_cost = 0.5 * (X_diff ** 2).sum() / batch_size + self.alpha * np.abs(code).sum() / batch_size
+
+        # Update inner stats
+        self._update_inner_stats(X, code, batch_size, step)
+
+        # Update dictionary
+        _update_dict(
+            dictionary,
+            X,
+            code,
+            self._A,
+            self._B,
+            verbose=self.verbose,
+            random_state=random_state,
+            positive=self.positive_dict,
+        )
+
+        return batch_cost
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+    @validate_params(
+    {
+        "X": ["array-like"],
+        "dictionary": ["array-like"],
+        "gram": ["array-like", None],
+        "cov": ["array-like", None],
+        "algorithm": [
+            StrOptions({"lasso_lars", "lasso_cd", "lars", "omp", "threshold"})
+        ],
+        "n_nonzero_coefs": [Interval(Integral, 1, None, closed="left"), None],
+        "alpha": [Interval(Real, 0, None, closed="left"), None],
+        "copy_cov": ["boolean"],
+        "init": ["array-like", None],
+        "max_iter": [Interval(Integral, 0, None, closed="left")],
+        "n_jobs": [Integral, None],
+        "check_input": ["boolean"],
+        "verbose": ["verbose"],
+        "positive": ["boolean"],
+    }
+)
+# XXX : could be moved to the linear_model module
+def sparse_encode(
+    X,
+    dictionary,
+    *,
+    gram=None,
+    cov=None,
+    algorithm="lasso_lars",
+    n_nonzero_coefs=None,
+    alpha=None,
+    copy_cov=True,
+    init=None,
+    max_iter=1000,
+    n_jobs=None,
+    check_input=True,
+    verbose=0,
+    positive=False,
+):
+[/SEARCH]
+[REPLACE]
+@validate_params(
+    {
+        "X": ["array-like"],
+        "dictionary": ["array-like"],
+        "gram": ["array-like", None],
+        "cov": ["array-like", None],
+        "algorithm": [
+            StrOptions({"lasso_lars", "lasso_cd", "lars", "omp", "threshold"})
+        ],
+        "n_nonzero_coefs": [Interval(Integral, 1, None, closed="left"), None],
+        "alpha": [Interval(Real, 0, None, closed="left"), None],
+        "copy_cov": ["boolean"],
+        "init": ["array-like", None],
+        "max_iter": [Interval(Integral, 0, None, closed="left")],
+        "n_jobs": [Integral, None],
+        "check_input": ["boolean"],
+        "verbose": ["verbose"],
+        "positive": ["boolean"],
+    }
+)
+# XXX : could be moved to the linear_model module
+def sparse_encode(
+    X,
+    dictionary,
+    *,
+    gram=None,
+    cov=None,
+    algorithm="lasso_lars",
+    n_nonzero_coefs=None,
+    alpha=None,
+    copy_cov=True,
+    init=None,
+    max_iter=1000,
+    n_jobs=None,
+    check_input=True,
+    verbose=0,
+    positive=False,
+):
+[/REPLACE]
+
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+    n_samples, n_features = X.shape
+    n_components = dictionary.shape[0]
+
+    if gram is None and algorithm != "threshold":
+        gram = np.dot(dictionary, dictionary.T)
+
+    if cov is None and algorithm != "lasso_cd":
+        copy_cov = False
+        cov = np.dot(dictionary, X.T)
+
+    if algorithm in ("lars", "omp"):
+        regularization = n_nonzero_coefs
+        if regularization is None:
+            regularization = min(max(n_features / 10, 1), n_components)
+    else:
+        regularization = alpha
+        if regularization is None:
+            regularization = 1.0
+
+    if effective_n_jobs(n_jobs) == 1 or algorithm == "threshold":
+        code = _sparse_encode(
+            X,
+            dictionary,
+            gram,
+            cov=cov,
+            algorithm=algorithm,
+            regularization=regularization,
+            copy_cov=copy_cov,
+            init=init,
+            max_iter=max_iter,
+            check_input=False,
+            verbose=verbose,
+            positive=positive,
+        )
+        return code
+
+    # Enter parallel code block
+    code = np.empty((n_samples, n_components))
+    slices = list(gen_even_slices(n_samples, effective_n_jobs(n_jobs)))
+
+    code_views = Parallel(n_jobs=n_jobs, verbose=verbose)(
+        delayed(_sparse_encode)(
+            X[this_slice],
+            dictionary,
+            gram,
+            cov[:, this_slice] if cov is not None else None,
+            algorithm,
+            regularization=regularization,
+            copy_cov=copy_cov,
+            init=init[this_slice] if init is not None else None,
+            max_iter=max_iter,
+            check_input=False,
+            verbose=verbose,
+            positive=positive,
+        )
+        for this_slice in slices
+    )
+    for this_slice, this_view in zip(slices, code_views):
+        code[this_slice] = this_view
+    return code
+[/SEARCH]
+[REPLACE]
+    n_samples, n_features = X.shape
+    n_components = dictionary.shape[0]
+
+    if gram is None and algorithm != "threshold":
+        gram = np.dot(dictionary, dictionary.T)
+
+    # For small batch sizes, precompute cov if not provided
+    # This avoids redundant dictionary @ X.T in _sparse_encode
+    if cov is None and algorithm != "lasso_cd":
+        copy_cov = False
+        cov = np.dot(dictionary, X.T)
+
+    if algorithm in ("lars", "omp"):
+        regularization = n_nonzero_coefs
+        if regularization is None:
+            regularization = min(max(n_features / 10, 1), n_components)
+    else:
+        regularization = alpha
+        if regularization is None:
+            regularization = 1.0
+
+    if effective_n_jobs(n_jobs) == 1 or algorithm == "threshold":
+        code = _sparse_encode(
+            X,
+            dictionary,
+            gram,
+            cov=cov,
+            algorithm=algorithm,
+            regularization=regularization,
+            copy_cov=copy_cov,
+            init=init,
+            max_iter=max_iter,
+            check_input=False,
+            verbose=verbose,
+            positive=positive,
+        )
+        return code
+
+    # Enter parallel code block
+    code = np.empty((n_samples, n_components))
+    slices = list(gen_even_slices(n_samples, effective_n_jobs(n_jobs)))
+
+    code_views = Parallel(n_jobs=n_jobs, verbose=verbose)(
+        delayed(_sparse_encode)(
+            X[this_slice],
+            dictionary,
+            gram,
+            cov[:, this_slice] if cov is not None else None,
+            algorithm,
+            regularization=regularization,
+            copy_cov=copy_cov,
+            init=init[this_slice] if init is not None else None,
+            max_iter=max_iter,
+            check_input=False,
+            verbose=verbose,
+            positive=positive,
+        )
+        for this_slice in slices
+    )
+    for this_slice, this_view in zip(slices, code_views):
+        code[this_slice] = this_view
+    return code
+[/REPLACE]

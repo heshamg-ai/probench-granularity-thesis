@@ -1,0 +1,25 @@
+pandas/core/arrays/masked.py
+[SEARCH]
+    def reshape(self, *args, **kwargs) -> Self:
+        data = self._data.reshape(*args, **kwargs)
+        mask = self._mask.reshape(*args, **kwargs)
+        return type(self)(data, mask)
+[/SEARCH]
+[REPLACE]
+    def reshape(self, *args, **kwargs) -> Self:
+        # For 1-D reshaping of contiguous arrays, use views to avoid copies.
+        # This preserves semantics while being much faster and more memory efficient.
+        if len(args) == 1 and isinstance(args[0], int) and not kwargs:
+            # Single integer argument: reshape to 1-D of that length
+            if self._data.size == args[0] * self._data.shape[0] // args[0]:
+                try:
+                    data = self._data.reshape(args[0])
+                    mask = self._mask.reshape(args[0])
+                    if data.base is self._data and mask.base is self._mask:
+                        return type(self)(data, mask, copy=False)
+                except (AttributeError, ValueError):
+                    pass
+        data = self._data.reshape(*args, **kwargs)
+        mask = self._mask.reshape(*args, **kwargs)
+        return type(self)(data, mask)
+[/REPLACE]

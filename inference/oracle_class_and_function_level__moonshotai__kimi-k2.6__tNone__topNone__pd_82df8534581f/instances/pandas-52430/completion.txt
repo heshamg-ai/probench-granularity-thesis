@@ -1,0 +1,61 @@
+ pandas/core/base.py
+[SEARCH]
+        if isinstance(self.dtype, ExtensionDtype):
+            return self.array.to_numpy(dtype, copy=copy, na_value=na_value, **kwargs)
+        elif kwargs:
+            bad_keys = list(kwargs.keys())[0]
+            raise TypeError(
+                f"to_numpy() got an unexpected keyword argument '{bad_keys}'"
+            )
+
+        if na_value is not lib.no_default:
+            values = self._values
+            if not can_hold_element(values, na_value):
+                # if we can't hold the na_value asarray either makes a copy or we
+                # error before modifying values. The asarray later on thus won't make
+                # another copy
+                values = np.asarray(values, dtype=dtype)
+            else:
+                values = values.copy()
+            values[np.asanyarray(self.isna())] = na_value
+        else:
+            values = self._values
+
+        result = np.asarray(values, dtype=dtype)
+[/SEARCH]
+[REPLACE]
+        if isinstance(self.dtype, ExtensionDtype):
+            return self.array.to_numpy(dtype, copy=copy, na_value=na_value, **kwargs)
+        elif kwargs:
+            bad_keys = list(kwargs.keys())[0]
+            raise TypeError(
+                f"to_numpy() got an unexpected keyword argument '{bad_keys}'"
+            )
+
+        if na_value is not lib.no_default:
+            values = self._values
+            if not can_hold_element(values, na_value):
+                # if we can't hold the na_value asarray either makes a copy or we
+                # error before modifying values. The asarray later on thus won't make
+                # another copy
+                values = np.asarray(values, dtype=dtype)
+            else:
+                values = values.copy()
+            values[np.asanyarray(self.isna())] = na_value
+        else:
+            values = self._values
+
+        # Fast path for float dtype with na_value=np.nan: avoid redundant copy
+        # and leverage astype for better performance than np.asarray + copy dance
+        if (
+            na_value is not lib.no_default
+            and dtype is not None
+            and is_float_dtype(dtype)
+            and is_float_dtype(self.dtype)
+            and not copy
+            and not using_copy_on_write()
+        ):
+            result = values.astype(dtype, copy=False)
+        else:
+            result = np.asarray(values, dtype=dtype)
+[/REPLACE]

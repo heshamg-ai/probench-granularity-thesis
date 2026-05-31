@@ -1,0 +1,41 @@
+
+
+Looking at the task, I need to optimize `DataFrame.transpose` for DataFrames with a single masked dtype. The context mentions a new function `transpose_homogenous_masked_arrays` in `pandas.core.arrays.masked`.
+
+Let me find the exact code to replace in the transpose method:
+
+pandas/core/frame.py
+[SEARCH]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            # We have EAs with the same dtype. We can preserve that dtype in transpose.
+            dtype = dtypes[0]
+            arr_type = dtype.construct_array_type()
+            values = self.values
+
+            new_values = [arr_type._from_sequence(row, dtype=dtype) for row in values]
+            result = type(self)._from_arrays(
+                new_values, index=self.columns, columns=self.index
+            )
+[/SEARCH]
+[REPLACE]
+        elif self._is_homogeneous_type and dtypes:
+            dtype = dtypes[0]
+            if isinstance(dtype, ExtensionDtype):
+                # We have EAs with the same dtype. We can preserve that dtype in transpose.
+                arr_type = dtype.construct_array_type()
+                values = self.values
+
+                new_values = [arr_type._from_sequence(row, dtype=dtype) for row in values]
+                result = type(self)._from_arrays(
+                    new_values, index=self.columns, columns=self.index
+                )
+            elif hasattr(dtype, "numpy_dtype"):
+                # Optimized path for masked extension dtypes
+                from pandas.core.arrays.masked import transpose_homogenous_masked_arrays
+
+                result = transpose_homogenous_masked_arrays(self)
+[/REPLACE]

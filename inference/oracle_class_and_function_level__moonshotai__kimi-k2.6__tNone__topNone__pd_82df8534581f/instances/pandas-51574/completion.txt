@@ -1,0 +1,95 @@
+ pandas/core/generic.py [SEARCH]        # align the cond to same shape as myself
+        cond = common.apply_if_callable(cond, self)
+        if isinstance(cond, NDFrame):
+            # CoW: Make sure reference is not kept alive
+            cond = cond.align(self, join="right", broadcast_axis=1, copy=False)[0]
+        else:
+            if not hasattr(cond, "shape"):
+                cond = np.asanyarray(cond)
+            if cond.shape != self.shape:
+                raise ValueError("Array conditional must be same shape as self")
+            cond = self._constructor(cond, **self._construct_axes_dict())
+[/SEARCH] [REPLACE]        # align the cond to same shape as myself
+        cond = common.apply_if_callable(cond, self)
+        if isinstance(cond, NDFrame):
+            # CoW: Make sure reference is not kept alive
+            cond = cond.align(self, join="right", broadcast_axis=1, copy=False)[0]
+            # Fast path: avoid convert_dtype when cond already has boolean ExtensionArrays
+            # This preserves EA-backed boolean dtypes (BooleanArray, ArrowExtensionArray)
+            # without going through object-dtype inference in _where.
+            if (
+                cond.ndim == 2
+                and len(cond.dtypes) > 0
+                and all(is_bool_dtype(dt) for dt in cond.dtypes)
+            ):
+                # All columns are already boolean; skip re-construction below
+                pass
+            else:
+                # Standard path: ensure we have a DataFrame with boolean dtypes
+                if not cond.empty:
+                    for _dt in cond.dtypes:
+                        if not is_bool_dtype(_dt):
+                            break
+                    else:
+                        pass  # all boolean
+        else:
+            if not hasattr(cond, "shape"):
+                cond = np.asanyarray(cond)
+            if cond.shape != self.shape:
+                raise ValueError("Array conditional must be same shape as self")
+            cond = self._constructor(cond, **self._construct_axes_dict())
+[/REPLACE] [SEARCH]        # make sure we are boolean
+        fill_value = bool(inplace)
+        cond = cond.fillna(fill_value)
+
+        msg = "Boolean array expected for the condition, not {dtype}"
+        if not cond.empty:
+            if not isinstance(cond, ABCDataFrame):
+                # This is a single-dimensional object.
+                if not is_bool_dtype(cond):
+                    raise ValueError(msg.format(dtype=cond.dtype))
+            else:
+                for _dt in cond.dtypes:
+                    if not is_bool_dtype(_dt):
+                        raise ValueError(msg.format(dtype=_dt))
+        else:
+            # GH#21947 we have an empty DataFrame/Series, could be object-dtype
+            cond = cond.astype(bool)
+[/SEARCH] [REPLACE]        # make sure we are boolean
+        fill_value = bool(inplace)
+        cond = cond.fillna(fill_value)
+
+        msg = "Boolean array expected for the condition, not {dtype}"
+        if not cond.empty:
+            if not isinstance(cond, ABCDataFrame):
+                # This is a single-dimensional object.
+                if not is_bool_dtype(cond):
+                    raise ValueError(msg.format(dtype=cond.dtype))
+            else:
+                # Fast path: if all dtypes are already boolean, skip per-column check
+                if not (
+                    len(cond.dtypes) > 0
+                    and all(is_bool_dtype(dt) for dt in cond.dtypes)
+                ):
+                    for _dt in cond.dtypes:
+                        if not is_bool_dtype(_dt):
+                            raise ValueError(msg.format(dtype=_dt))
+        else:
+            # GH#21947 we have an empty DataFrame/Series, could be object-dtype
+            cond = cond.astype(bool)
+[/REPLACE] [SEARCH]        cond = -cond if inplace else cond
+
+        cond = cond.reindex(
+            self._info_axis, axis=self._info_axis_number, copy=False
+        )
+[/SEARCH] [REPLACE]        cond = -cond if inplace else cond
+
+        # Fast path: avoid reindex when cond already has same labels as self
+        # This is common when cond is an EA-backed DataFrame from boolean operations
+        if isinstance(cond, ABCDataFrame) and cond._indexed_same(self):
+            pass  # labels already match, no reindex needed
+        else:
+            cond = cond.reindex(
+                self._info_axis, axis=self._info_axis_number, copy=False
+            )
+[/REPLACE]

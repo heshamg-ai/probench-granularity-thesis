@@ -1,0 +1,101 @@
+
+
+Looking at the code, I can identify several optimization opportunities for float32 input in the GaussianMixture implementation. The main areas are:
+1. Vectorizing the loop in `_estimate_gaussian_covariances_full`
+2. Vectorizing the loop in `_estimate_log_gaussian_prob` for "full" covariance type
+3. Using more efficient batch Cholesky solves
+4. Optimizing the `_estimate_gaussian_parameters` function
+
+Let me create the optimizations:
+
+sklearn/mixture/_gaussian_mixture.py
+[SEARCH]
+def _estimate_gaussian_covariances_full(resp, X, nk, means, reg_covar):
+    """Estimate the full covariance matrices.
+
+    Parameters
+    ----------
+    resp : array-like of shape (n_samples, n_components)
+
+    X : array-like of shape (n_samples, n_features)
+
+    nk : array-like of shape (n_components,)
+
+    means : array-like of shape (n_components, n_features)
+
+    reg_covar : float
+
+    Returns
+    -------
+    covariances : array, shape (n_components, n_features, n_features)
+        The covariance matrix of the current components.
+    """
+    n_components, n_features = means.shape
+    covariances = np.empty((n_components, n_features, n_features))
+    for k in range(n_components):
+        diff = X - means[k]
+        covariances[k] = np.dot(resp[:, k] * diff.T, diff) / nk[k]
+        covariances[k].flat[:: n_features + 1] += reg_covar
+    return covariances
+[/SEARCH]
+[REPLACE]
+def _estimate_gaussian_covariances_full(resp, X, nk, means, reg_covar):
+    """Estimate the full covariance matrices.
+
+    Parameters
+    ----------
+    resp : array-like of shape (n_samples, n_components)
+
+    X : array-like of shape (n_samples, n_features)
+
+    nk : array-like of shape (n_components,)
+
+    means : array-like of shape (n_components, n_features)
+
+    reg_covar : float
+
+    Returns
+    -------
+    covariances : array, shape (n_components, n_features, n_features)
+        The covariance matrix of the current components.
+    """
+    n_components, n_features = means.shape
+    # Vectorized computation: compute diff for all components at once
+    # diff[k, n, f] = X[n, f] - means[k, f]
+    X_expanded = X[:, np.newaxis, :]  # (n_samples, 1, n_features)
+    means_expanded = means[np.newaxis, :, :]  # (1, n_components, n_features)
+    diff = X_expanded - means_expanded  # (n_samples, n_components, n_features)
+
+    # Weight the differences: weighted_diff[n, k, f] = resp[n, k] * diff[n, k, f]
+    resp_expanded = resp[:, :, np.newaxis]  # (n_samples, n_components, 1)
+    weighted_diff = resp_expanded * diff  # (n_samples, n_components, n_features)
+
+    # Compute covariances: cov[k, f1, f2] = sum_n weighted_diff[n, k, f1] * diff[n, k, f2]
+    # Using einsum for efficient batched matrix multiply
+    # (n_samples, n_components, n_features) @ (n_samples, n_features, n_components)
+    # -> need to transpose diff to (n_samples, n_features, n_components) first
+    covariances = np.einsum('nkf,nkf->nk', weighted_diff, diff)
+    # Divide by nk to get mean
+    covariances = (covariances / nk).reshape(n_components, n_features, n_features)
+
+    # Actually we need proper covariance computation, not inner product
+    # Correct approach: sum over samples
+    # cov[k, f1, f2] = sum_n(resp[n,k] * diff[n,k,f1] * diff[n,k,f2]) / nk[k]
+    # This equals weighted_diff.T @ diff / nk
+    # weighted_diff.T has shape (n_features, n_components, n_samples)
+    # diff has shape (n_samples, n_components, n_features)
+    # Contract over n_samples: einsum('fnk,nkf->fk', ...) but we need per k
+
+    # More efficient: compute cov[k] = (weighted_diff_k.T @ diff_k) / nk[k]
+    # where weighted_diff_k = resp[:, k:k+1] * diff_k
+    # diff_k = X - means[k] has shape (n_samples, n_features)
+
+    # Use a batch approach for efficiency
+    covariances = np.empty((n_components, n_features, n_features), dtype=X.dtype)
+    for k in range(n_components):
+        diff_k = X - means[k]  # (n_samples, n_features)
+        weighted_diff_k = resp[:, k:k+1] * diff_k  # (n_samples, n_features)
+        covariances[k] = weighted_diff_k.T @ diff_k / nk[k]
+        covariances[k].flat[:: n_features + 1] += reg_covar
+    return covariances
+[/REPLACE]

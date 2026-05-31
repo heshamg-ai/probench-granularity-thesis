@@ -1,0 +1,15 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        if self.dtype != other.dtype:
+            dtype = self._find_common_type_compat(other)
+            this = self.astype(dtype, copy=False)
+            other = other.astype(dtype, copy=False)
+            return this.join(other, how=how, return_indexers=True)
+[/SEARCH]
+[REPLACE]
+        if self.dtype is not other.dtype and self.dtype != other.dtype:
+            dtype = self._find_common_type_compat(other)
+            this = self.astype(dtype, copy=False)
+            other = other.astype(dtype, copy=False)
+            return this.join(other, how=how, return_indexers=True)
+[/REPLACE]

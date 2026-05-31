@@ -1,0 +1,46 @@
+
+
+pandas/core/sorting.py
+[SEARCH]
+    if level is not None:
+        _, indexer = target.sortlevel(
+            level,
+            ascending=ascending,
+            sort_remaining=sort_remaining,
+            na_position=na_position,
+        )
+    elif isinstance(target, ABCMultiIndex):
+        codes = [lev.codes for lev in target._get_codes_for_sorting()]
+        indexer = lexsort_indexer(
+            codes, orders=ascending, na_position=na_position, codes_given=True
+        )
+[/SEARCH]
+[REPLACE]
+    if level is not None:
+        if (
+            isinstance(ascending, bool)
+            and target.is_monotonic_increasing
+            and ascending
+        ) or (
+            isinstance(ascending, bool)
+            and target.is_monotonic_decreasing
+            and not ascending
+        ):
+            return None
+        _, indexer = target.sortlevel(
+            level,
+            ascending=ascending,
+            sort_remaining=sort_remaining,
+            na_position=na_position,
+        )
+    elif isinstance(target, ABCMultiIndex):
+        if isinstance(ascending, bool) and (
+            (ascending and target.is_monotonic_increasing)
+            or (not ascending and target.is_monotonic_decreasing)
+        ):
+            return None
+        codes = [lev.codes for lev in target._get_codes_for_sorting()]
+        indexer = lexsort_indexer(
+            codes, orders=ascending, na_position=na_position, codes_given=True
+        )
+[/REPLACE]

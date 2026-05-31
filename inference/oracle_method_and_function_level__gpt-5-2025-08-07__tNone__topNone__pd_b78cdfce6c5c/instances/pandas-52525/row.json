@@ -1,0 +1,49 @@
+{
+  "id": 17,
+  "scenario_id": "pandas-52525",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 52525,
+  "baseline_sha": "92f837fcbb941852b2754fbd83fc003f68348c15",
+  "reference_sha": "33054155da8cc2223c4386ae078f61508c8a90fb",
+  "task": "Optimize ArrowExtensionArray.to_numpy execution when converting to NumPy float dtype with na_value=np.nan across missing-value patterns",
+  "entry_point": "pandas.arrays.ArrowExtensionArray.to_numpy",
+  "whats_new": "Performance improvement in ~arrays.ArrowExtensionArray.to_numpy",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-52525:baseline",
+      "digest": "sha256:6a5c28e05a81414ce901ae47463f3ed8a08d2bff63a07eaf0fc92e586634f1b7"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-52525:reference",
+      "digest": "sha256:b48028ed791b749997484717cf09ce00698ff220e47a09512e0f6c307321bd67"
+    }
+  },
+  "params": [
+    {
+      "name": "Array Size",
+      "short_indicator": "N",
+      "explanation": "Size of the array",
+      "values": [
+        "100000",
+        "1000000"
+      ]
+    },
+    {
+      "name": "Missing Pattern",
+      "short_indicator": "MP",
+      "explanation": "Pattern of missing values",
+      "values": [
+        "some",
+        "all"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/extension/test_arrow.py::test_to_numpy_with_defaults",
+    "pandas/tests/extension/test_arrow.py::test_to_numpy_int_with_na",
+    "pandas/tests/extension/test_arrow.py::test_to_numpy_null_array",
+    "pandas/tests/extension/test_arrow.py::test_to_numpy_null_array_no_dtype"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.arrays.ArrowExtensionArray.to_numpy for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize ArrowExtensionArray.to_numpy execution when converting to NumPy float dtype with na_value=np.nan across missing-value patterns\nOptimization function: pandas.arrays.ArrowExtensionArray.to_numpy\n\n\n[start of pandas/core/arrays/arrow/array.py]\n### Relevant context\n#### Class `pandas.core.arrays.arrow.array.ArrowExtensionArray`\n**Class Signature**\n```python\nclass ArrowExtensionArray(OpsMixin, ExtensionArraySupportsAnyAll, BaseStringArrayMethods):\n```\n**Class Attributes**\n```python\n    _pa_array: pa.ChunkedArray\n    _dtype: ArrowDtype\n    _dt_dayofweek = _dt_day_of_week\n    _dt_weekday = _dt_day_of_week\n    _dt_dayofyear = _dt_day_of_year\n```\n**Class __init__ method**\n```python\n    def __init__(self, values: pa.Array | pa.ChunkedArray) -> None:\n        if pa_version_under7p0:\n            msg = \"pyarrow>=7.0.0 is required for PyArrow backed ArrowExtensionArray.\"\n            raise ImportError(msg)\n        if isinstance(values, pa.Array):\n            self._pa_array = pa.chunked_array([values])\n        elif isinstance(values, pa.ChunkedArray):\n            self._pa_array = values\n        else:\n            raise ValueError(\n                f\"Unsupported type '{type(values)}' for ArrowExtensionArray\"\n            )\n        self._dtype = ArrowDtype(self._pa_array.type)\n```\n##### Method `pandas.core.arrays.arrow.array.ArrowExtensionArray.to_numpy`\n```python\n@doc(ExtensionArray.to_numpy)\n    def to_numpy(\n        self,\n        dtype: npt.DTypeLike | None = None,\n        copy: bool = False,\n        na_value: object = lib.no_default,\n    ) -> np.ndarray:\n        if dtype is None and self._hasna:\n            dtype = object\n        if na_value is lib.no_default:\n            na_value = self.dtype.na_value\n\n        pa_type = self._pa_array.type\n        if pa.types.is_temporal(pa_type) and not pa.types.is_date(pa_type):\n            # temporal types with units and/or timezones currently\n            #  require pandas/python scalars to pass all tests\n            # TODO: improve performance (this is slow)\n            result = np.array(list(self), dtype=dtype)\n        elif is_object_dtype(dtype) and self._hasna:\n            result = np.empty(len(self), dtype=object)\n            mask = ~self.isna()\n            result[mask] = np.asarray(self[mask]._pa_array)\n        elif pa.types.is_null(self._pa_array.type):\n            result = np.asarray(self._pa_array, dtype=dtype)\n            if not isna(na_value):\n                result[:] = na_value\n            return result\n        elif self._hasna:\n            data = self.copy()\n            data[self.isna()] = na_value\n            return np.asarray(data._pa_array, dtype=dtype)\n        else:\n            result = np.asarray(self._pa_array, dtype=dtype)\n            if copy:\n                result = result.copy()\n        if self._hasna:\n            result[self.isna()] = na_value\n        return result\n```\n[end of pandas/core/arrays/arrow/array.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

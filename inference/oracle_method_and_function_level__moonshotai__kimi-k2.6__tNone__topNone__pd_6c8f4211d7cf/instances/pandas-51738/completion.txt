@@ -1,0 +1,104 @@
+ pandas/core/indexes/base.py
+[SEARCH]
+    def _getitem_slice(self: _IndexT, slobj: slice) -> _IndexT:
+        """
+        Fastpath for __getitem__ when we know we have a slice.
+        """
+        res = self._data[slobj]
+        return type(self)._simple_new(res, name=self._name)
+[/SEARCH]
+[REPLACE]
+    def _getitem_slice(self: _IndexT, slobj: slice) -> _IndexT:
+        """
+        Fastpath for __getitem__ when we know we have a slice.
+        """
+        res = self._data[slobj]
+        result = type(self)._simple_new(res, name=self._name)
+        # Propagate uniqueness if the slice preserves order and is a view or copy
+        # For RangeIndex slicing, the result is always unique if the original was
+        # We can only safely propagate _cache directly for known-uniqueness cases
+        if hasattr(self, '_cache') and 'is_unique' in self._cache:
+            # Propagate is_unique cache to avoid recomputation
+            if not hasattr(result, '_cache'):
+                result._cache = {}
+            result._cache['is_unique'] = self._cache['is_unique']
+        return result
+[/REPLACE]
+
+pandas/core/indexes/range.py
+[SEARCH]
+    def __getitem__(self, key):
+        """
+        Conserve RangeIndex type for scalar and slice keys.
+        """
+        if isinstance(key, slice):
+            new_range = self._range[key]
+            return self._simple_new(new_range, name=self._name)
+        elif is_integer(key):
+            new_key = int(key)
+            try:
+                return self._range[new_key]
+            except IndexError as err:
+                raise IndexError(
+                    f"index {key} is out of bounds for axis 0 with size {len(self)}"
+                ) from err
+        elif is_scalar(key):
+            raise IndexError(
+                "only integers, slices (`:`), "
+                "ellipsis (`...`), numpy.newaxis (`None`) "
+                "and integer or boolean "
+                "arrays are valid indices"
+            )
+        return super().__getitem__(key)
+[/SEARCH]
+[REPLACE]
+    def __getitem__(self, key):
+        """
+        Conserve RangeIndex type for scalar and slice keys.
+        """
+        if isinstance(key, slice):
+            new_range = self._range[key]
+            result = self._simple_new(new_range, name=self._name)
+            # Propagate is_unique cache: RangeIndex is always unique
+            if hasattr(self, '_cache'):
+                if not hasattr(result, '_cache'):
+                    result._cache = {}
+                result._cache['is_unique'] = True
+            return result
+        elif is_integer(key):
+            new_key = int(key)
+            try:
+                return self._range[new_key]
+            except IndexError as err:
+                raise IndexError(
+                    f"index {key} is out of bounds for axis 0 with size {len(self)}"
+                ) from err
+        elif is_scalar(key):
+            raise IndexError(
+                "only integers, slices (`:`), "
+                "ellipsis (`...`), numpy.newaxis (`None`) "
+                "and integer or boolean "
+                "arrays are valid indices"
+            )
+        return super().__getitem__(key)
+[/REPLACE]
+
+pandas/core/indexes/interval.py
+[SEARCH]
+class IntervalIndex(ExtensionIndex):
+[/SEARCH]
+[REPLACE]
+class IntervalIndex(ExtensionIndex):
+    def _getitem_slice(self, slobj: slice) -> IntervalIndex:
+        """
+        Fastpath for __getitem__ when we know we have a slice.
+        """
+        res = self._data[slobj]
+        result = type(self)._simple_new(res, name=self._name)
+        # Propagate is_unique cache to avoid recomputation after slicing
+        if hasattr(self, '_cache') and 'is_unique' in self._cache:
+            if not hasattr(result, '_cache'):
+                result._cache = {}
+            result._cache['is_unique'] = self._cache['is_unique']
+        return result
+[/REPLACE]

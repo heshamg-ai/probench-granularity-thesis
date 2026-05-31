@@ -1,0 +1,77 @@
+pandas/core/indexes/base.py
+[SEARCH]
+    @Appender(_index_shared_docs["take"] % _index_doc_kwargs)
+    def take(
+        self,
+        indices,
+        axis: Axis = 0,
+        allow_fill: bool = True,
+        fill_value=None,
+        **kwargs,
+    ) -> Self:
+        if kwargs:
+            nv.validate_take((), kwargs)
+        if is_scalar(indices):
+            raise TypeError("Expected indices to be array-like")
+        indices = ensure_platform_int(indices)
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+
+        # Note: we discard fill_value and use self._na_value, only relevant
+        #  in the case where allow_fill is True and fill_value is not None
+        values = self._values
+        if isinstance(values, np.ndarray):
+            taken = algos.take(
+                values, indices, allow_fill=allow_fill, fill_value=self._na_value
+            )
+        else:
+            # algos.take passes 'axis' keyword which not all EAs accept
+            taken = values.take(
+                indices, allow_fill=allow_fill, fill_value=self._na_value
+            )
+        return self._constructor._simple_new(taken, name=self.name)
+[/SEARCH]
+[REPLACE]
+    @Appender(_index_shared_docs["take"] % _index_doc_kwargs)
+    def take(
+        self,
+        indices,
+        axis: Axis = 0,
+        allow_fill: bool = True,
+        fill_value=None,
+        **kwargs,
+    ) -> Self:
+        if kwargs:
+            nv.validate_take((), kwargs)
+        if is_scalar(indices):
+            raise TypeError("Expected indices to be array-like")
+        indices = ensure_platform_int(indices)
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+
+        # Fast path: when taking all elements in order without fill,
+        # return a shallow copy to avoid unnecessary data copying.
+        if not allow_fill:
+            n = len(self)
+            if len(indices) == n:
+                arr = indices
+                if isinstance(arr, np.ndarray) and arr.dtype == np.intp:
+                    # Check if indices is arange(n) using a fast comparison
+                    if arr.flags.c_contiguous and arr[0] == 0 and arr[-1] == n - 1:
+                        # Verify contiguity implies arange for valid indices
+                        step = arr[1] - arr[0] if n > 1 else 1
+                        if step == 1:
+                            return self._view()
+
+        # Note: we discard fill_value and use self._na_value, only relevant
+        #  in the case where allow_fill is True and fill_value is not None
+        values = self._values
+        if isinstance(values, np.ndarray):
+            taken = algos.take(
+                values, indices, allow_fill=allow_fill, fill_value=self._na_value
+            )
+        else:
+            # algos.take passes 'axis' keyword which not all EAs accept
+            taken = values.take(
+                indices, allow_fill=allow_fill, fill_value=self._na_value
+            )
+        return self._constructor._simple_new(taken, name=self.name)
+[/REPLACE]

@@ -1,0 +1,12 @@
+pandas/core/strings/accessor.py
+[SEARCH]
+        result = self._data.array._str_split(pat, n, expand, regex)
+        return self._wrap_result(result, returns_string=expand, expand=expand)
+[/SEARCH]
+[REPLACE]
+        if expand:
+            result = self._data.array._str_split(pat, n, expand=False, regex=regex)
+        else:
+            result = self._data.array._str_split(pat, n, expand=False, regex=regex)
+        return self._wrap_result(result, returns_string=expand, expand=expand)
+[/REPLACE]

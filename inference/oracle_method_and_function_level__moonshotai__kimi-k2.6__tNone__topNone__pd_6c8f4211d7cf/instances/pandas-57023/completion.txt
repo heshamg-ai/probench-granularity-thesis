@@ -1,0 +1,145 @@
+ pandas/core/indexes/base.py
+[SEARCH]
+    def _wrap_joined_index(
+        self,
+        joined: ArrayLike,
+        other: Self,
+        lidx: npt.NDArray[np.intp],
+        ridx: npt.NDArray[np.intp],
+        how: JoinHow,
+    ) -> Self:
+        assert other.dtype == self.dtype
+        names = other.names if how == "right" else self.names
+
+        if isinstance(self, ABCMultiIndex):
+            # error: Incompatible return value type (got "MultiIndex",
+            # expected "Self")
+            mask = lidx == -1
+            join_idx = self.take(lidx)
+            right = cast("MultiIndex", other.take(ridx))
+            join_index = join_idx.putmask(mask, right)._sort_levels_monotonic()
+            return join_index.set_names(names)  # type: ignore[return-value]
+
+        else:
+            return self._constructor._with_infer(
+                joined, name=names[0], dtype=self.dtype
+            )
+[/SEARCH]
+[REPLACE]
+    def _wrap_joined_index(
+        self,
+        joined: ArrayLike,
+        other: Self,
+        lidx: npt.NDArray[np.intp],
+        ridx: npt.NDArray[np.intp],
+        how: JoinHow,
+    ) -> Self:
+        assert other.dtype == self.dtype
+        names = other.names if how == "right" else self.names
+
+        if isinstance(self, ABCMultiIndex):
+            # error: Incompatible return value type (got "MultiIndex",
+            # expected "Self")
+            mask = lidx == -1
+            join_idx = self.take(lidx)
+            right = cast("MultiIndex", other.take(ridx))
+            join_index = join_idx.putmask(mask, right)._sort_levels_monotonic()
+            return join_index.set_names(names)  # type: ignore[return-value]
+
+        else:
+            result = self._constructor._with_infer(
+                joined, name=names[0], dtype=self.dtype
+            )
+            # Reuse cached attributes from self or other when the result
+            # matches one of the input indexes exactly.
+            if how == "left" and lidx is None and ridx is not None:
+                # result is identical to self
+                if hasattr(self, "_cache"):
+                    for key, value in self._cache.items():
+                        result._cache[key] = value
+                result._cache.update({k: v for k, v in self._cache.items()})
+            elif how == "right" and ridx is None and lidx is not None:
+                # result is identical to other
+                if hasattr(other, "_cache"):
+                    for key, value in other._cache.items():
+                        result._cache[key] = value
+            elif how in ("inner", "outer") and lidx is not None and ridx is not None:
+                # Check if the result is identical to self or other
+                if len(joined) == len(self) and lidx is not None and (
+                    len(lidx) == len(self) and (lidx == np.arange(len(self))).all()
+                ):
+                    if hasattr(self, "_cache"):
+                        for key, value in self._cache.items():
+                            result._cache[key] = value
+                elif len(joined) == len(other) and ridx is not None and (
+                    len(ridx) == len(other) and (ridx == np.arange(len(other))).all()
+                ):
+                    if hasattr(other, "_cache"):
+                        for key, value in other._cache.items():
+                            result._cache[key] = value
+            return result
+[/REPLACE]
+
+pandas/core/indexes/base.py
+[SEARCH]
+    def _wrap_joined_index(
+        self,
+        joined: ArrayLike,
+        other: Self,
+        lidx: npt.NDArray[np.intp],
+        ridx: npt.NDArray[np.intp],
+        how: JoinHow,
+    ) -> Self:
+        assert other.dtype == self.dtype
+        names = other.names if how == "right" else self.names
+
+        if isinstance(self, ABCMultiIndex):
+            # error: Incompatible return value type (got "MultiIndex",
+            # expected "Self")
+            mask = lidx == -1
+            join_idx = self.take(lidx)
+            right = cast("MultiIndex", other.take(ridx))
+            join_index = join_idx.putmask(mask, right)._sort_levels_monotonic()
+            return join_index.set_names(names)  # type: ignore[return-value]
+
+        else:
+            return self._constructor._with_infer(
+                joined, name=names[0], dtype=self.dtype
+            )
+[/SEARCH]
+[REPLACE]
+    def _wrap_joined_index(
+        self,
+        joined: ArrayLike,
+        other: Self,
+        lidx: npt.NDArray[np.intp],
+        ridx: npt.NDArray[np.intp],
+        how: JoinHow,
+    ) -> Self:
+        assert other.dtype == self.dtype
+        names = other.names if how == "right" else self.names
+
+        if isinstance(self, ABCMultiIndex):
+            # error: Incompatible return value type (got "MultiIndex",
+            # expected "Self")
+            mask = lidx == -1
+            join_idx = self.take(lidx)
+            right = cast("MultiIndex", other.take(ridx))
+            join_index = join_idx.putmask(mask, right)._sort_levels_monotonic()
+            return join_index.set_names(names)  # type: ignore[return-value]
+
+        else:
+            result = self._constructor._with_infer(
+                joined, name=names[0], dtype=self.dtype
+            )
+            # Reuse cached attributes when result matches an input exactly
+            if how == "left" and lidx is None:
+                # Result is identical to self; copy cache if present
+                if hasattr(self, "_cache") and self._cache:
+                    object.__setattr__(result, "_cache", self._cache.copy())
+            elif how == "right" and ridx is None:
+                # Result is identical to other; copy cache if present
+                if hasattr(other, "_cache") and other._cache:
+                    object.__setattr__(result, "_cache", other._cache.copy())
+            return result
+[/REPLACE]

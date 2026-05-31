@@ -1,0 +1,124 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+            # get tuple representation of values if more than one
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+            else:
+                # We get here with non-ndarrays in test_merge_by_col_tz_aware
+                #  and test_merge_groupby_multiple_column_with_categorical_column
+                lbv = flip(left_by_values)
+                rbv = flip(right_by_values)
+                lbv = ensure_object(lbv)
+                rbv = ensure_object(rbv)
+[/SEARCH]
+[REPLACE]
+            # get tuple representation of values if more than one
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+            else:
+                # We get here with non-ndarrays in test_merge_by_col_tz_aware
+                #  and test_merge_groupby_multiple_column_with_categorical_column
+                lbv = _factorize_multi_by_keys(left_by_values)
+                rbv = _factorize_multi_by_keys(right_by_values)
+[/REPLACE]
+
+pandas/core/reshape/merge.py
+[SEARCH]
+def _should_fill(lname, rname) -> bool:
+[/SEARCH]
+[REPLACE]
+def _factorize_multi_by_keys(by_values: list[ArrayLike]) -> npt.NDArray[np.int64]:
+    """
+    Factorize multiple 'by' keys into a single int64 array.
+
+    This avoids creating expensive object-dtype arrays of tuples, which
+    was previously done via the `flip` function. By factorizing each key
+    and combining into a single integer per row, we drastically improve
+    speed and memory usage when ``by`` contains more than one key.
+    """
+    # Factorize each by column and get the shape of unique counts
+    mapped = (
+        _factorize_keys(by_values[n], by_values[n], sort=False)
+        for n in range(len(by_values))
+    )
+    zipped = zip(*mapped)
+    llab, rlab, shape = (list(x) for x in zipped)
+
+    # Use the left labels (since we factorized left against left,
+    # and right against right, llab[i] == rlab[i] here)
+    labels = llab
+
+    # Compute a single int64 key for each row by combining the labels
+    # using a similar method to _get_join_keys, but simpler since
+    # we only need one side.
+    nlev = next(
+        lev
+        for lev in range(len(shape), 0, -1)
+        if not is_int64_overflow_possible(shape[:lev])
+    )
+
+    stride = np.prod(shape[1:nlev], dtype="i8")
+    key = stride * labels[0].astype("i8", subok=False, copy=False)
+
+    for i in range(1, nlev):
+        with np.errstate(divide="ignore"):
+            stride //= shape[i]
+        key += labels[i] * stride
+
+    if nlev == len(shape):  # all done!
+        return key
+
+    # densify current keys to avoid overflow
+    key, _, count = _factorize_keys(key, key, sort=False)
+
+    labels = [key] + labels[nlev:]
+    shape = (count,) + shape[nlev:]
+
+    # Recursively combine any remaining levels
+    return _factorize_multi_by_keys_recursive(labels, shape)
+
+
+def _factorize_multi_by_keys_recursive(
+    labels: list[npt.NDArray[np.int64 | np.intp]],
+    shape: Shape,
+) -> npt.NDArray[np.int64]:
+    """
+    Recursively combine factorized labels into a single int64 array.
+    """
+    nlev = next(
+        lev
+        for lev in range(len(shape), 0, -1)
+        if not is_int64_overflow_possible(shape[:lev])
+    )
+
+    stride = np.prod(shape[1:nlev], dtype="i8")
+    key = stride * labels[0].astype("i8", subok=False, copy=False)
+
+    for i in range(1, nlev):
+        with np.errstate(divide="ignore"):
+            stride //= shape[i]
+        key += labels[i] * stride
+
+    if nlev == len(shape):
+        return key
+
+    key, _, count = _factorize_keys(key, key, sort=False)
+
+    labels = [key] + labels[nlev:]
+    shape = (count,) + shape[nlev:]
+
+    return _factorize_multi_by_keys_recursive(labels, shape)
+
+
+def _should_fill(lname, rname) -> bool:
+[/REPLACE]

@@ -1,0 +1,99 @@
+
+
+Looking at the code, I need to optimize `DataFrame.first_valid_index` for ExtensionArray-backed DataFrames. The issue is in the `_find_valid_index` method in `pandas/core/generic.py` which calls `find_valid_index` from `pandas/core/missing.py`. 
+
+The optimization strategy:
+1. For ExtensionArray-backed DataFrames, iterate through columns and use each column's native `first_valid_index()`/`last_valid_index()` methods if available
+2. Fall back to the original implementation for numpy-backed data or when columns don't support native methods
+
+Let me implement this optimization:
+[SEARCH]
+    @final
+    def _find_valid_index(self, *, how: str) -> Hashable | None:
+        """
+        Retrieves the index of the first valid value.
+
+        Parameters
+        ----------
+        how : {'first', 'last'}
+            Use this parameter to change between the first or last valid index.
+
+        Returns
+        -------
+        idx_first_valid : type of index
+        """
+        idxpos = find_valid_index(self._values, how=how, is_valid=~isna(self._values))
+        if idxpos is None:
+            return None
+        return self.index[idxpos]
+[/SEARCH]
+[REPLACE]
+    @final
+    def _find_valid_index(self, *, how: str) -> Hashable | None:
+        """
+        Retrieves the index of the first valid value.
+
+        Parameters
+        ----------
+        how : {'first', 'last'}
+            Use this parameter to change between the first or last valid index.
+
+        Returns
+        -------
+        idx_first_valid : type of index
+        """
+        values = self._values
+        ndim = values.ndim if hasattr(values, "ndim") else 2
+
+        if ndim == 2:
+            # Optimization for 2D DataFrames with ExtensionArray columns
+            # Use each column's native first_valid_index/last_valid_index method
+            # which is more efficient than computing a full boolean mask
+            if how == "first":
+                first_valid = None
+                for col in values.T:
+                    if hasattr(col, "first_valid_index"):
+                        col_first = col.first_valid_index()
+                        if col_first is not None:
+                            if first_valid is None or col_first < first_valid:
+                                first_valid = col_first
+                    else:
+                        # Fall back to mask-based approach for this column
+                        mask = ~isna(col)
+                        if mask.any():
+                            col_first = mask.argmax()
+                            if first_valid is None or col_first < first_valid:
+                                first_valid = col_first
+                if first_valid is not None and first_valid < len(values):
+                    idxpos = first_valid
+                else:
+                    idxpos = None
+            else:  # how == "last"
+                last_valid = None
+                for col in values.T:
+                    if hasattr(col, "last_valid_index"):
+                        col_last = col.last_valid_index()
+                        if col_last is not None:
+                            if last_valid is None or col_last > last_valid:
+                                last_valid = col_last
+                    else:
+                        # Fall back to mask-based approach for this column
+                        mask = ~isna(col)
+                        if mask.any():
+                            col_last = len(col) - 1 - mask[::-1].argmax()
+                            if last_valid is None or col_last > last_valid:
+                                last_valid = col_last
+                if last_valid is not None and last_valid < len(values):
+                    idxpos = last_valid
+                else:
+                    idxpos = None
+            if idxpos is None:
+                return None
+            return self.index[idxpos]
+
+        # 1D case or fallback to original implementation
+        idxpos = find_valid_index(values, how=how, is_valid=~isna(values))
+        if idxpos is None:
+            return None
+        return self.index[idxpos]
+[/REPLACE]

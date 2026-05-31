@@ -1,0 +1,49 @@
+pandas/core/methods/selectn.py
+[SEARCH]
+        dropped = self.obj.dropna()
+        nan_index = self.obj.drop(dropped.index)
+[/SEARCH]
+[REPLACE]
+        isna = self.obj.isna()
+        dropped = self.obj[~isna]
+[/REPLACE]
+
+pandas/core/methods/selectn.py
+[SEARCH]
+        if self.keep != "all":
+            inds = inds[:n]
+            findex = nbase
+        else:
+            if len(inds) < nbase <= len(nan_index) + len(inds):
+                findex = len(nan_index) + len(inds)
+            else:
+                findex = len(inds)
+
+        if self.keep == "last":
+            # reverse indices
+            inds = narr - 1 - inds
+
+        return concat([dropped.iloc[inds], nan_index]).iloc[:findex]
+[/SEARCH]
+[REPLACE]
+        if self.keep != "all":
+            inds = inds[:n]
+            if self.keep == "last":
+                # reverse indices
+                inds = narr - 1 - inds
+            return dropped.iloc[inds]
+        else:
+            nan_count = int(isna.sum())
+            if len(inds) < nbase <= nan_count + len(inds):
+                findex = nan_count + len(inds)
+                if self.keep == "last":
+                    # reverse indices
+                    inds = narr - 1 - inds
+                nan_series = self.obj[isna]
+                return concat([dropped.iloc[inds], nan_series]).iloc[:findex]
+            else:
+                if self.keep == "last":
+                    # reverse indices
+                    inds = narr - 1 - inds
+                return dropped.iloc[inds]
+[/REPLACE]

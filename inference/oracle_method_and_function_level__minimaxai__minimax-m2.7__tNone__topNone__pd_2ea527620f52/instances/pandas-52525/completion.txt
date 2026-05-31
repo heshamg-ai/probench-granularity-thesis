@@ -1,0 +1,38 @@
+
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        elif self._hasna:
+            data = self.copy()
+            data[self.isna()] = na_value
+            return np.asarray(data._pa_array, dtype=dtype)
+        else:
+            result = np.asarray(self._pa_array, dtype=dtype)
+            if copy:
+                result = result.copy()
+        if self._hasna:
+            result[self.isna()] = na_value
+        return result
+[/SEARCH]
+[REPLACE]
+        elif self._hasna:
+            if (
+                dtype is None
+                or np.issubdtype(dtype, np.floating)
+                or np.issubdtype(dtype, np.integer)
+            ) and na_value is np.nan:
+                # Fast path: use PyArrow's zero-copy conversion with
+                # from_pandas=True to handle NA values as np.nan
+                result = self._pa_array.to_numpy(dtype=dtype, zero_copy_only=False)
+                return result
+            data = self.copy()
+            data[self.isna()] = na_value
+            return np.asarray(data._pa_array, dtype=dtype)
+        else:
+            result = np.asarray(self._pa_array, dtype=dtype)
+            if copy:
+                result = result.copy()
+        if self._hasna:
+            result[self.isna()] = na_value
+        return result
+[/REPLACE]

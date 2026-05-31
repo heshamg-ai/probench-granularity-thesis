@@ -1,0 +1,340 @@
+ pandas/_testing/asserters.py
+[SEARCH]
+def raise_assert_detail(
+    obj, message, left, right, diff=None, first_diff=None, index_values=None
+):
+    __tracebackhide__ = True
+    msg = f"""{obj} are different
+
+{message}
+"""
+
+    if isinstance(index_values, Index):
+        index_values = np.array(index_values)
+
+    if isinstance(index_values, np.ndarray):
+        msg += f"\n[index]: {pprint_thing(index_values)}"
+
+    if isinstance(left, np.ndarray):
+        left = pprint_thing(left)
+    elif isinstance(left, (CategoricalDtype, NumpyEADtype, StringDtype)):
+        left = repr(left)
+
+    if isinstance(right, np.ndarray):
+        right = pprint_thing(right)
+    elif isinstance(right, (CategoricalDtype, NumpyEADtype, StringDtype)):
+        right = repr(right)
+
+    msg += f"""
+[left]:  {left}
+[right]: {right}
+"""
+
+    if diff is not None:
+        msg += f"\n[diff]: {diff}"
+
+    if first_diff is not None:
+        msg += f"\n{first_diff}"
+
+    raise AssertionError(msg)
+[/SEARCH]
+[REPLACE]
+def raise_assert_detail(
+    obj, message, left, right, diff=None, first_diff=None, index_values=None
+):
+    __tracebackhide__ = True
+    msg = f"{obj} are different\n{message}"
+
+    if isinstance(index_values, Index):
+        index_values = np.array(index_values)
+
+    if isinstance(index_values, np.ndarray):
+        msg += f"\n[index]: {pprint_thing(index_values)}"
+
+    if isinstance(left, np.ndarray):
+        left = pprint_thing(left)
+    elif isinstance(left, (CategoricalDtype, NumpyEADtype, StringDtype)):
+        left = repr(left)
+
+    if isinstance(right, np.ndarray):
+        right = pprint_thing(right)
+    elif isinstance(right, (CategoricalDtype, NumpyEADtype, StringDtype)):
+        right = repr(right)
+
+    msg += f"\n[left]:  {left}\n[right]: {right}"
+
+    if diff is not None:
+        msg += f"\n[diff]: {diff}"
+
+    if first_diff is not None:
+        msg += f"\n{first_diff}"
+
+    raise AssertionError(msg)
+[/REPLACE]
+
+pandas/_testing/asserters.py
+[SEARCH]
+    # MultiIndex special comparison for little-friendly error messages
+    if isinstance(left, MultiIndex):
+        right = cast(MultiIndex, right)
+
+        for level in range(left.nlevels):
+            lobj = f"MultiIndex level [{level}]"
+
+            try:
+                # try comparison on levels/codes to avoid densifying MultiIndex
+                assert_index_equal(
+                    left.levels[level],
+                    right.levels[level],
+                    exact=exact,
+                    check_names=check_names,
+                    check_exact=check_exact,
+                    check_categorical=check_categorical,
+                    rtol=rtol,
+                    atol=atol,
+                    obj=lobj,
+                )
+                assert_numpy_array_equal(left.codes[level], right.codes[level])
+            except AssertionError:
+                # cannot use get_level_values here because it can change dtype
+                llevel = _get_ilevel_values(left, level)
+                rlevel = _get_ilevel_values(right, level)
+                assert_index_equal(
+                    llevel,
+                    rlevel,
+                    exact=exact,
+                    check_names=check_names,
+                    check_exact=check_exact,
+                    check_categorical=check_categorical,
+                    rtol=rtol,
+                    atol=atol,
+                    obj=lobj,
+                )
+                # get_level_values may change dtype
+                _check_types(left.levels[level], right.levels[level], obj=obj)
+[/SEARCH]
+[REPLACE]
+    # MultiIndex special comparison for little-friendly error messages
+    if isinstance(left, MultiIndex):
+        right = cast(MultiIndex, right)
+
+        # Fast path: check equality of levels and codes first without
+        # constructing expensive error messages on failure.
+        for level in range(left.nlevels):
+            lobj = f"MultiIndex level [{level}]"
+
+            # Compare levels
+            llevel = left.levels[level]
+            rlevel = right.levels[level]
+            try:
+                assert_index_equal(
+                    llevel,
+                    rlevel,
+                    exact=exact,
+                    check_names=check_names,
+                    check_exact=check_exact,
+                    check_categorical=check_categorical,
+                    rtol=rtol,
+                    atol=atol,
+                    obj=lobj,
+                )
+            except AssertionError:
+                # Re-raise with informative message
+                raise
+
+            # Compare codes directly (fast numeric comparison)
+            lcodes = left.codes[level]
+            rcodes = right.codes[level]
+            if not (lcodes == rcodes).all():
+                # Only densify for error message on mismatch
+                llevel_vals = _get_ilevel_values(left, level)
+                rlevel_vals = _get_ilevel_values(right, level)
+                assert_index_equal(
+                    llevel_vals,
+                    rlevel_vals,
+                    exact=exact,
+                    check_names=check_names,
+                    check_exact=check_exact,
+                    check_categorical=check_categorical,
+                    rtol=rtol,
+                    atol=atol,
+                    obj=lobj,
+                )
+                # get_level_values may change dtype
+                _check_types(llevel, rlevel, obj=obj)
+[/REPLACE]
+
+pandas/_testing/asserters.py
+[SEARCH]
+def _get_ilevel_values(index, level):
+    # accept level number only
+    unique = index.levels[level]
+    level_codes = index.codes[level]
+    filled = take_nd(unique._values, level_codes, fill_value=unique._na_value)
+    return unique._shallow_copy(filled, name=index.names[level])
+[/SEARCH]
+[REPLACE]
+def _get_ilevel_values(index, level):
+    # accept level number only
+    unique = index.levels[level]
+    level_codes = index.codes[level]
+    # Avoid densifying if codes are identical (fast path already checked)
+    # This is only called when we need to construct an error message
+    filled = take_nd(unique._values, level_codes, fill_value=unique._na_value)
+    return unique._shallow_copy(filled, name=index.names[level])
+[/REPLACE]
+
+pandas/core/dtypes/missing.py
+[SEARCH]
+def _array_equivalent_object(left: np.ndarray, right: np.ndarray, strict_nan: bool):
+    if not strict_nan:
+        # isna considers NaN and None to be equivalent.
+        return lib.array_equivalent_object(
+            ensure_object(left), ensure_object(right)
+        )
+
+    for left_value, right_value in zip(left, right):
+        if left_value is NaT and right_value is not NaT:
+            return False
+        elif left_value is libmissing.NA and right_value is not libmissing.NA:
+            return False
+        elif isinstance(left_value, float) and np.isnan(left_value):
+            if not isinstance(right_value, float) or not np.isnan(right_value):
+                return False
+        else:
+            with warnings.catch_warnings():
+                # suppress numpy's "elementwise comparison failed"
+                warnings.simplefilter("ignore", DeprecationWarning)
+                try:
+                    if np.any(np.asarray(left_value != right_value)):
+                        return False
+                except TypeError as err:
+                    if "boolean value of NA is ambiguous" in str(err):
+                        return False
+                    raise
+                except ValueError:
+                    # numpy can raise a ValueError if left and right cannot be
+                    # compared (e.g. nested arrays)
+                    return False
+
+    return True
+[/SEARCH]
+[REPLACE]
+def _array_equivalent_object(left: np.ndarray, right: np.ndarray, strict_nan: bool):
+    if not strict_nan:
+        # isna considers NaN and None to be equivalent.
+        return lib.array_equivalent_object(
+            ensure_object(left), ensure_object(right)
+        )
+
+    for left_value, right_value in zip(left, right):
+        if left_value is NaT:
+            if right_value is not NaT:
+                return False
+        elif left_value is libmissing.NA:
+            if right_value is not libmatching.NA:
+                return False
+        elif isinstance(left_value, float) and np.isnan(left_value):
+            if not isinstance(right_value, float) or not np.isnan(right_value):
+                return False
+        elif left_value is right_value:
+            # Fast identity check for common cases (same object, strings, ints)
+            continue
+        else:
+            with warnings.catch_warnings():
+                # suppress numpy's "elementwise comparison failed"
+                warnings.simplefilter("ignore", DeprecationWarning)
+                try:
+                    if np.any(np.asarray(left_value != right_value)):
+                        return False
+                except TypeError as err:
+                    if "boolean value of NA is ambiguous" in str(err):
+                        return False
+                    raise
+                except ValueError:
+                    # numpy can raise a ValueError if left and right cannot be
+                    # compared (e.g. nested arrays)
+                    return False
+
+    return True
+[/REPLACE]
+
+pandas/core/dtypes/missing.py
+[SEARCH]
+def _array_equivalent_object(left: np.ndarray, right: np.ndarray, strict_nan: bool):
+    if not strict_nan:
+        # isna considers NaN and None to be equivalent.
+        return lib.array_equivalent_object(
+            ensure_object(left), ensure_object(right)
+        )
+
+    for left_value, right_value in zip(left, right):
+        if left_value is NaT:
+            if right_value is not NaT:
+                return False
+        elif left_value is libmissing.NA:
+            if right_value is not libmatching.NA:
+                return False
+        elif isinstance(left_value, float) and np.isnan(left_value):
+            if not isinstance(right_value, float) or not np.isnan(right_value):
+                return False
+        elif left_value is right_value:
+            # Fast identity check for common cases (same object, strings, ints)
+            continue
+        else:
+            with warnings.catch_warnings():
+                # suppress numpy's "elementwise comparison failed"
+                warnings.simplefilter("ignore", DeprecationWarning)
+                try:
+                    if np.any(np.asarray(left_value != right_value)):
+                        return False
+                except TypeError as err:
+                    if "boolean value of NA is ambiguous" in str(err):
+                        return False
+                    raise
+                except ValueError:
+                    # numpy can raise a ValueError if left and right cannot be
+                    # compared (e.g. nested arrays)
+                    return False
+
+    return True
+[/SEARCH]
+[REPLACE]
+def _array_equivalent_object(left: np.ndarray, right: np.ndarray, strict_nan: bool):
+    if not strict_nan:
+        # isna considers NaN and None to be equivalent.
+        return lib.array_equivalent_object(
+            ensure_object(left), ensure_object(right)
+        )
+
+    for left_value, right_value in zip(left, right):
+        if left_value is NaT:
+            if right_value is not NaT:
+                return False
+        elif left_value is libmissing.NA:
+            if right_value is not libmissing.NA:
+                return False
+        elif isinstance(left_value, float) and np.isnan(left_value):
+            if not isinstance(right_value, float) or not np.isnan(right_value):
+                return False
+        elif left_value is right_value:
+            # Fast identity check for common cases (same object, strings, ints)
+            continue
+        else:
+            with warnings.catch_warnings():
+                # suppress numpy's "elementwise comparison failed"
+                warnings.simplefilter("ignore", DeprecationWarning)
+                try:
+                    if np.any(np.asarray(left_value != right_value)):
+                        return False
+                except TypeError as err:
+                    if "boolean value of NA is ambiguous" in str(err):
+                        return False
+                    raise
+                except ValueError:
+                    # numpy can raise a ValueError if left and right cannot be
+                    # compared (e.g. nested arrays)
+                    return False
+
+    return True
+[/REPLACE]

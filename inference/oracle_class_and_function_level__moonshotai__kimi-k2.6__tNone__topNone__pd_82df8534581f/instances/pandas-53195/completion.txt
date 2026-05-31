@@ -1,0 +1,378 @@
+ I'll analyze the optimization opportunity for `DataFrameGroupBy.apply` with `group_keys=True` and many groups. The key bottleneck is in the concatenation step where `_make_concat_multiindex` rebuilds the MultiIndex from scratch for each group, which is very expensive when there are many groups.
+
+The optimization involves avoiding the repeated creation of MultiIndex levels when we already know the structure. We can optimize `_Concatenator._get_concat_axis` and `_make_concat_multiindex` to handle the case where we have many groups more efficiently.
+
+Let me trace through the code path and identify the specific optimizations:
+
+1. In `_get_concat_axis`, when `self.keys` is provided and we have many objects, we can optimize the `_make_concat_multiindex` path
+2. In `_make_concat_multiindex`, there's a fast path when `all_indexes_same(indexes)` and levels are unique - we can optimize this further for the common case in groupby.apply
+
+The main insight is that in `groupby.apply(group_keys=True)`, we have:
+- Many objects (one per group)
+- All indexes are often the same structure (same columns)
+- Keys are the group keys
+
+The optimization is to avoid repeated `ensure_index` calls and to use faster array operations when building the MultiIndex codes.
+
+panda/core/reshape/concat.py
+[SEARCH]
+    def _get_concat_axis(self) -> Index:
+        """
+        Return index to be used along concatenation axis.
+        """
+        if self._is_series:
+            if self.bm_axis == 0:
+                indexes = [x.index for x in self.objs]
+            elif self.ignore_index:
+                idx = default_index(len(self.objs))
+                return idx
+            elif self.keys is None:
+                names: list[Hashable] = [None] * len(self.objs)
+                num = 0
+                has_names = False
+                for i, x in enumerate(self.objs):
+                    if x.ndim != 1:
+                        raise TypeError(
+                            f"Cannot concatenate type 'Series' with "
+                            f"object of type '{type(x).__name__}'"
+                        )
+                    if x.name is not None:
+                        names[i] = x.name
+                        has_names = True
+                    else:
+                        names[i] = num
+                        num += 1
+
+                if has_names:
+                    return Index(names)
+                else:
+                    return default_index(len(self.objs))
+            else:
+                return ensure_index(self.keys).set_names(self.names)
+
+        else:
+            indexes = [x.axes[self.axis] for x in self.objs]
+            if self.ignore_index:
+                idx = default_index(sum(len(i) for i in indexes))
+                return idx
+
+            if self.keys is None:
+                if self.levels is not None:
+                    raise ValueError("levels supported only when keys is not None")
+
+                concat_axis = _concat_indexes(indexes)
+
+            else:
+                concat_axis = _make_concat_multiindex(
+                    indexes, self.keys, self.levels, self.names
+                )
+
+            self._maybe_check_integrity(concat_axis)
+            return concat_axis
+[/SEARCH]
+[REPLACE]
+    def _get_concat_axis(self) -> Index:
+        """
+        Return index to be used along concatenation axis.
+        """
+        if self._is_series:
+            if self.bm_axis == 0:
+                indexes = [x.index for x in self.objs]
+            elif self.ignore_index:
+                idx = default_index(len(self.objs))
+                return idx
+            elif self.keys is None:
+                names: list[Hashable] = [None] * len(self.objs)
+                num = 0
+                has_names = False
+                for i, x in enumerate(self.objs):
+                    if x.ndim != 1:
+                        raise TypeError(
+                            f"Cannot concatenate type 'Series' with "
+                            f"object of type '{type(x).__name__}'"
+                        )
+                    if x.name is not None:
+                        names[i] = x.name
+                        has_names = True
+                    else:
+                        names[i] = num
+                        num += 1
+
+                if has_names:
+                    return Index(names)
+                else:
+                    return default_index(len(self.objs))
+            else:
+                return ensure_index(self.keys).set_names(self.names)
+
+        else:
+            indexes = [x.axes[self.axis] for x in self.objs]
+            if self.ignore_index:
+                idx = default_index(sum(len(i) for i in indexes))
+                return idx
+
+            if self.keys is None:
+                if self.levels is not None:
+                    raise ValueError("levels supported only when keys is not None")
+
+                concat_axis = _concat_indexes(indexes)
+
+            else:
+                concat_axis = _make_concat_multiindex(
+                    indexes, self.keys, self.levels, self.names
+                )
+
+            self._maybe_check_integrity(concat_axis)
+            return concat_axis
+[/REPLACE]
+
+panda/core/reshape/concat.py
+[SEARCH]
+def _make_concat_multiindex(indexes, keys, levels=None, names=None) -> MultiIndex:
+    if (levels is None and isinstance(keys[0], tuple)) or (
+        levels is not None and len(levels) > 1
+    ):
+        zipped = list(zip(*keys))
+        if names is None:
+            names = [None] * len(zipped)
+
+        if levels is None:
+            _, levels = factorize_from_iterables(zipped)
+        else:
+            levels = [ensure_index(x) for x in levels]
+    else:
+        zipped = [keys]
+        if names is None:
+            names = [None]
+
+        if levels is None:
+            levels = [ensure_index(keys).unique()]
+        else:
+            levels = [ensure_index(x) for x in levels]
+
+    for level in levels:
+        if not level.is_unique:
+            raise ValueError(f"Level values not unique: {level.tolist()}")
+
+    if not all_indexes_same(indexes) or not all(level.is_unique for level in levels):
+        codes_list = []
+        # things are potentially different sizes, so compute the exact codes
+        # for each level and pass those to MultiIndex.from_arrays
+        for hlevel, level in zip(zipped, levels):
+            to_concat = []
+            for key, index in zip(hlevel, indexes):
+                # Find matching codes, include matching nan values as equal.
+                mask = (isna(level) & isna(key)) | (level == key)
+                if not mask.any():
+                    raise ValueError(f"Key {key} not in level {level}")
+                i = np.nonzero(mask)[0][0]
+                to_concat.append(np.repeat(i, len(index)))
+            codes_list.append(np.concatenate(to_concat))
+
+        concat_index = _concat_indexes(indexes)
+
+        # these go at the end
+        if isinstance(concat_index, MultiIndex):
+            levels.extend(concat_index.levels)
+            codes_list.extend(concat_index.codes)
+        else:
+            codes, categories = factorize_from_iterable(concat_index)
+            levels.append(categories)
+            codes_list.append(codes)
+
+        if len(names) == len(levels):
+            names = list(names)
+        else:
+            # make sure that all of the passed indices have the same nlevels
+            if not len({idx.nlevels for idx in indexes}) == 1:
+                raise AssertionError(
+                    "Cannot concat indices that do not have the same number of levels"
+                )
+            # also copies
+            names = list(names) + list(get_unanimous_names(*indexes))
+
+        return MultiIndex(
+            levels=levels,
+            codes=codes_list,
+            names=names,
+            verify_integrity=False,
+        )
+
+    new_index = indexes[0]
+    n = len(new_index)
+    kpieces = len(indexes)
+    # also copies
+    new_names = list(names)
+    new_levels = list(levels)
+
+    # construct codes
+    new_codes = []
+
+    # do something a bit more speedy
+
+    for hlevel, level in zip(zipped, levels):
+        hlevel = ensure_index(hlevel)
+        mapped = level.get_indexer(hlevel)
+
+        mask = mapped == -1
+        if mask.any():
+            raise ValueError(f"Values not found in passed level: {hlevel[mask]!s}")
+
+        new_codes.append(np.repeat(mapped, n))
+
+    if isinstance(new_index, MultiIndex):
+        new_levels.extend(new_index.levels)
+        new_codes.extend([np.tile(lab, kpieces) for lab in new_index.codes])
+    else:
+        new_levels.append(new_index.unique())
+        single_codes = new_index.unique().get_indexer(new_index)
+        new_codes.append(np.tile(single_codes, kpieces))
+
+    if len(new_names) < len(new_levels):
+        new_names.extend(new_index.names)
+
+    return MultiIndex(
+        levels=new_levels,
+        codes=new_codes,
+        names=new_names,
+        verify_integrity=False,
+    )
+[/SEARCH]
+[REPLACE]
+def _make_concat_multiindex(indexes, keys, levels=None, names=None) -> MultiIndex:
+    if (levels is None and isinstance(keys[0], tuple)) or (
+        levels is not None and len(levels) > 1
+    ):
+        zipped = list(zip(*keys))
+        if names is None:
+            names = [None] * len(zipped)
+
+        if levels is None:
+            _, levels = factorize_from_iterables(zipped)
+        else:
+            levels = [ensure_index(x) for x in levels]
+    else:
+        zipped = [keys]
+        if names is None:
+            names = [None]
+
+        if levels is None:
+            levels = [ensure_index(keys).unique()]
+        else:
+            levels = [ensure_index(x) for x in levels]
+
+    for level in levels:
+        if not level.is_unique:
+            raise ValueError(f"Level values not unique: {level.tolist()}")
+
+    if not all_indexes_same(indexes) or not all(level.is_unique for level in levels):
+        codes_list = []
+        # things are potentially different sizes, so compute the exact codes
+        # for each level and pass those to MultiIndex.from_arrays
+        for hlevel, level in zip(zipped, levels):
+            to_concat = []
+            # Use a dict for O(1) lookup when we have many groups
+            # Convert level to a dict for faster repeated lookups
+            level_arr = np.asarray(level)
+            level_dict = {}
+            for i, val in enumerate(level_arr):
+                if isna(val):
+                    level_dict[("_pd_na_", i)] = i  # Use unique key for each NA
+                else:
+                    level_dict[val] = i
+            
+            for key, index in zip(hlevel, indexes):
+                # Find matching codes, include matching nan values as equal.
+                if isna(key):
+                    # Find first NA in level
+                    for k, v in level_dict.items():
+                        if isinstance(k, tuple) and k[0] == "_pd_na_":
+                            i = v
+                            break
+                else:
+                    i = level_dict.get(key)
+                    if i is None:
+                        # Fallback to array search
+                        mask = level_arr == key
+                        if not mask.any():
+                            raise ValueError(f"Key {key} not in level {level}")
+                        i = np.nonzero(mask)[0][0]
+                        level_dict[key] = i
+                to_concat.append(np.repeat(i, len(index)))
+            codes_list.append(np.concatenate(to_concat))
+
+        concat_index = _concat_indexes(indexes)
+
+        # these go at the end
+        if isinstance(concat_index, MultiIndex):
+            levels.extend(concat_index.levels)
+            codes_list.extend(concat_index.codes)
+        else:
+            codes, categories = factorize_from_iterable(concat_index)
+            levels.append(categories)
+            codes_list.append(codes)
+
+        if len(names) == len(levels):
+            names = list(names)
+        else:
+            # make sure that all of the passed indices have the same nlevels
+            if not len({idx.nlevels for idx in indexes}) == 1:
+                raise AssertionError(
+                    "Cannot concat indices that do not have the same number of levels"
+                )
+            # also copies
+            names = list(names) + list(get_unanimous_names(*indexes))
+
+        return MultiIndex(
+            levels=levels,
+            codes=codes_list,
+            names=names,
+            verify_integrity=False,
+        )
+
+    new_index = indexes[0]
+    n = len(new_index)
+    kpieces = len(indexes)
+    # also copies
+    new_names = list(names)
+    new_levels = list(levels)
+
+    # construct codes
+    new_codes = []
+
+    # do something a bit more speedy
+
+    for hlevel, level in zip(zipped, levels):
+        # Optimize: avoid ensure_index call if already an Index
+        if not isinstance(hlevel, Index):
+            hlevel = ensure_index(hlevel)
+        # Optimize: when kpieces is large, use get_indexer_for which may be faster
+        if kpieces > 100 and hasattr(level, 'get_indexer_for'):
+            mapped = level.get_indexer_for(hlevel)
+        else:
+            mapped = level.get_indexer(hlevel)
+
+        mask = mapped == -1
+        if mask.any():
+            raise ValueError(f"Values not found in passed level: {hlevel[mask]!s}")
+
+        new_codes.append(np.repeat(mapped, n))
+
+    if isinstance(new_index, MultiIndex):
+        new_levels.extend(new_index.levels)
+        new_codes.extend([np.tile(lab, kpieces) for lab in new_index.codes])
+    else:
+        new_levels.append(new_index.unique())
+        single_codes = new_index.unique().get_indexer(new_index)
+        new_codes.append(np.tile(single_codes, kpieces))
+
+    if len(new_names) < len(new_levels):
+        new_names.extend(new_index.names)
+
+    return MultiIndex(
+        levels=new_levels,
+        codes=new_codes,
+        names=new_names,
+        verify_integrity=False,
+    )
+[/REPLACE]

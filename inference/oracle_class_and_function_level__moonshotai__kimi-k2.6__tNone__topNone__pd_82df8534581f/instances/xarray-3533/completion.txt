@@ -1,0 +1,57 @@
+xarray/core/dataarray.py
+[SEARCH]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/SEARCH]
+[REPLACE]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        if not indexers:
+            return self.copy(deep=False)
+
+        # Check if all indexers are integers — if so, we can avoid the
+        # expensive Dataset round-trip for small arrays.
+        if all(isinstance(v, int) for v in indexers.values()):
+            # Fast path for integer indexers on small arrays
+            variable = self.variable.isel(indexers=indexers)
+            coords: Dict[Hashable, "Variable"] = {}
+            for k, v in self._coords.items():
+                coord_indexers = {d: indexers[d] for d in v.dims if d in indexers}
+                if coord_indexers:
+                    coords[k] = v.isel(indexers=coord_indexers)
+                else:
+                    coords[k] = v.copy(deep=False)
+            indexes = propagate_indexes(self._indexes, exclude=indexers.keys())
+            return self._replace(variable, coords, indexes=indexes)
+
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/REPLACE]

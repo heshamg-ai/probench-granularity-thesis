@@ -1,0 +1,174 @@
+
+
+Looking at the code, I need to optimize `DataArray.groupby` when grouping by cftime object arrays. The main bottlenecks are:
+
+1. `UniqueGrouper.group_as_index` - repeated conversion to pd.Index for cftime arrays
+2. `unique_value_groups` - using `pd.factorize` which has overhead for cftime objects
+
+Let me implement the optimizations:
+
+xarray/groupers.py
+[SEARCH]
+@dataclass
+class UniqueGrouper(Grouper):
+    """Grouper object for grouping by a categorical variable."""
+
+    _group_as_index: pd.Index | None = field(default=None, repr=False)
+
+    @property
+    def group_as_index(self) -> pd.Index:
+        """Caches the group DataArray as a pandas Index."""
+        if self._group_as_index is None:
+            if self.group.ndim == 1:
+                self._group_as_index = self.group.to_index()
+            else:
+                self._group_as_index = pd.Index(np.array(self.group).ravel())
+        return self._group_as_index
+[/SEARCH]
+[REPLACE]
+@dataclass
+class UniqueGrouper(Grouper):
+    """Grouper object for grouping by a categorical variable."""
+
+    _group_as_index: pd.Index | np.ndarray | None = field(default=None, repr=False)
+    _group_as_index_group: T_Group | None = field(default=None, repr=False)
+
+    @property
+    def group_as_index(self) -> pd.Index | np.ndarray:
+        """Caches the group DataArray as a pandas Index or array."""
+        if (
+            self._group_as_index is not None
+            and self._group_as_index_group is self.group
+        ):
+            return self._group_as_index
+        if self.group.ndim == 1:
+            self._group_as_index = self.group.to_index()
+        else:
+            # Use asarray to avoid copying cftime objects
+            self._group_as_index = np.asarray(self.group.data).ravel()
+        self._group_as_index_group = self.group
+        return self._group_as_index
+[/REPLACE]
+
+xarray/groupers.py
+[SEARCH]
+    def _factorize_unique(self) -> EncodedGroups:
+        # look through group to find the unique values
+        sort = not isinstance(self.group_as_index, pd.MultiIndex)
+        unique_values, codes_ = unique_value_groups(self.group_as_index, sort=sort)
+        if (codes_ == -1).all():
+            raise ValueError(
+                "Failed to group data. Are you grouping by a variable that is all NaN?"
+            )
+        codes = self.group.copy(data=codes_.reshape(self.group.shape))
+        unique_coord = Variable(
+            dims=codes.name, data=unique_values, attrs=self.group.attrs
+        )
+        full_index = pd.Index(unique_values)
+
+        return EncodedGroups(
+            codes=codes,
+            full_index=full_index,
+            unique_coord=unique_coord,
+            coords=_coordinates_from_variable(unique_coord),
+        )
+[/SEARCH]
+[REPLACE]
+    def _factorize_unique(self) -> EncodedGroups:
+        # look through group to find the unique values
+        index = self.group_as_index
+        is_multi = isinstance(index, pd.MultiIndex)
+        sort = not is_multi
+
+        if is_multi:
+            unique_values, codes_ = pd.factorize(index, sort=False)
+            index.names = self.group.name  # type: ignore[union-attr]
+        else:
+            # Use numpy's unique for better performance with cftime objects
+            # np.unique is faster than pd.factorize for arrays of cftime objects
+            unique_values, codes_ = np.unique(index, return_inverse=True)
+
+        if (codes_ == -1).all():
+            raise ValueError(
+                "Failed to group data. Are you grouping by a variable that is all NaN?"
+            )
+        codes = self.group.copy(data=codes_.reshape(self.group.shape))
+        unique_coord = Variable(
+            dims=codes.name, data=unique_values, attrs=self.group.attrs
+        )
+        full_index = pd.Index(unique_values)
+
+        return EncodedGroups(
+            codes=codes,
+            full_index=full_index,
+            unique_coord=unique_coord,
+            coords=_coordinates_from_variable(unique_coord),
+        )
+[/REPLACE]
+
+xarray/groupers.py
+[SEARCH]
+def unique_value_groups(
+    ar, sort: bool = True
+) -> tuple[np.ndarray | pd.Index, np.ndarray]:
+    """Group an array by its unique values.
+
+    Parameters
+    ----------
+    ar : array-like
+        Input array. This will be flattened if it is not already 1-D.
+    sort : bool, default: True
+        Whether or not to sort unique values.
+
+    Returns
+    -------
+    values : np.ndarray
+        Sorted, unique values as returned by `np.unique`.
+    indices : list of lists of int
+        Each element provides the integer indices in `ar` with values given by
+        the corresponding value in `unique_values`.
+    """
+    inverse, values = pd.factorize(ar, sort=sort)
+    if isinstance(values, pd.MultiIndex):
+        values.names = ar.names
+    return values, inverse
+[/SEARCH]
+[REPLACE]
+def unique_value_groups(
+    ar, sort: bool = True
+) -> tuple[np.ndarray | pd.Index, np.ndarray]:
+    """Group an array by its unique values.
+
+    Parameters
+    ----------
+    ar : array-like
+        Input array. This will be flattened if it is not already 1-D.
+    sort : bool, default: True
+        Whether or not to sort unique values.
+
+    Returns
+    -------
+    values : np.ndarray
+        Sorted, unique values as returned by `np.unique`.
+    indices : list of lists of int
+        Each element provides the integer indices in `ar` with values given by
+        the corresponding value in `unique_values`.
+    """
+    if isinstance(ar, pd.MultiIndex):
+        inverse, values = pd.factorize(ar, sort=sort)
+        values.names = ar.names
+    else:
+        # Use numpy's unique for better performance with cftime objects
+        # np.unique is faster than pd.factorize for arrays of cftime objects
+        if sort:
+            unique_values, inverse = np.unique(ar, return_inverse=True)
+        else:
+            # When sort=False, simulate pd.factorize behavior: preserve first-seen order
+            _, indices = np.unique(ar, return_index=True)
+            sorted_indices = np.sort(indices)
+            inverse = np.empty_like(ar, dtype=np.intp)
+            inverse[sorted_indices] = np.arange(len(sorted_indices))
+            unique_values = ar[sorted_indices]
+        values = unique_values
+    return values, inverse
+[/REPLACE]

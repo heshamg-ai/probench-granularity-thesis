@@ -1,0 +1,30 @@
+pandas/core/generic.py
+[SEARCH]
+        if not cond.empty:
+            if not isinstance(cond, ABCDataFrame):
+                # This is a single-dimensional object.
+                if not is_bool_dtype(cond):
+                    raise ValueError(msg.format(dtype=cond.dtype))
+            else:
+                for _dt in cond.dtypes:
+                    if not is_bool_dtype(_dt):
+                        raise ValueError(msg.format(dtype=_dt))
+        else:
+            # GH#21947 we have an empty DataFrame/Series, could be object-dtype
+            cond = cond.astype(bool)
+[/SEARCH]
+[REPLACE]
+        if not cond.empty:
+            if not isinstance(cond, ABCDataFrame):
+                # This is a single-dimensional object.
+                if not is_bool_dtype(cond):
+                    raise ValueError(msg.format(dtype=cond.dtype))
+            else:
+                if not (cond.dtypes == bool).all():
+                    for _dt in cond.dtypes:
+                        if not is_bool_dtype(_dt):
+                            raise ValueError(msg.format(dtype=_dt))
+        else:
+            # GH#21947 we have an empty DataFrame/Series, could be object-dtype
+            cond = cond.astype(bool)
+[/REPLACE]

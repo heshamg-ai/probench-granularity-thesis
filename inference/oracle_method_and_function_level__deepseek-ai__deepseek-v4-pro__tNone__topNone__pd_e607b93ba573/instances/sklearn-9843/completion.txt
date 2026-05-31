@@ -1,0 +1,89 @@
+sklearn/metrics/_classification.py
+[SEARCH]
+    n_labels = labels.size
+    label_to_ind = {y: x for x, y in enumerate(labels)}
+    # convert yt, yp into index
+    y_pred = np.array([label_to_ind.get(x, n_labels + 1) for x in y_pred])
+    y_true = np.array([label_to_ind.get(x, n_labels + 1) for x in y_true])
+
+    # intersect y_pred, y_true with labels, eliminate items not in labels
+    ind = np.logical_and(y_pred < n_labels, y_true < n_labels)
+    y_pred = y_pred[ind]
+    y_true = y_true[ind]
+    # also eliminate weights of eliminated items
+    sample_weight = sample_weight[ind]
+
+    # Choose the accumulator dtype to always have high precision
+    if sample_weight.dtype.kind in {'i', 'u', 'b'}:
+        dtype = np.int64
+    else:
+        dtype = np.float64
+
+    cm = coo_matrix((sample_weight, (y_true, y_pred)),
+                    shape=(n_labels, n_labels), dtype=dtype,
+                    ).toarray()
+[/SEARCH]
+[REPLACE]
+    n_labels = labels.size
+    label_to_ind = {y: x for x, y in enumerate(labels)}
+
+    # Fast path for integral labels (no dict lookup overhead)
+    if _is_integral_type(y_true) and _is_integral_type(y_pred):
+        y_true = np.asarray(y_true, dtype=np.intp)
+        y_pred = np.asarray(y_pred, dtype=np.intp)
+        # Map each label to its index via array lookup (faster than dict)
+        max_label = labels.max()
+        # Build a mapping array large enough to cover label values
+        mapper = np.full(max_label + 1, n_labels + 1, dtype=np.intp)
+        mapper[labels] = np.arange(n_labels, dtype=np.intp)
+        y_pred = mapper[y_pred.clip(0, max_label)]
+        y_true = mapper[y_true.clip(0, max_label)]
+    else:
+        # convert yt, yp into index
+        y_pred = np.array([label_to_ind.get(x, n_labels + 1) for x in y_pred])
+        y_true = np.array([label_to_ind.get(x, n_labels + 1) for x in y_true])
+
+    # intersect y_pred, y_true with labels, eliminate items not in labels
+    ind = np.logical_and(y_pred < n_labels, y_true < n_labels)
+    y_pred = y_pred[ind]
+    y_true = y_true[ind]
+    # also eliminate weights of eliminated items
+    sample_weight = sample_weight[ind]
+
+    # Choose the accumulator dtype to always have high precision
+    if sample_weight.dtype.kind in {'i', 'u', 'b'}:
+        dtype = np.int64
+    else:
+        dtype = np.float64
+
+    cm = coo_matrix((sample_weight, (y_true, y_pred)),
+                    shape=(n_labels, n_labels), dtype=dtype,
+                    ).toarray()
+[/REPLACE]
+
+sklearn/metrics/_classification.py
+[SEARCH]
+@_deprecate_positional_args
+def confusion_matrix(y_true, y_pred, *, labels=None, sample_weight=None,
+                     normalize=None):
+[/SEARCH]
+[REPLACE]
+def _is_integral_type(arr):
+    """Return True if the array has an integer dtype or contains only
+    integral values (without iterating the whole array)."""
+    if not hasattr(arr, 'dtype'):
+        arr = np.asarray(arr)
+    if np.issubdtype(arr.dtype, np.integer):
+        return True
+    # For object/string arrays, or lists, quick check first element
+    if arr.size > 0:
+        val = arr.flat[0]
+        if isinstance(val, (int, np.integer)):
+            return True
+    return False
+
+
+@_deprecate_positional_args
+def confusion_matrix(y_true, y_pred, *, labels=None, sample_weight=None,
+                     normalize=None):
+[/REPLACE]

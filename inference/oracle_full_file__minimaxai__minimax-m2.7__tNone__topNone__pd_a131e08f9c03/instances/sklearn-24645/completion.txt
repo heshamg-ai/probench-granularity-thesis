@@ -1,0 +1,42 @@
+
+
+sklearn/neighbors/_nearest_centroid.py
+[SEARCH]
+        check_is_fitted(self)
+
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        return self.classes_[
+            pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)
+        ]
+[/SEARCH]
+[REPLACE]
+        check_is_fitted(self)
+
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        # Use pairwise_distances_argmin_min to compute argmin without
+        # materializing the full distance matrix, for better memory efficiency.
+        # Fall back to batched computation for very large inputs.
+        n_samples = X.shape[0]
+        # Threshold for switching to batched computation to limit peak memory.
+        # With n_classes centroids, the distance matrix is (n_samples, n_classes).
+        _MEMORY_BATCH_THRESHOLD = 1000000  # ~8 MB for float64
+        if n_samples * self.centroids_.shape[0] <= _MEMORY_BATCH_THRESHOLD:
+            return self.classes_[
+                pairwise_distances_argmin_min(
+                    X, self.centroids_, metric=self.metric
+                )[0]
+            ]
+        else:
+            # Process in batches to limit peak memory usage.
+            batch_size = 10000
+            labels = np.empty(n_samples, dtype=self.classes_.dtype)
+            for start in range(0, n_samples, batch_size):
+                end = min(start + batch_size, n_samples)
+                X_batch = X[start:end]
+                labels[start:end] = self.classes_[
+                    pairwise_distances_argmin_min(
+                        X_batch, self.centroids_, metric=self.metric
+                    )[0]
+                ]
+            return labels
+[/REPLACE]

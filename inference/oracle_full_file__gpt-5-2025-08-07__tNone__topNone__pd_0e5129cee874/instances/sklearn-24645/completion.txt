@@ -1,0 +1,87 @@
+sklearn/neighbors/_nearest_centroid.py
+[SEARCH]
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        return self.classes_[
+            pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)
+        ]
+[/SEARCH]
+[REPLACE]
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        if self.metric == "euclidean":
+            # Efficient nearest centroid for Euclidean metric without allocating
+            # the full (n_samples, n_classes) distance matrix.
+            X_float = X.astype(np.float64, copy=False)
+            centroids = self.centroids_
+            n_classes = centroids.shape[0]
+            n_samples = X_float.shape[0]
+
+            # Precompute 0.5 * ||c||^2 for all centroids
+            c_half_sq_norm = 0.5 * np.einsum("ij,ij->i", centroids, centroids)
+
+            # Process classes in blocks to limit memory usage
+            BLOCK_BYTES = 32 * 1024 * 1024  # 32 MiB
+            denom = max(1, n_samples)
+            block_size = max(1, int(BLOCK_BYTES // (denom * 8)))
+
+            if block_size >= n_classes:
+                scores = X_float @ centroids.T
+                scores -= c_half_sq_norm
+                best_indices = np.argmax(scores, axis=1)
+            else:
+                best_scores = np.full(n_samples, -np.inf, dtype=np.float64)
+                best_indices = np.zeros(n_samples, dtype=np.intp)
+                for start in range(0, n_classes, block_size):
+                    stop = min(n_classes, start + block_size)
+                    centroids_block = centroids[start:stop]
+                    scores_block = X_float @ centroids_block.T
+                    scores_block -= c_half_sq_norm[start:stop]
+                    if n_samples == 0:
+                        continue
+                    local_best_idx = np.argmax(scores_block, axis=1)
+                    local_best_vals = scores_block[
+                        np.arange(n_samples), local_best_idx
+                    ]
+                    mask = local_best_vals > best_scores
+                    if np.any(mask):
+                        best_scores[mask] = local_best_vals[mask]
+                        best_indices[mask] = start + local_best_idx[mask]
+            return self.classes_[best_indices]
+
+        if self.metric == "precomputed":
+            return self.classes_[
+                pairwise_distances(X, self.centroids_, metric=self.metric).argmin(
+                    axis=1
+                )
+            ]
+
+        # Generic path: compute pairwise distances in blocks over classes to
+        # reduce peak memory for large numbers of classes.
+        centroids = self.centroids_
+        n_classes = centroids.shape[0]
+        n_samples = X.shape[0]
+        BLOCK_BYTES = 32 * 1024 * 1024  # 32 MiB
+        denom = max(1, n_samples)
+        block_size = max(1, int(BLOCK_BYTES // (denom * 8)))
+
+        if block_size >= n_classes:
+            return self.classes_[
+                pairwise_distances(X, centroids, metric=self.metric).argmin(axis=1)
+            ]
+
+        best_dists = np.full(n_samples, np.inf, dtype=np.float64)
+        best_indices = np.zeros(n_samples, dtype=np.intp)
+        for start in range(0, n_classes, block_size):
+            stop = min(n_classes, start + block_size)
+            d_block = pairwise_distances(
+                X, centroids[start:stop], metric=self.metric
+            )
+            if n_samples == 0:
+                continue
+            local_idx = np.argmin(d_block, axis=1)
+            local_vals = d_block[np.arange(n_samples), local_idx]
+            mask = local_vals < best_dists
+            if np.any(mask):
+                best_dists[mask] = local_vals[mask]
+                best_indices[mask] = start + local_idx[mask]
+        return self.classes_[best_indices]
+[/REPLACE]

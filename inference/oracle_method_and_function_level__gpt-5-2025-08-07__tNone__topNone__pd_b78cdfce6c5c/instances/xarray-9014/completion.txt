@@ -1,0 +1,121 @@
+xarray/backends/zarr.py
+[SEARCH]
+        import zarr
+
+        from xarray.backends.api import open_dataset
+        from xarray.core.datatree import DataTree
+        from xarray.core.treenode import NodePath
+
+        zds = zarr.open_group(filename_or_obj, mode="r")
+        ds = open_dataset(filename_or_obj, engine="zarr", **kwargs)
+        tree_root = DataTree.from_dict({"/": ds})
+        for path in _iter_zarr_groups(zds):
+            try:
+                subgroup_ds = open_dataset(
+                    filename_or_obj, engine="zarr", group=path, **kwargs
+                )
+            except zarr.errors.PathNotFoundError:
+                subgroup_ds = Dataset()
+
+            # TODO refactor to use __setitem__ once creation of new nodes by assigning Dataset works again
+            node_name = NodePath(path).name
+            new_node: DataTree = DataTree(name=node_name, data=subgroup_ds)
+            tree_root._set_item(
+                path,
+                new_node,
+                allow_overwrite=False,
+                new_nodes_along_path=True,
+            )
+        return tree_root
+[/SEARCH]
+[REPLACE]
+        import zarr
+
+        from xarray.core.datatree import DataTree
+        from xarray.core.treenode import NodePath
+
+        # Extract dataset decoding kwargs with defaults matching ZarrBackendEntrypoint.open_dataset
+        mask_and_scale = kwargs.get("mask_and_scale", True)
+        decode_times = kwargs.get("decode_times", True)
+        concat_characters = kwargs.get("concat_characters", True)
+        decode_coords = kwargs.get("decode_coords", True)
+        drop_variables = kwargs.get("drop_variables", None)
+        use_cftime = kwargs.get("use_cftime", None)
+        decode_timedelta = kwargs.get("decode_timedelta", None)
+
+        # Extract store opening kwargs consistent with ZarrBackendEntrypoint.open_dataset
+        mode = kwargs.get("mode", "r")
+        synchronizer = kwargs.get("synchronizer", None)
+        consolidated = kwargs.get("consolidated", None)
+        chunk_store = kwargs.get("chunk_store", None)
+        storage_options = kwargs.get("storage_options", None)
+        stacklevel = kwargs.get("stacklevel", 3)
+        zarr_version = kwargs.get("zarr_version", None)
+
+        # Open root store once and build root dataset
+        store = ZarrStore.open_group(
+            filename_or_obj,
+            group=None,
+            mode=mode,
+            synchronizer=synchronizer,
+            consolidated=consolidated,
+            consolidate_on_close=False,
+            chunk_store=chunk_store,
+            storage_options=storage_options,
+            stacklevel=stacklevel + 1,
+            zarr_version=zarr_version,
+        )
+        store_entrypoint = StoreBackendEntrypoint()
+        with close_on_error(store):
+            ds = store_entrypoint.open_dataset(
+                store,
+                mask_and_scale=mask_and_scale,
+                decode_times=decode_times,
+                concat_characters=concat_characters,
+                decode_coords=decode_coords,
+                drop_variables=drop_variables,
+                use_cftime=use_cftime,
+                decode_timedelta=decode_timedelta,
+            )
+        tree_root = DataTree.from_dict({"/": ds})
+
+        zds = store.zarr_group
+        for path in _iter_zarr_groups(zds):
+            try:
+                subgroup_store = ZarrStore.open_group(
+                    zds.store,
+                    group=path,
+                    mode=mode,
+                    synchronizer=synchronizer,
+                    consolidated=consolidated,
+                    consolidate_on_close=False,
+                    chunk_store=chunk_store,
+                    storage_options=storage_options,
+                    stacklevel=stacklevel + 1,
+                    zarr_version=zarr_version,
+                )
+                with close_on_error(subgroup_store):
+                    subgroup_ds = store_entrypoint.open_dataset(
+                        subgroup_store,
+                        mask_and_scale=mask_and_scale,
+                        decode_times=decode_times,
+                        concat_characters=concat_characters,
+                        decode_coords=decode_coords,
+                        drop_variables=drop_variables,
+                        use_cftime=use_cftime,
+                        decode_timedelta=decode_timedelta,
+                    )
+            except zarr.errors.PathNotFoundError:
+                subgroup_ds = Dataset()
+
+            # TODO refactor to use __setitem__ once creation of new nodes by assigning Dataset works again
+            node_name = NodePath(path).name
+            new_node: DataTree = DataTree(name=node_name, data=subgroup_ds)
+            tree_root._set_item(
+                path,
+                new_node,
+                allow_overwrite=False,
+                new_nodes_along_path=True,
+            )
+        return tree_root
+[/REPLACE]

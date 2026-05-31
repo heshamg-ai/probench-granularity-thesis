@@ -1,0 +1,214 @@
+pandas/core/indexing.py
+[SEARCH]
+    def _get_setitem_indexer(self, key):
+        """
+        Convert a potentially-label-based key into a positional indexer.
+        """
+        if self.axis is not None:
+            return self._convert_key(key)
+        # GH#5547
+        if isinstance(self.obj, ABCSeries) and self._has_valid_type(key, None):
+            return key
+        return self._convert_key(key)
+[/SEARCH]
+[REPLACE]
+    def _get_setitem_indexer(self, key):
+        """
+        Convert a potentially-label-based key into a positional indexer.
+        """
+        if self.axis is not None:
+            return self._convert_key(key)
+        # GH#5547
+        if isinstance(self.obj, ABCSeries) and self._has_valid_type(key, None):
+            return key
+        return self._convert_key(key)
+
+    def _validate_key_with_multiindex(self, key, index):
+        """
+        Optimized key validation for MultiIndex lookups.
+
+        Avoids full index reconstruction when key is already well-formed
+        for a MultiIndex by short-circuiting on tuple key paths.
+        """
+        if not isinstance(index, MultiIndex):
+            return None
+
+        # Fast path: single tuple key that matches the number of levels
+        if isinstance(key, tuple) and len(key) == index.nlevels:
+            try:
+                loc = index.get_loc(key)
+                return loc
+            except KeyError:
+                return None
+        return None
+[/REPLACE]
+
+pandas/core/indexing.py
+[SEARCH]
+    def _validate_key(self, key, axis: int):
+        """
+        Ensure that key is valid for current indexer.
+
+        Parameters
+        ----------
+        key : scalar, slice, list-like, or array-like
+            The key for which to ensure validity.
+
+        axis : int
+            The axis being indexed.
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        ValueError
+            When the key contains elements out-of-bounds for the index.
+        """
+        ax = self.obj._get_axis(axis)
+        if isinstance(key, slice):
+            return
+        elif is_bool_indexer(key):
+            # bool indexer is always valid
+            return
+        else:
+            # check if key is list-like
+            if is_list_like(key):
+                key = check_array_indexer(self.obj, key, axis)
+            try:
+                ax.get_indexer_for([key])
+            except TypeError as err:
+                raise TypeError(
+                    "Cannot index by location index with a non-integer key"
+                ) from err
+[/SEARCH]
+[REPLACE]
+    def _validate_key(self, key, axis: int):
+        """
+        Ensure that key is valid for current indexer.
+
+        Parameters
+        ----------
+        key : scalar, slice, list-like, or array-like
+            The key for which to ensure validity.
+
+        axis : int
+            The axis being indexed.
+
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        ValueError
+            When the key contains elements out-of-bounds for the index.
+        """
+        ax = self.obj._get_axis(axis)
+        if isinstance(key, slice):
+            return
+        elif is_bool_indexer(key):
+            # bool indexer is always valid
+            return
+        else:
+            # check if key is list-like
+            if is_list_like(key):
+                key = check_array_indexer(self.obj, key, axis)
+            # Fast path: MultiIndex with tuple key avoids get_indexer_for overhead
+            mi_loc = self._validate_key_with_multiindex(key, ax)
+            if mi_loc is not None:
+                return
+            try:
+                ax.get_indexer_for([key])
+            except TypeError as err:
+                raise TypeError(
+                    "Cannot index by location index with a non-integer key"
+                ) from err
+[/REPLACE]
+
+pandas/core/indexing.py
+[SEARCH]
+    def _getitem_axis(self, key, axis: int):
+        if isinstance(key, slice):
+            self._validate_key(key, axis)
+            return self._get_slice_axis(key, axis=axis)
+        elif is_bool_indexer(key):
+            return self._getbool_axis(key, axis=axis)
+        elif is_list_like_indexer(key):
+            if com.is_bool_indexer(key):
+                key = check_bool_indexer(self.obj, key, axis)
+                return self._getbool_axis(key, axis=axis)
+
+            # an array of integers (also list of bool)
+            key = check_array_indexer(self.obj, key, axis)
+            return self._get_list_axis(key, axis=axis)
+        else:
+            # key is a scalar
+            return self._get_label(key, axis=axis)
+[/SEARCH]
+[REPLACE]
+    def _getitem_axis(self, key, axis: int):
+        if isinstance(key, slice):
+            self._validate_key(key, axis)
+            return self._get_slice_axis(key, axis=axis)
+        elif is_bool_indexer(key):
+            return self._getbool_axis(key, axis=axis)
+        elif is_list_like_indexer(key):
+            if com.is_bool_indexer(key):
+                key = check_bool_indexer(self.obj, key, axis)
+                return self._getbool_axis(key, axis=axis)
+
+            # an array of integers (also list of bool)
+            key = check_array_indexer(self.obj, key, axis)
+            return self._get_list_axis(key, axis=axis)
+        else:
+            # key is a scalar
+            # Fast path: MultiIndex tuple key avoids expensive _validate_key path
+            if not isinstance(key, tuple):
+                self._validate_key(key, axis)
+            return self._get_label(key, axis=axis)
+[/REPLACE]
+
+pandas/core/indexing.py
+[SEARCH]
+    def _get_label(self, key, axis: int):
+        # GH#5667 this will fail if the label is not present in the axis.
+        # This function will raise a KeyError in this case.
+        # In DataFrames, we also have _get_label_or_missing, which returns
+        # a different sentinel value for missing labels.
+        labels = self.obj._get_axis(axis)
+        try:
+            return labels.get_loc(key)
+        except (KeyError, TypeError):
+            casted_key = self._cast_indexer(key, axis)
+            try:
+                return labels.get_loc(casted_key)
+            except KeyError as err:
+                raise KeyError(
+                    f"None of [{key}] are in the [{axis_name}]"
+                ) from err
+[/SEARCH]
+[REPLACE]
+    def _get_label(self, key, axis: int):
+        # GH#5667 this will fail if the label is not present in the axis.
+        # This function will raise a KeyError in this case.
+        # In DataFrames, we also have _get_label_or_missing, which returns
+        # a different sentinel value for missing labels.
+        labels = self.obj._get_axis(axis)
+        if isinstance(labels, MultiIndex) and isinstance(key, tuple) and len(key) == labels.nlevels:
+            try:
+                return labels.get_loc(key)
+            except KeyError:
+                pass
+        try:
+            return labels.get_loc(key)
+        except (KeyError, TypeError):
+            casted_key = self._cast_indexer(key, axis)
+            try:
+                return labels.get_loc(casted_key)
+            except KeyError as err:
+                raise KeyError(
+                    f"None of [{key}] are in the [{axis_name}]"
+                ) from err
+[/REPLACE]

@@ -1,0 +1,10 @@
+{
+  "scenario_id": "pandas-51777",
+  "repo": "pandas-dev/pandas",
+  "seconds": 61.25167202949524,
+  "provider": "nvidia_nim",
+  "model": "moonshotai/kimi-k2.6",
+  "temperature": null,
+  "top_p": null,
+  "prompt_dataset_path": "LLMs thesis/dataset/dataset__gran=method_and_function_level__tok=kimik2.6__max=256000__imports=False__globals=False__sigs=False__changes=False.json"
+}

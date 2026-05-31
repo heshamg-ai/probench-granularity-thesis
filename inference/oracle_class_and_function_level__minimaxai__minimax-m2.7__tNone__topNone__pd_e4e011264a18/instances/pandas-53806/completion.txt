@@ -1,0 +1,63 @@
+
+
+pandas/core/sorting.py
+[SEARCH]
+def compress_group_index(
+    group_index: npt.NDArray[np.int64], sort: bool = True
+) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
+    """
+    Group_index is offsets into cartesian product of all possible labels. This
+    space can be huge, so this function compresses it, by computing offsets
+    (comp_ids) into the list of unique labels (obs_group_ids).
+    """
+    size_hint = len(group_index)
+    table = hashtable.Int64HashTable(size_hint)
+
+    group_index = ensure_int64(group_index)
+
+    # note, group labels come out ascending (ie, 1,2,3 etc)
+    comp_ids, obs_group_ids = table.get_labels_groupby(group_index)
+
+    if sort and len(obs_group_ids) > 0:
+        obs_group_ids, comp_ids = _reorder_by_uniques(obs_group_ids, comp_ids)
+
+    return ensure_int64(comp_ids), ensure_int64(obs_group_ids)
+[/SEARCH]
+[REPLACE]
+def compress_group_index(
+    group_index: npt.NDArray[np.int64], sort: bool = True
+) -> tuple[npt.NDArray[np.int64], npt.NDArray[np.int64]]:
+    """
+    Group_index is offsets into cartesian product of all possible labels. This
+    space can be huge, so this function compresses it, by computing offsets
+    (comp_ids) into the list of unique labels (obs_group_ids).
+    """
+    # Fast path for sorted consecutive group indices (common with sorted MultiIndex)
+    if len(group_index) > 0:
+        group_index = ensure_int64(group_index)
+        # Check if groups are already consecutive (no need for hash table)
+        # Find positions where value changes
+        markers = np.ones(len(group_index), dtype=np.int64)
+        markers[1:] = (group_index[1:] != group_index[:-1]).astype(np.int64)
+        # Check if all values are consecutive integers starting from 0
+        expected = np.arange(len(group_index), dtype=np.int64)
+        if markers.sum() == len(group_index) and np.array_equal(group_index, expected):
+            obs_group_ids = group_index.copy()
+            comp_ids = group_index.copy()
+            if sort and len(obs_group_ids) > 0:
+                obs_group_ids, comp_ids = _reorder_by_uniques(obs_group_ids, comp_ids)
+            return ensure_int64(comp_ids), ensure_int64(obs_group_ids)
+
+    size_hint = len(group_index)
+    table = hashtable.Int64HashTable(size_hint)
+
+    group_index = ensure_int64(group_index)
+
+    # note, group labels come out ascending (ie, 1,2,3 etc)
+    comp_ids, obs_group_ids = table.get_labels_groupby(group_index)
+
+    if sort and len(obs_group_ids) > 0:
+        obs_group_ids, comp_ids = _reorder_by_uniques(obs_group_ids, comp_ids)
+
+    return ensure_int64(comp_ids), ensure_int64(obs_group_ids)
+[/REPLACE]

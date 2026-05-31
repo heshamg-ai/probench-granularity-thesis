@@ -1,0 +1,47 @@
+
+
+Let me first find the `unstack` function in pandas to understand the code structure.
+
+ pandas/core/reshape/reshape.py
+[SEARCH]
+def _unstack(
+    obj: DataFrame | Series,
+    level: Index,
+    fill_value: Hashable | None,
+    sort_columns: bool,
+) -> DataFrame | Series:
+[/SEARCH]
+[REPLACE]
+def _unstack(
+    obj: DataFrame | Series,
+    level: Index,
+    fill_value: Hashable | None,
+    sort_columns: bool,
+) -> DataFrame | Series:
+    if not isinstance(obj.index, MultiIndex):
+        # Fast path for the common case of a single-level index
+        # This avoids the overhead of stack/unstack operations
+        if obj.ndim == 2:
+            # DataFrame case - convert columns to a MultiIndex level
+            if fill_value is None:
+                result = obj
+            else:
+                result = obj.fillna(fill_value)
+            midx = MultiIndex.from_arrays(
+                [result.columns] + [obj.index] * len(result.columns),
+                names=[None] + list(obj.index.names)
+            )
+            result = result.T
+            result.index = midx
+            if len(obj.index.names) == 1:
+                result.index.names = [None, obj.index.names[0]]
+            else:
+                result.index.names = [None] + list(obj.index.names)
+            result = result.stack(future_stack=True)
+            return result.unstack(level=-1, fill_value=fill_value)
+        else:
+            # Series case - similar handling for 1D
+            return obj
+    else:
+        return _unstack_multi(obj, level, fill_value, sort_columns)
+[/REPLACE]

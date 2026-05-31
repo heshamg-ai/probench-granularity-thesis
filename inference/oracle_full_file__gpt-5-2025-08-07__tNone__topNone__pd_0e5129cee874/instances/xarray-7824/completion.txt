@@ -1,0 +1,39 @@
+xarray/core/concat.py
+[SEARCH]
+    # create concatenation index, needed for later reindexing
+    concat_index = list(range(sum(concat_dim_lengths)))
+[/SEARCH]
+[REPLACE]
+    # create concatenation index, needed for later reindexing
+    concat_index = list(range(sum(concat_dim_lengths)))
+    # precompute starting offsets for each dataset along the concatenated dimension
+    starts = []
+    acc = 0
+    for l in concat_dim_lengths:
+        starts.append(acc)
+        acc += l
+[/REPLACE]
+
+xarray/core/concat.py
+[SEARCH]
+            for i, ds in enumerate(datasets):
+                if name in ds.variables:
+                    variables.append(ds[name].variable)
+                    # add to variable index, needed for reindexing
+                    var_idx = [
+                        sum(concat_dim_lengths[:i]) + k
+                        for k in range(concat_dim_lengths[i])
+                    ]
+                    variable_index.extend(var_idx)
+                    var_concat_dim_length.append(len(var_idx))
+[/SEARCH]
+[REPLACE]
+            for i, ds in enumerate(datasets):
+                if name in ds.variables:
+                    variables.append(ds[name].variable)
+                    # add to variable index, needed for reindexing
+                    start = starts[i]
+                    length_i = concat_dim_lengths[i]
+                    variable_index.extend(range(start, start + length_i))
+                    var_concat_dim_length.append(length_i)
+[/REPLACE]

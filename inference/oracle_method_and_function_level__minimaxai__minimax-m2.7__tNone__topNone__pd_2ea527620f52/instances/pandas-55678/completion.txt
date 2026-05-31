@@ -1,0 +1,65 @@
+
+
+Looking at the code, I can see the main optimization opportunity is in handling `by` columns with different dtypes in the single-column case. Currently, when dtypes differ and are incompatible, the code may not properly handle them or falls back to expensive operations.
+
+Let me create optimizations that:
+1. Check if by columns have the same dtype first (fast path)
+2. Only do conversion/factorization when needed
+3. Use more efficient common dtype finding
+
+pandas/core/reshape/merge.py
+[SEARCH]
+            # get tuple representation of values if more than one
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+                if needs_i8_conversion(lbv.dtype):
+                    lbv = lbv.view("i8")
+                if needs_i8_conversion(rbv.dtype):
+                    rbv = rbv.view("i8")
+[/SEARCH]
+[REPLACE]
+            # get tuple representation of values if more than one
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+
+                # Fast path: if dtypes match exactly, use values directly
+                if lbv.dtype == rbv.dtype:
+                    # For i8 types (datetime64), convert to int64 view
+                    if needs_i8_conversion(lbv.dtype):
+                        lbv = lbv.view("i8")
+                        rbv = rbv.view("i8")
+                    # else: use as-is (same dtype, no conversion needed)
+                else:
+                    # Different dtypes: find common dtype efficiently
+                    # Check if both need i8 conversion (datetime types)
+                    lbv_i8 = needs_i8_conversion(lbv.dtype)
+                    rbv_i8 = needs_i8_conversion(rbv.dtype)
+                    if lbv_i8 and rbv_i8:
+                        # Both datetime-like: convert both to int64
+                        lbv = lbv.view("i8")
+                        rbv = rbv.view("i8")
+                    elif lbv_i8 or rbv_i8:
+                        # One datetime, one not - incompatible, will error later
+                        if lbv_i8:
+                            lbv = lbv.view("i8")
+                    else:
+                        # Neither datetime: find common dtype and cast
+                        try:
+                            common_dtype = np.result_type(lbv.dtype, rbv.dtype)
+                            lbv = lbv.astype(common_dtype, copy=False)
+                            rbv = rbv.astype(common_dtype, copy=False)
+                        except (TypeError, ValueError):
+                            # Fall back to object dtype for incompatible types
+                            lbv = lbv.astype(object)
+                            rbv = rbv.astype(object)
+[/REPLACE]

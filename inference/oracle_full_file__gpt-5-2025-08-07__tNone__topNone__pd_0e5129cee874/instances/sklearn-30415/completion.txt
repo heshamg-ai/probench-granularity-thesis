@@ -1,0 +1,9 @@
+sklearn/mixture/_base.py
+[SEARCH]
+        X = validate_data(self, X, dtype=[np.float64, np.float32], ensure_min_samples=2)
+[/SEARCH]
+[REPLACE]
+        X = validate_data(self, X, dtype=[np.float64, np.float32], ensure_min_samples=2)
+        if X.dtype == np.float32:
+            X = X.astype(np.float64, copy=False)
+[/REPLACE]

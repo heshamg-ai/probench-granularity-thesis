@@ -1,0 +1,59 @@
+
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        result_data = []
+        for lst in split.to_pylist():
+            if lst is None:
+                result_data.append([False] * len(uniques_sorted))
+            else:
+                res = pc.is_in(uniques_sorted, pa.array(set(lst)))
+                result_data.append(res.to_pylist())
+        result = type(self)(pa.array(result_data))
+        return result, uniques_sorted.to_pylist()
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+
+        # Build unique sorted values from flattened split result
+        unique_values = []
+        for chunk in split.chunks:
+            chunk_values = chunk.flatten()
+            for i in range(len(chunk_values)):
+                val = chunk_values[i].as_py()
+                if val is not None and val not in unique_values:
+                    unique_values.append(val)
+
+        # Sort unique values
+        unique_values = sorted(unique_values)
+
+        if not unique_values:
+            # No unique values, return empty result
+            result_data = [[]] * len(self)
+            result = type(self)(pa.array(result_data, type=pa.bool_()))
+            return result, []
+
+        uniques_sorted = pa.array(unique_values)
+
+        # Build result using vectorized operations
+        result_data = []
+        for chunk in split.chunks:
+            for i in range(len(chunk)):
+                row = chunk[i]
+                if row.is_valid:
+                    lst = row.as_py()
+                    # Use set for O(1) lookup
+                    lst_set = set(lst)
+                    res = [val in lst_set for val in unique_values]
+                    result_data.append(res)
+                else:
+                    result_data.append([False] * len(unique_values))
+
+        result = type(self)(pa.array(result_data, type=pa.bool_()))
+        return result, unique_values
+[/REPLACE]

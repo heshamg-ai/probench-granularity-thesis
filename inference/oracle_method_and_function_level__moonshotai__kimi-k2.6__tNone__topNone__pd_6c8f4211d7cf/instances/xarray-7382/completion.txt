@@ -1,0 +1,207 @@
+xarray/core/dataset.py
+[SEARCH]
+    def assign(
+        self,
+        variables: Mapping[Any, Any] | None = None,
+        variables_kwargs: Mapping[str, Any] | None = None,
+        **variables_kwargs: Any,
+    ) -> Dataset:
+        """Assign new data variables to a Dataset, returning a new Dataset
+
+        This method is similar to :py:func:`pandas.DataFrame.assign`.  See
+        :ref:`dataset.assign` for examples.
+
+        Parameters
+        ----------
+        variables : mapping, optional
+            Mapping from variable names to new values.
+        variables_kwargs : keyword arguments, optional
+            Keyword argument form of ``variables``.
+        **variables_kwargs
+            The keyword arguments form of ``variables``.
+            One of them can be ``variables``.
+
+        Returns
+        -------
+        obj : Dataset
+            A new Dataset with the new variables in addition to and over-
+            writing the old variables with the same name.
+
+        See Also
+        --------
+        Dataset.assign_coords
+        """
+        variables = either_dict_or_kwargs(variables, variables_kwargs, "assign")
+        data = coerce_and_merge_variables(
+            variables, merge_attrs="drop_conflicts", join="outer"
+        )
+        coords = {}
+        for k, v in data.items():
+            if k not in self.variables and isinstance(v, DataArray):
+                v = v.variable
+            elif k not in self.variables or isinstance(v, DataArray):
+                v = self._construct_dataarray(k, v).variable
+            if k in self._coord_names or v.dims != (k,):
+                coords[k] = v
+
+        result = self._replace_vars_and_dims(data)
+        if coords:
+            result = result.assign_coords(coords)
+        return result
+[/SEARCH]
+[REPLACE]
+    def assign(
+        self,
+        variables: Mapping[Any, Any] | None = None,
+        variables_kwargs: Mapping[str, Any] | None = None,
+        **variables_kwargs: Any,
+    ) -> Dataset:
+        """Assign new data variables to a Dataset, returning a new Dataset
+
+        This method is similar to :py:func:`pandas.DataFrame.assign`.  See
+        :ref:`dataset.assign` for examples.
+
+        Parameters
+        ----------
+        variables : mapping, optional
+            Mapping from variable names to new values.
+        variables_kwargs : keyword arguments, optional
+            Keyword argument form of ``variables``.
+        **variables_kwargs
+            The keyword arguments form of ``variables``.
+            One of them can be ``variables``.
+
+        Returns
+        -------
+        obj : Dataset
+            A new Dataset with the new variables in addition to and over-
+            writing the old variables with the same name.
+
+        See Also
+        --------
+        Dataset.assign_coords
+        """
+        variables = either_dict_or_kwargs(variables, variables_kwargs, "assign")
+        data = coerce_and_merge_variables(
+            variables, merge_attrs="drop_conflicts", join="outer"
+        )
+        coords: dict[Hashable, Variable | DataArray] = {}
+        for k, v in data.items():
+            if k not in self.variables:
+                # New variable: may become a coord if it's 1D with matching name
+                if not isinstance(v, DataArray):
+                    v = self._construct_dataarray(k, v).variable
+                elif v.dims == (k,):
+                    # DataArray with matching dimension name: treat as coord
+                    pass
+                else:
+                    v = v.variable
+            elif isinstance(v, DataArray):
+                # Existing variable: only wrap if not already a DataArray
+                v = self._construct_dataarray(k, v).variable
+            
+            # Determine if this should be a coordinate
+            if k in self._coord_names or (isinstance(v, Variable) and v.dims != (k,)):
+                coords[k] = v
+
+        result = self._replace_vars_and_dims(data)
+        if coords:
+            result = result.assign_coords(coords)
+        return result
+[/REPLACE]
+
+xarray/core/dataset.py
+[SEARCH]
+        data = coerce_and_merge_variables(
+            variables, merge_attrs="drop_conflicts", join="outer"
+        )
+        coords: dict[Hashable, Variable | DataArray] = {}
+        for k, v in data.items():
+            if k not in self.variables:
+                # New variable: may become a coord if it's 1D with matching name
+                if not isinstance(v, DataArray):
+                    v = self._construct_dataarray(k, v).variable
+                elif v.dims == (k,):
+                    # DataArray with matching dimension name: treat as coord
+                    pass
+                else:
+                    v = v.variable
+            elif isinstance(v, DataArray):
+                # Existing variable: only wrap if not already a DataArray
+                v = self._construct_dataarray(k, v).variable
+            
+            # Determine if this should be a coordinate
+            if k in self._coord_names or (isinstance(v, Variable) and v.dims != (k,)):
+                coords[k] = v
+
+        result = self._replace_vars_and_dims(data)
+        if coords:
+            result = result.assign_coords(coords)
+        return result
+[/SEARCH]
+[REPLACE]
+        data = coerce_and_merge_variables(
+            variables, merge_attrs="drop_conflicts", join="outer"
+        )
+        coords: dict[Hashable, Variable | DataArray] = {}
+        for k, v in data.items():
+            if k not in self.variables:
+                # New variable: may become a coord if it's 1D with matching name
+                if isinstance(v, DataArray):
+                    if v.dims == (k,):
+                        coords[k] = v  # will become a coordinate
+                        continue
+                    else:
+                        v = v.variable
+                else:
+                    v = self._construct_dataarray(k, v).variable
+                    if v.dims == (k,):
+                        coords[k] = v  # will become a coordinate
+                        continue
+            elif isinstance(v, DataArray):
+                # Existing variable: only wrap if not already a DataArray
+                v = self._construct_dataarray(k, v).variable
+
+            # Determine if this should be a coordinate
+            if k in self._coord_names or v.dims != (k,):
+                coords[k] = v
+
+        result = self._replace_vars_and_dims(data)
+        if coords:
+            result = result.assign_coords(coords)
+        return result
+[/REPLACE]
+
+xarray/core/alignment.py
+[SEARCH]
+    def _need_reindex(self, dims, cmp_index) -> bool:
+        """Whether or not we need to reindex variables for a set of
+        matching indexes.
+
+        We don't reindex when all matching indexes are equal for two reasons:
+        - It's faster for the usual case (already aligned objects).
+        - It ensures it's possible to do operations that don't require alignment
+          on indexes with duplicate values (which cannot be reindexed with
+          pandas). This is useful, e.g., for overwriting such duplicate indexes.
+
+        """
+        has_unindexed_dims = any(dim in self.unindexed_dim_sizes for dim in dims)
+        return not (indexes_all_equal(cmp_index)) or has_unindexed_dims
+[/SEARCH]
+[REPLACE]
+    def _need_reindex(self, dims, cmp_index) -> bool:
+        """Whether or not we need to reindex variables for a set of
+        matching indexes.
+
+        We don't reindex when all matching indexes are equal for two reasons:
+        - It's faster for the usual case (already aligned objects).
+        - It ensures it's possible to do operations that don't require alignment
+          on indexes with duplicate values (which cannot be reindexed with
+          pandas). This is useful, e.g., for overwriting such duplicate indexes.
+
+        """
+        has_unindexed_dims = any(dim in self.unindexed_dim_sizes for dim in dims)
+        if has_unindexed_dims:
+            return True
+        return not indexes_all_equal(cmp_index)
+[/REPLACE]

@@ -1,0 +1,123 @@
+
+
+I need to find the categories property in the categorical.py file first. Let me search for where `categories` is defined as a property.
+
+pandas/core/arrays/categorical.py
+[SEARCH]
+    @property
+    def categories(self) -> Index:
+        """The categories of this categorical."""
+        return self._dtype.categories
+[/SEARCH]
+[REPLACE]
+    @property
+    def categories(self) -> Index:
+        """The categories of this categorical."""
+        return self._dtype.categories
+[/REPLACE]
+
+Now I need to look at where categories are set during initialization. The key is in the `__init__` method where `factorize` is called or where categories are passed to `CategoricalDtype`. Let me check the code paths more carefully.
+
+Looking at the code snippet, the key places where categories are set are:
+
+1. When inferring from values (factorize call)
+2. When dtype.categories is passed directly
+3. When recoding for categories
+
+The optimization should be: after categories are determined, check if they form a RangeIndex and if so, convert them. Let me find the best place to add this check.
+
+Looking at the code, the key section is after factorize where `dtype = CategoricalDtype(categories, dtype.ordered)` is called. I should add a check there.
+
+pandas/core/arrays/categorical.py
+[SEARCH]
+                # we're inferring from values
+                dtype = CategoricalDtype(categories, dtype.ordered)
+[/SEARCH]
+[REPLACE]
+                # we're inferring from values
+                dtype = CategoricalDtype(categories, dtype.ordered)
+                # GH#...: Preserve RangeIndex when possible for memory efficiency
+                if isinstance(categories, Index) and categories.dtype != "category":
+                    # Check if categories form a RangeIndex
+                    # A RangeIndex is possible if categories are consecutive ints starting from 0
+                    cat_values = categories._values
+                    if (
+                        len(cat_values) > 0
+                        and cat_values.dtype.kind == "i"
+                        and cat_values[0] == 0
+                        and len(cat_values) == int(cat_values[-1]) + 1
+                    ):
+                        # Check if values are consecutive
+                        if len(cat_values) > 1:
+                            diff = cat_values[1:] - cat_values[:-1]
+                            if diff.sum() == len(diff):  # All differences are 1
+                                dtype = CategoricalDtype(
+                                    Index(range(len(cat_values))), dtype.ordered
+                                )
+                        else:
+                            # Single category, should be 0 for RangeIndex
+                            if cat_values[0] == 0:
+                                dtype = CategoricalDtype(
+                                    Index(range(1)), dtype.ordered
+                                )
+[/REPLACE]
+
+Actually, this approach is getting complex. Let me think about a simpler approach. The simplest way is to check if the result of factorize is consecutive integers starting from 0. Let me simplify.
+
+Looking more carefully at the code structure, I think the better approach is to modify the check right after factorize to see if the categories need to be converted. Let me look at the specific lines again.
+
+pandas/core/arrays/categorical.py
+[SEARCH]
+                try:
+                    codes, categories = factorize(values, sort=True)
+                except TypeError as err:
+                    codes, categories = factorize(values, sort=False)
+                    if dtype.ordered:
+                        # raise, as we don't have a sortable data structure and so
+                        # the user should give us one by specifying categories
+                        raise TypeError(
+                            "'values' is not ordered, please "
+                            "explicitly specify the categories order "
+                            "by passing in a categories argument."
+                        ) from err
+
+                # we're inferring from values
+                dtype = CategoricalDtype(categories, dtype.ordered)
+[/SEARCH]
+[REPLACE]
+                try:
+                    codes, categories = factorize(values, sort=True)
+                except TypeError as err:
+                    codes, categories = factorize(values, sort=False)
+                    if dtype.ordered:
+                        # raise, as we don't have a sortable data structure and so
+                        # the user should give us one by specifying categories
+                        raise TypeError(
+                            "'values' is not ordered, please "
+                            "explicitly specify the categories order "
+                            "by passing in a categories argument."
+                        ) from err
+
+                # we're inferring from values
+                # GH#...: Preserve RangeIndex when possible for memory efficiency
+                if isinstance(categories, Index) and not isinstance(categories, RangeIndex):
+                    cat_values = categories._values
+                    if (
+                        len(cat_values) > 0
+                        and cat_values.dtype.kind == "i"
+                        and cat_values[0] == 0
+                    ):
+                        # Check if values are consecutive starting from 0
+                        if len(cat_values) == 1:
+                            # Single category at 0, use RangeIndex
+                            categories = Index(range(1))
+                        elif (
+                            len(cat_values) > 1
+                            and cat_values[-1] == len(cat_values) - 1
+                        ):
+                            # Check consecutive: last value equals len-1 and all steps are 1
+                            diff = cat_values[1:] - cat_values[:-1]
+                            if np.all(diff == 1):
+                                categories = Index(range(len(cat_values)))
+                dtype = CategoricalDtype(categories, dtype.ordered)
+[/REPLACE]

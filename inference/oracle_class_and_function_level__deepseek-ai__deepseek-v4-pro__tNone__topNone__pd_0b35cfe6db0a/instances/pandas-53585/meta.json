@@ -1,0 +1,10 @@
+{
+  "scenario_id": "pandas-53585",
+  "repo": "pandas-dev/pandas",
+  "seconds": 28.125833988189697,
+  "provider": "nvidia_nim",
+  "model": "deepseek-ai/deepseek-v4-pro",
+  "temperature": null,
+  "top_p": null,
+  "prompt_dataset_path": "LLMs thesis/dataset/dataset__gran=class_and_function_level__tok=deepseekv4pro__max=1000000__imports=False__globals=False__sigs=False__changes=False.json"
+}

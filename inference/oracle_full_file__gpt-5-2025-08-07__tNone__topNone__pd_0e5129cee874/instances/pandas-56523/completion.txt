@@ -1,0 +1,43 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+    elif right_n == 0:
+        if how in ["right", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["left", "outer"]:
+            return _get_no_sort_one_missing_indexer(left_n, False)
+[/SEARCH]
+[REPLACE]
+    elif right_n == 0:
+        if how in ["right", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["left", "outer"]:
+            return _get_no_sort_one_missing_indexer(left_n, False)
+
+    # fast-path for single-key monotonic, sorted, NA-free joins using Index.join
+    if len(left_keys) == 1 and len(right_keys) == 1:
+        lk0 = left_keys[0]
+        rk0 = right_keys[0]
+        try:
+            lidx = Index(lk0)
+            ridx = Index(rk0)
+        except Exception:
+            lidx = None
+            ridx = None
+        if (
+            lidx is not None
+            and ridx is not None
+            and lidx.dtype == ridx.dtype
+            and lidx.is_monotonic_increasing
+            and ridx.is_monotonic_increasing
+            and not lidx.hasnans
+            and not ridx.hasnans
+            and lidx._can_use_libjoin
+            and ridx._can_use_libjoin
+        ):
+            # Use Index.join which has optimized paths for monotonic keys
+            _, lindexer, rindexer = lidx.join(
+                ridx, how=how, return_indexers=True, sort=sort
+            )
+            # Ensure platform int dtype for downstream expectations
+            return ensure_platform_int(lindexer), ensure_platform_int(rindexer)
+[/REPLACE]

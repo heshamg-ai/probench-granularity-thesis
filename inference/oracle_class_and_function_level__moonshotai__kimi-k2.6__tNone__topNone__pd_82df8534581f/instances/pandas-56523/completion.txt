@@ -1,0 +1,2824 @@
+I'll analyze the pandas codebase to understand how `DataFrame.merge` works and identify where we can optimize for monotonic, sorted keys.
+
+Let me trace through the code:
+
+1. `DataFrame.merge` calls `_MergeOperation` which uses `get_join_indexers`
+2. `get_join_indexers` factorizes keys and then uses `libjoin` functions
+3. The key optimization opportunity is in `Index.join` which already has monotonic fast-paths via `_join_monotonic`
+
+The optimization should be in `pandas/core/reshape/merge.py` in the `get_join_indexers` function or in how `_MergeOperation._get_join_indexers` works. When keys are monotonic and sorted, we can use the faster `Index._join_monotonic` path instead of going through the general factorization path.
+
+However, looking more carefully at the code, the real optimization is in `_MergeOperation._get_join_indexers` - when we have monotonic sorted keys, we should detect this and use a faster path.
+
+Let me look at where the merge keys are used. The key insight is that when left and right join keys are both monotonic increasing (or decreasing), we can use `searchsorted`-based or `libjoin` monotonic joiners directly instead of the expensive factorization + hash-based approach.
+
+The optimization should happen in `get_join_indexers` in `pandas/core/reshape/merge.py`. We need to detect when keys are monotonic and use faster paths.
+
+Looking at the code more carefully, the current `get_join_indexers` always:
+1. Factorizes each pair of keys
+2. Gets flat i8 keys
+3. Factorizes again
+4. Calls libjoin functions
+
+For monotonic keys, we can skip the factorization and use `libjoin.left_join_indexer_unique` or similar directly, or even better, use numpy's `searchsorted`.
+
+Actually, looking at `Index.join` and `_join_monotonic`, the optimization is already there for Index joins. The issue is that `DataFrame.merge` with `on` columns doesn't go through `Index.join` - it goes through `get_join_indexers` which factorizes everything.
+
+Let me look at `_MergeOperation._get_join_indexers` and `get_join_indexers` more carefully. The optimization point should be to detect when we have single-key merges with monotonic data and use a faster path.
+
+Here's my analysis of where to optimize:
+
+1. In `get_join_indexers`, before factorizing, check if we have a single key pair
+2. If both left and right keys are monotonic (increasing or decreasing), use a faster path
+3. The fast path can use `searchsorted` for unique keys or the libjoin monotonic functions
+
+Let me write the optimization. The key checks are:
+- Single key merge (len(left_keys) == 1)
+- Both left and right are already monotonic
+- Both are sorted in the same direction
+
+For such cases, we can use a much faster approach based on `searchsorted` or direct indexers.
+
+Actually, re-reading the code, I need to be more careful. The `sort` parameter affects whether we can use certain optimizations. Let me think...
+
+If `sort=True` or `sort=False` with already-sorted data, and both keys are monotonic increasing:
+- For "left" join: use `np.searchsorted` to find positions
+- For "inner" join: use two-way searchsorted
+- etc.
+
+The cleanest optimization is in `get_join_indexers`. Let me check if both arrays are monotonic and use a faster path.
+
+```python
+def get_join_indexers(left_keys, right_keys, sort=False, how='inner'):
+    # ... existing code ...
+    
+    # NEW: Fast path for monotonic, sorted single-key merges
+    if len(left_keys) == 1 and len(right_keys) == 1:
+        lk = left_keys[0]
+        rk = right_keys[0]
+        if _is_monotonic(lk) and _is_monotonic(rk) and not sort:
+            # Use fast path
+            pass
+```
+
+Wait, I need to check what `_factorize_keys` does and what `libjoin` functions expect.
+
+Let me look more carefully. The `libjoin` functions like `left_outer_join`, `inner_join`, etc. take factorized integer keys. For monotonic keys, we could potentially skip some factorization steps.
+
+Actually, the deepest optimization is at the `_factorize_keys` level or by providing a completely alternate path for monotonic keys.
+
+Looking at the current code flow:
+1. `_factorize_keys(left_keys[n], right_keys[n], sort=sort)` - this gives integer labels
+2. `_get_join_keys` combines multi-key labels into flat keys  
+3. `_factorize_keys` again on the combined keys
+4. `libjoin.*_join` on the final integer keys
+
+For single-key, monotonic data, step 1 already gives us monotonic integer labels if `sort=True`. But step 2 and 3 add overhead.
+
+The real win is to bypass all of this for the single-key monotonic case and use `Index.join` or direct `libjoin` monotonic functions.
+
+Let me implement this. I'll add a fast path in `get_join_indexers` for the single-key case where both keys are monotonic.
+
+I need to check for monotonicity. For numpy arrays, I can use `is_monotonic` from pandas utilities or check directly.
+
+Here's my implementation plan:
+
+1. Add a helper `_is_monotonic_increasing` to check if an array is monotonic
+2. In `get_join_indexers`, add a fast path for single-key merges where both keys are monotonic increasing
+3. The fast path uses `np.searchsorted` based approach or direct indexer computation
+
+For the actual join computation with monotonic keys:
+- left join: for each element in left, find matching elements in right using searchsorted
+- This is essentially what `Index._left_indexer_unique` does
+
+Let me write this optimization. I need to be careful about:
+- Duplicates in keys
+- The `how` parameter (left, right, inner, outer)
+- The `sort` parameter
+
+For monotonic keys with possible duplicates:
+- "left": each left element needs to find all matching right elements
+- If both are unique and monotonic, this is just `searchsorted`
+- With duplicates, we need `searchsorted` for both left and right bounds
+
+Actually, pandas already has `libjoin.left_join_indexer` and similar for this. Let me check what's available.
+
+From `pandas/core/indexes/base.py`:
+```python
+def _left_indexer(self, other):
+    sv = self._get_join_target()
+    ov = other._get_join_target()
+    joined_ndarray, lidx, ridx = libjoin.left_join_indexer(sv, ov)
+    ...
+```
+
+These are used by `_join_monotonic`. The issue is these require the `Index` wrapper and `_get_join_target`.
+
+For `get_join_indexers`, the simplest optimization is:
+1. Convert keys to Index
+2. Use Index.join with return_indexers=True
+3. Convert the indexers back
+
+But this may have overhead. Better to call libjoin directly if possible.
+
+Actually, looking at the code again, I think the cleanest approach is:
+
+In `get_join_indexers`, when we have a single key and both are monotonic:
+- Convert to numpy arrays (if they aren't already)
+- Use appropriate libjoin functions based on `how`
+
+For unique monotonic keys, `libjoin.left_join_indexer_unique`, `inner_join_indexer`, `outer_join_indexer` can be used.
+
+For non-unique monotonic keys, `libjoin.left_join_indexer`, `inner_join_indexer`, etc. should work (they handle duplicates).
+
+Let me check: are `left_join_indexer` etc. in libjoin the same as what's used in Index._join_monotonic?
+
+From base.py `_left_indexer`:
+```python
+joined_ndarray, lidx, ridx = libjoin.left_join_indexer(sv, ov)
+```
+
+Yes! So `libjoin.left_join_indexer` takes two sorted arrays and returns the joined result with indexers.
+
+So my fast path can:
+1. Check if single key
+2. Check if both are monotonic increasing (or convert to be so)
+3. Call appropriate libjoin function directly
+
+But wait - the current code path goes through factorization because the keys might be of arbitrary types. The libjoin functions require comparable arrays.
+
+Let me check what types libjoin supports. Looking at `_can_use_libjoin` in `base.py`:
+- It supports numpy dtypes
+- Some extension arrays (ArrowExtensionArray, BaseMaskedArray)
+- string[python]
+
+Not all types are supported. But for supported types, this is a big win.
+
+Let me write a more conservative optimization: check if we can convert to numpy arrays efficiently, and if so, use the libjoin fast path.
+
+Actually, let me re-read the problem. The user wants to optimize `DataFrame.merge` for monotonic, sorted keys. The optimization should be in `get_join_indexers` or nearby.
+
+Here's my final approach. I'll modify `get_join_indexers` to:
+1. Add a fast path when there's a single key pair
+2. Both keys are monotonic
+3. Use `libjoin` functions directly without factorization
+
+Let me write the code:
+
+```python
+def get_join_indexers(left_keys, right_keys, sort=False, how='inner'):
+    # ... existing validation ...
+    
+    # Fast path for single-key, monotonic merge
+    if len(left_keys) == 1 and len(right_keys) == 1:
+        left_k = left_keys[0]
+        right_k = right_keys[0]
+        
+        # Check if both are monotonic increasing and we can use libjoin
+        if _is_monotonic(left_k) and _is_monotonic(right_k):
+            try:
+                left_arr = _extract_array_for_libjoin(left_k)
+                right_arr = _extract_array_for_libjoin(right_k)
+                
+                if left_arr is not None and right_arr is not None:
+                    return _get_monotonic_join_indexers(left_arr, right_arr, how)
+            except (TypeError, ValueError):
+                pass
+    
+    # ... existing slow path ...
+```
+
+Hmm, this is getting complex. Let me simplify by reusing existing infrastructure.
+
+Actually, the simplest and most effective optimization: when keys are already monotonic, `_factorize_keys` with `sort=True` doesn't need to sort (it's already sorted). But that's a minor optimization.
+
+The bigger win is to skip factorization entirely and use `libjoin` directly. Let me look at what `_factorize_keys` returns and if we can shortcut.
+
+`_factorize_keys` returns `(l lab, rlab, (count,))` where `llab` and `rlab` are integer arrays with the same length as left/right respectively, mapping each element to a dense integer space.
+
+For monotonic keys, if we skip factorization, we can use the raw values directly with `libjoin` functions.
+
+Let me check if the libjoin functions actually require integer inputs or if they work with raw values...
+
+Looking at `_join_monotonic`:
+```python
+sv = self._get_join_target()  # returns numpy array
+ov = other._get_join_target()
+joined_ndarray, lidx, ridx = libjoin.left_join_indexer(sv, ov)
+```
+
+So `libjoin.left_join_indexer` takes numpy arrays of the actual values, not factorized integers. And it returns the joined array plus indexers.
+
+Wait, but `get_join_indexers` is supposed to return `(left_indexer, right_indexer)` where these are indexers into the original left/right arrays, not the sorted versions.
+
+Actually, looking more carefully at libjoin functions and how they're used:
+
+`libjoin.left_join_indexer(sv, ov)` - `sv` and `ov` are the sorted arrays. The output `lidx`, `ridx` are such that:
+- `joined = sv[lidx]` where lidx != -1, or `ov[ridx]` where lidx == -1
+- wait no, let me re-read...
+
+Actually from `_left_indexer`:
+```python
+joined_ndarray, lidx, ridx = libjoin.left_join_indexer(sv, ov)
+joined = self._from_join_target(joined_ndarray)
+return joined, lidx, ridx
+```
+
+And in `_join_monotonic`:
+```python
+if how == "left":
+    join_array, lidx, ridx = self._left_indexer(other)
+    ...
+    join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+```
+
+So `lidx` and `ridx` are indexers where -1 means "no match, use the other side's value". This is the same convention as `get_join_indexers` output!
+
+Wait no, in `get_join_indexers`, the returned indexers are used by `_reindex_and_concat` which calls `reindex_indexer`. Let me check...
+
+`_reindex_and_concat`:
+```python
+lmgr = left._mgr.reindex_indexer(
+    join_index,
+    left_indexer,
+    axis=1,
+    ...
+)
+```
+
+Hmm, this uses `reindex_indexer` with the indexer. Let me check what that expects. It seems to expect integer positions.
+
+Actually, looking at `_get_join_info` in `_MergeOperation`:
+```python
+(left_indexer, right_indexer) = self._get_join_indexers()
+```
+
+And then:
+```python
+join_index = default_index(len(left_indexer))
+```
+
+So for the non-index case, `left_indexer` and `right_indexer` are just positional indexers for the result, and `join_index` is `RangeIndex(len)`.
+
+I think I need to understand better. Let me look at `reindex_indexer`:
+- It takes a join_index and an indexer
+- The indexer maps result positions to original positions
+- -1 means NA or missing
+
+So `get_join_indexers` returns `(left_indexer, right_indexer)` where:
+- `left_indexer[i]` is the position in left that matches result row i, or -1
+- `right_indexer[i]` is the position in right that matches result row i, or -1
+
+This is exactly what `libjoin.left_join_indexer` etc. return! The `lidx` and `ridx` from libjoin are indexers into the left and right arrays respectively, where the value at position i in the joined result comes from `left[lidx[i]]` (if lidx[i] != -1) or `right[ridx[i]]` (if lidx[i] == -1, meaning use right's value for the "missing" left).
+
+Actually wait, I think I'm confusing myself. Let me re-read `_join_monotonic` more carefully.
+
+```python
+if how == "left":
+    join_array, lidx, ridx = self._left_indexer(other)
+elif how == "right":
+    join_array, ridx, lidx = other._left_indexer(self)
+```
+
+Note the swap for right! So for right join, it swaps left and right.
+
+Then:
+```python
+lidx = None if lidx is None else ensure_platform_int(lidx)
+ridx = None if ridx is None else ensure_platform_int(ridx)
+return join_index, lidx, ridx
+```
+
+And `_left_indexer` returns:
+```python
+return joined, lidx, ridx
+```
+
+Where `lidx` are positions in self (left), `ridx` are positions in other (right), for the joined result.
+
+OK so this is the same convention. Great!
+
+Now, for my fast path in `get_join_indexers`, I need to:
+1. Take monotonic left_k and right_k
+2. Convert to numpy arrays in a way libjoin accepts
+3. Call appropriate libjoin function
+4. Return (left_indexer, right_indexer)
+
+BUT - the current `get_join_indexers` returns indexers for arbitrary key types. The libjoin functions work with specific numpy dtypes.
+
+Let me check what `_get_join_target` does... It returns a numpy array representation. For ExtensionArrays, this might involve copying.
+
+For my fast path, I'll need to:
+1. Check if we can get a numpy array representation cheaply
+2. If so, use libjoin
+
+Actually, let me re-examine. The existing slow path is:
+1. `_factorize_keys` - converts to integer labels, O(n) but with hashing overhead
+2. `_get_join_keys` - for multi-key, combines labels
+3. `_factorize_keys` again
+4. `libjoin.*_join` on final integer arrays
+
+Even for single key, we do step 1 (converts keys to 0..n-1 integers) and then 4 (join on those integers).
+
+For monotonic keys with few unique values, this is already somewhat efficient. For monotonic keys with many unique values, the factorization hashing is unnecessary overhead.
+
+The real question is: can we beat the current approach for monotonic keys?
+
+For monotonic unique keys: yes, searchsorted is O(n log n) or O(n) for the join itself, vs O(n) with hashing. Actually, with hashing it's O(n) expected, but with constant factors. For sorted data, searchsorted-based joins can be faster due to better cache locality.
+
+For monotonic non-unique keys: the current approach is O(n) with hashing. A sort-merge join using libjoin functions is also O(n) for sorted data, but avoids the hash table overhead.
+
+So the optimization makes sense. Let me implement it.
+
+The key condition for using libjoin directly:
+1. Single key (no multi-key combining needed)
+2. Both left and right keys are monotonic
+3. We can convert to numpy arrays that libjoin accepts
+
+Let me check what dtypes libjoin accepts. Looking at `libjoin.pyx`... I don't have the source, but from `_can_use_libjoin` we know it supports:
+- numpy dtypes
+- ArrowExtensionArray, BaseMaskedArray (with conversion)
+- string[python]
+
+And importantly, it requires that the arrays be monotonic with no NAs for the fast path (or at least, monotonic with possibly NAs for the general path).
+
+Actually, looking more carefully, `_can_use_libjoin` is about whether we can use `libjoin` at all, not specifically about monotonicity. For non-monotonic but sortable data, we could still use libjoin by first sorting.
+
+But for my optimization, I'll only trigger when data is already monotonic, avoiding any sorting step.
+
+Let me now write the actual code. I'll add to `pandas/core/reshape/merge.py`:
+
+```python
+def _is_monotonic(arr):
+    """Check if array is monotonic increasing."""
+    if len(arr) <= 1:
+        return True
+    
+    if hasattr(arr, 'is_monotonic_increasing'):
+        return arr.is_monotonic_increasing
+    
+    # Fallback for numpy arrays
+    arr = np.asarray(arr)
+    if arr.dtype.kind in 'iufc':  # numeric types
+        return (arr[1:] >= arr[:-1]).all()
+    
+    # General case
+    return (arr[1:] >= arr[:-1]).all()
+```
+
+Actually, I need to be more careful. Let me check what pandas Index uses. `Index.is_monotonic_increasing` checks via `_engine.is_monotonic_increasing` which is efficient.
+
+For the fast path, I'll check if keys have this property. For arrays (not Index), I'd need to check differently.
+
+Hmm, actually the merge keys in `get_join_indexers` could be:
+- numpy arrays
+- ExtensionArrays
+- Index
+- Series
+
+For Index, we have `is_monotonic_increasing`. For others, we can check less efficiently.
+
+Let me write a simpler version: just check for Index and use its property, otherwise fall back to slower check or skip optimization.
+
+Actually, let me reconsider where to add this optimization. The cleanest place might be in `_MergeOperation._get_join_indexers`, where we already have access to the left/right keys and can check their properties.
+
+Looking at `_MergeOperation._get_join_indexers`:
+```python
+def _get_join_indexers(self):
+    assert self.how != "asof"
+    return get_join_indexers(
+        self.left_join_keys, self.right_join_keys, sort=self.sort, how=self.how
+    )
+```
+
+I can modify this to add a fast path.
+
+Let me also check what types `self.left_join_keys` and `self.right_join_keys` are. From `_get_merge_keys`, they are extracted arrays, could be numpy arrays, ExtensionArrays, etc.
+
+OK, let me think about this differently. The user asked to optimize `DataFrame.merge` for monotonic, sorted keys. The most impactful place to do this is in `get_join_indexers`, since that's where all joins go through.
+
+I'll add a function to detect when we can use the fast path, and a function to compute join indexers using libjoin directly for monotonic keys.
+
+Here's my plan for the implementation:
+
+```python
+def get_join_indexers(left_keys, right_keys, sort=False, how='inner'):
+    # Existing validation...
+
+    # Fast path: single key, both monotonic increasing
+    if len(left_keys) == 1 and len(right_keys) == 1:
+        left_k = left_keys[0]
+        right_k = right_keys[0]
+        
+        if (_is_monotonic_increasing(left_k) and 
+            _is_monotonic_increasing(right_k) and
+            not sort):  # if sort=True, we still need to sort output
+            
+            # Try to convert to format usable by libjoin
+            try:
+                left_arr = _to_libjoin_array(left_k)
+                right_arr = _to_libjoin_array(right_k)
+                
+                if left_arr is not None and right_arr is not None:
+                    return _monotonic_join(left_arr, right_arr, how=how)
+            except (TypeError, ValueError):
+                pass
+
+    # Existing slow path...
+```
+
+Wait, but `sort` parameter: if `sort=True`, we need to sort the result. But actually, for the libjoin functions, the output is naturally sorted if inputs are sorted. If `sort=True`, we might need to sort. Let me check... Actually, for `how='inner'`, `sort=True` means sort the result by join keys. For already-sorted inputs, this is already satisfied.
+
+Hmm, looking more carefully at existing code:
+```python
+join_func = {
+    "inner": libjoin.inner_join,
+    "left": libjoin.left_outer_join,
+    "right": lambda x, y, count, **kwargs: libjoin.left_outer_join(
+        y, x, count, **kwargs
+    )[::-1],
+    "outer": libjoin.full_outer_join,
+}[how]
+```
+
+For "inner" and "left", there's `**kwargs` with `sort=sort`. For "right" and "outer", no sort kwarg.
+
+And in libjoin, `sort` affects whether the result is sorted by the join key.
+
+For monotonic inputs, the join is already producing sorted output, so sort=True is satisfied. I need to handle sort kwarg carefully though.
+
+Actually, for the libjoin direct path, the output IS sorted by joined keys when inputs are sorted. So `sort=True` is naturally satisfied.
+
+But wait - for "left" join, if sort=True, the output should be sorted by left key. Since left is already monotonic, this is satisfied.
+
+One more thing: the `sort` parameter in `libjoin.left_outer_join` with `sort=True` doesn't do extra sorting; it just tells the function to produce sorted output. For already-sorted inputs, both `sort=True` and `sort=False` produce the same sorted result. Actually wait, that doesn't sound right...
+
+Looking at the current code more carefully:
+```python
+kwargs = {}
+if how in ("inner", "left", "right"):
+    kwargs["sort"] = sort
+```
+
+Only "inner", "left", "right" pass sort. For "outer", no sort.
+
+I think `sort` in libjoin means "return sorted by join key". For left join with sort=False, the output preserves left order. For left join with sort=True, the output is sorted by key.
+
+Actually, in the context of `get_join_indexers`, `sort=False` with left join would mean... hmm, the docstring says `sort: bool, default False`. Let me check where `sort` comes from in merge.
+
+In `_MergeOperation.__init__`:
+```python
+self.sort = sort or how == "outer"
+```
+
+So sort is True for outer or if user specified sort=True.
+
+And in `_get_join_indexers`:
+```python
+return get_join_indexers(
+    self.left_join_keys, self.right_join_keys, sort=self.sort, how=self.how
+)
+```
+
+Now, the key behavior: for `how='left'`, `sort=True` means the result index should be sorted by join key. But in the non-Index case (which is what `get_join_indexers` handles), the "result index" is `default_index(len(left_indexer))` which is just 0, 1, 2, ... So sorting doesn't apply?
+
+Actually wait, let me re-check. For non-index-on-index merge, the result index is RangeIndex, but the rows themselves need to be ordered correctly. Let me look at `_reindex_and_concat` again.
+
+Oh I see - `left_indexer` and `right_indexer` determine which rows appear where in the result. For a left join with two identical left rows matching one right row:
+- sort=True: left rows appear at positions matching their key order (which is natural order since left is unchanged)
+- sort=False: same thing for left join
+
+Hmm, for inner join with sort=False, the result preserves left order. With sort=True, it's sorted by key.
+
+Actually I think I'm overcomplicating this. Let me look at what kwargs do in libjoin functions. The `sort` kwarg only matters for `left_outer_join` and `inner_join` and `full_outer_join`...
+
+You know what, let me just look at tests to understand expected behavior and then implement a clean solution.
+
+Actually, the simplest and safest optimization is: when we have a single key pair and both are monotonic, we can potentially skip the double factorization and use a more direct path. But the existing code is already heavily optimized for the general case.
+
+Let me re-read the problem: "Optimize DataFrame.merge for monotonic, sorted keys". 
+
+Looking at the actual performance bottleneck: the two `_factorize_keys` calls. For pre-sorted monotonic data, we could:
+1. Skip the first `_factorize_keys` (convert to Index without sorting, or not at all)
+2. For single key, skip `_get_join_keys` and second factorization
+3. Use libjoin directly on the key arrays
+
+But for the arrays to work with libjoin, they need to be in a specific format.
+
+Actually, I just realized: the most effective optimization is much simpler. Let me check if `_factorize_keys` with `sort=True` on already-sorted data is expensive... 
+
+Looking at `_factorize_keys` in merge.py (not fully shown), it likely uses `pandas.core.sorting.factorize` or similar. For sorted data, this still does a full pass to assign codes.
+
+OK here's my actual implementation. I'll add a fast path in `get_join_indexers` that:
+1. Checks for single key, both monotonic
+2. Uses Index wrapping to leverage existing `_join_monotonic` 
+3. Converts the result back to plain indexers
+
+Actually even simpler: I'll use `Index(left_k).join(Index(right_k), ...)` and extract indexers. But wait, that creates temporary Index objects...
+
+Let me think about what numpy/op我们能 do directly.
+
+For two sorted arrays, the join indexers can be computed with a two-pointer merge algorithm (like in merge sort). This is what libjoin does internally.
+
+OK, I think I've been overcomplicating this. Let me look for existing fast paths in the code that I can extend.
+
+In `pandas/core/indexes/base.py`, `_join_monotonic` already handles all this. The issue is that `get_join_indexers` doesn't use `Index.join`.
+
+What if in `_MergeOperation._get_join_indexers`, when we have a single key and both arrays are monotonic, we:
+1. Create temporary Index objects
+2. Call `Index.join` with `return_indexers=True`
+3. Convert result to the expected format
+
+But wait - `get_join_indexers` is called from multiple places, not just `_MergeOperation._get_join_indexers`. Actually no, looking at grep results, it's only called from there.
+
+Hmm, let me search more carefully... `get_join_indexers` is defined at module level and used in `_MergeOperation._get_join_indexers` and also in groupby code (value_counts with bins).
+
+For the merge case, the optimization in `_MergeOperation._get_join_indexers` would be cleaner.
+
+Actually, let me re-read the task one more time. The optimization target is `pandas.DataFrame.merge` function. This calls `_MergeOperation` which calls `get_join_indexers`.
+
+Let me look at what happens with `how='inner'`, single key, both monotonically increasing, no duplicates:
+
+Left key:  [1, 2, 3, 5]
+Right key: [2, 3, 4]
+
+Expected:
+- Result rows: (1, NA), (2, 2), (3, 3), (5, NA) wait no, inner should be (2,2), (3,3)
+
+For inner: left_indexer=[1,2], right_indexer=[0,1]
+
+Using libjoin.inner_join on the values directly would give joined=[2,3] with indexers [1,2] and [0,1].
+
+Using the factorized path:
+- _factorize_keys: left_k -> codes [0,1,2,3] for values [1,2,3,5], right_k -> codes [0,1,2] for [2,3,4]
+- Wait, this doesn't work because the codes don't share the same value space!
+
+Actually _factorize_keys gives unified codes:
+```python
+_factorize_keys(left_k=[1,2,3,5], right_k=[2,3,4])
+# Returns something like: left_codes=[0,1,2,4], right_codes=[1,2,3], count=5
+# where 0->1, 1->2, 2->3, 3->4, 4->5
+```
+
+Then _get_join_keys returns these same codes (single key case).
+
+Then second _factorize_keys is a no-op (already dense).
+
+Then libjoin.inner_join on [0,1,2,4] and [1,2,3] with count=5.
+
+So the slow path does: hash all values into unified codes, then run libjoin on integer codes.
+
+My fast path would run libjoin directly on the original values, skipping two hash passes. For string or complex objects, the hashing dominates. For numeric types, it's still extra work.
+
+But libjoin functions need compatible numpy types. For arbitrary types, we need to ensure libjoin can handle them.
+
+Actually, re-reading the code, I see that `_can_use_libjoin` checks types. For unsupported types, the Index join falls back to other methods.
+
+So my fast path should:
+1. Check if both left_k and right_k are libjoin-compatible
+2. If so, use libjoin directly
+
+Checking libjoin compatibility: basically, can we convert to numpy array without losing information and without object dtype?
+
+For numeric types: yes. For strings with specific encodings: depends. For datetime: need special handling.
+
+Hmm, this is getting complex. Let me look for a simpler pattern.
+
+Looking at the test file or benchmarks might help, but I don't have access to those. Based on common use cases, optimizing for numeric keys would be most impactful.
+
+Let me try a different approach: what if we detect monotonic numeric keys and use a numpy-based searchsorted approach?
+
+```python
+def _get_monotonic_join_indexers(left_k, right_k, how='inner'):
+    """Fast path for monotonic keys using searchsorted."""
+    
+    # Both must be convertible to numpy arrays for comparison
+    left_arr = np.asarray(left_k)
+    right_arr = np.asarray(right_k)
+    
+    # ...or better, use the original arrays if they're already numpy
+    
+    if how == 'inner':
+        # For each element in left, find matches in right
+        # Use searchsorted to find bounds
+        left_pos = np.searchsorted(right_arr, left_arr, side='left')
+        right_pos = np.searchsorted(right_arr, left_arr, side='right')
+        # Elements where left_arr[i] exists in right: left_pos[i] < right_pos[i]
+        # Actually this gets complicated with duplicates...
+```
+
+This gets complicated with duplicates. The libjoin functions already handle all this correctly.
+
+OK new plan: I'll check if we can call libjoin directly with minimal conversion. The key insight is that for the libjoin functions to work with non-integer data, the arrays need to be in a comparable format.
+
+Looking at `_get_join_target` in Index:
+```python
+if isinstance(self._values, BaseMaskedArray):
+    return self._values._data
+elif isinstance(self._values, ArrowExtensionArray):
+    return self._values.to_numpy()
+# ...
+target = self._get_engine_target()
+if not isinstance(target, np.ndarray):
+    raise ValueError("_can_use_libjoin should return False.")
+return target
+```
+
+So it converts to numpy array. For my fast path, I need to do similar conversion.
+
+Let me just implement a practical fast path for the common case: numpy arrays that are already monotonic. This covers the most common performance-sensitive scenario.
+
+Here's my implementation:
+
+```python
+def _maybe_get_monotonic_join_indexers(left_k, right_k, how, sort):
+    """Try fast path for monotonic keys. Returns (lidx, ridx) or None."""
+    
+    # Only for single-key case, already checked by caller
+    assert len(left_k) == 1 and len(right_k) == 1
+    
+    # Check types
+    lk = left_k[0]
+    rk = right_k[0]
+    
+    # Must be numpy array or convertible
+    if not isinstance(lk, np.ndarray):
+        if hasattr(lk, '__array__'):
+            try:
+                lk = np.asarray(lk)
+            except (TypeError, ValueError):
+                return None
+        else:
+            return None
+    
+    if not isinstance(rk, np.ndarray):
+        if hasattr(rk, '__array__'):
+            try:
+                rk = np.asarray(rk)
+            except (TypeError, ValueError):
+                return None
+        else:
+            return None
+    
+    # Check monotonic (simple numeric check)
+    if lk.dtype.kind not in 'iufc' or rk.dtype.kind not in 'iufc':
+        # Could also handle datetime, etc. but start with simple numeric
+        return None
+    
+    if len(lk) <= 1 or len(rk) <= 1:
+        return None
+    
+    # Quick monotonic check (first and last comparison for fast reject)
+    if not (lk[0] <= lk[-1] and rk[0] <= rk[-1]):
+        # Might be monotonic decreasing, skip for now
+        # TODO: could handle decreasing too
+        is_l_mono_inc = (lk[1:] >= lk[:-1]).all()  # expensive, skip
+        return None
+    
+    # Actually check monotonic increasing
+    if not ((lk[1:] >= lk[:-1]).all() and (rk[1:] >= rk[:-1]).all()):
+        return None
+    
+    # Now use libjoin
+    # Need to factor in 'how'
+    
+    # But wait - libjoin functions were already imported at top of file
+    # They're: libjoin.left_join_indexer_unique, libjoin.left_join_indexer, etc.
+    
+    # For general case (may have duplicates), use appropriate function
+    # But these return (joined, lidx, ridx), not just indexers...
+    
+    # Actually for get_join_indexers, we need indexers into original arrays
+    # For left join: result[i] comes from left[lidx[i]] or right[ridx[i]] if lidx[i]==-1
+    
+    pass
+```
+
+Wait, I realize I'm confusing the return types. Let me re-check what `libjoin.inner_join` etc. return vs what `get_join_indexers` returns.
+
+`get_join_indexers` returns `(left_indexer, right_indexer)` where these are positional index arrays of the same length, with -1 indicating no match.
+
+`libjoin.inner_join(lkey, rkey, count)` returns `(result, left_indexer, right_indexer)` where result is the joined key values, and left_indexer/right_indexer are positions in the original arrays.
+
+Actually, the indexers from libjoin have a different convention I think. Let me check `Index._inner_indexer`:
+
+```python
+def _inner_indexer(self, other):
+    sv = self._get_join_target()
+    ov = other._get_join_target()
+    joined_ndarray, lidx, ridx = libjoin.inner_join_indexer(sv, ov)
+    joined = self._from_join_target(joined_ndarray)
+    return joined, lidx, ridx
+```
+
+And in `_join_monotonic`:
+```python
+elif how == "inner":
+    join_array, lidx, ridx = self._inner_indexer(other)
+    join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+```
+
+And the result `join_index` is then used with lidx/ridx. But lidx/ridx here are positions in `self` and `other`, not in join_index.
+
+Wait, but `_reindex_and_concat` in merge uses:
+```python
+left._mgr.reindex_indexer(
+    join_index,
+    left_indexer,
+    axis=1,
+    ...
+)
+```
+
+Where `left_indexer` comes from `get_join_indexers`. And this is used with `join_index = default_index(len(left_indexer))`.
+
+OK, I think the convention for `get_join_indexers` returned indexers is: for each position in the result, which position in left/right it came from, or -1 if no match.
+
+And for libjoin: for each position in the result, which position in left/right it came from, or -1 if no match.
+
+These should be the same! The key difference is how the result is formed.
+
+In `Index.join`, the result is an Index of join keys. In `get_join_indexers`, the result is just indexers (the actual values are reindexed later).
+
+So actually, I can use libjoin functions to get the indexers directly, and they'll have the same meaning!
+
+But there's a subtlety: `libjoin.inner_join` takes factorized keys (integers), while `libjoin.inner_join_indexer` takes actual arrays. Let me check what's available...
+
+From the imports in `base.py`, I see: `libjoin.left_join_indexer_unique`, `libjoin.left_join_indexer`, `libjoin.inner_join_indexer`, `libjoin.outer_join_indexer`.
+
+And in `merge.py`: `libjoin.inner_join`, `libjoin.left_outer_join`, `libjoin.full_outer_join`.
+
+So there are two families:
+- `_indexer` suffix: take actual comparable arrays, return (joined_array, left_idx, right_idx)
+- No suffix: take integer factorized keys and count, return (left_idx, right_idx) - wait, actually need to check.
+
+Let me check `merge.py` usage:
+```python
+join_func = {
+    "inner": libjoin.inner_join,
+    "left": libjoin.left_outer_join,
+    "right": lambda x, y, count, **kwargs: libjoin.left_outer_join(
+        y, x, count, **kwargs
+    )[::-1],
+    "outer": libjoin.full_outer_join,
+}[how]
+```
+
+And later: `return join_func(lkey, rkey, count, **kwargs)`
+
+So `libjoin.inner_join` returns something, and it takes `lkey, rkey, count`. Given that lkey and rkey are factorized integer arrays, this returns indexers.
+
+Actually, let me check what `libjoin.inner_join` returns. Looking at existing code, in `get_join_indexers`:
+```python
+# "pypi" instead of "PYPI" to avoid sphinx processing
+# libjoin.inner_join(lkey, rkey, count) -> returns two arrays
+```
+
+Actually I can't easily check. Let me look at how the result is used:
+
+```python
+return join_func(lkey, rkey, count, **kwargs)
+```
+
+And `_get_join_indexers` returns this, which goes to `_get_join_info`, which unpacks to `left_indexer, right_indexer`.
+
+So `join_func` returns `(left_indexer, right_indexer)`.
+
+For the `_indexer` family, they return `(joined, left_indexer, right_indexer)`.
+
+So I can use either, but need to handle return value correctly.
+
+For my fast path with actual arrays (not factorized), I should use:
+- `libjoin.inner_join_indexer` for inner
+- `libjoin.left_join_indexer` for left
+- etc.
+
+And extract just the indexers (ignoring the joined array).
+
+OK let me now write the clean implementation. I'll add:
+
+1. A helper to check if keys are suitable for fast path
+2. A helper to compute indexers using libjoin directly
+
+```python
+def _get_single_key_monotonic_join_indexers(left_k, right_k, how):
+    """
+    Fast path for single-key join on monotonic arrays.
+    Uses libjoin directly without factorization.
+    
+    Parameters
+    ----------
+    left_k, right_k : array-like
+        Already-verified monotonic increasing arrays
+    how : str
+        
+    Returns
+    -------
+    tuple of (left_indexer, right_indexer)
+    """
+    # Convert to numpy arrays that libjoin can handle
+    # Both should be numpy arrays at this point
+    if not isinstance(left_k, np.ndarray):
+        left_k = np.asarray(left_k)
+    if not isinstance(right_k, np.ndarray):
+        right_k = np.asarray(right_k)
+    
+    if how == "inner":
+        _, lidx, ridx = libjoin.inner_join_indexer(left_k, right_k)
+    elif how == "left":
+        _, lidx, ridx = libjoin.left_join_indexer(left_k, right_k)
+    elif how == "right":
+        # Swap and reverse
+        _, ridx, lidx = libjoin.left_join_indexer(right_k, left_k)
+    elif how == "outer":
+        _, lidx, ridx = libjoin.outer_join_indexer(left_k, right_k)
+    
+    return lidx, ridx
+```
+
+Wait, but I need to check that these libjoin functions exist and have the right signatures. Let me verify from base.py usage...
+
+In `base.py`:
+```python
+def _left_indexer(self, other):
+    sv = self._get_join_target()
+    ov = other._get_join_target()
+    joined_ndarray, lidx, ridx = libjoin.left_join_indexer(sv, ov)
+    ...
+```
+
+Yes! `libjoin.left_join_indexer(sv, ov)` returns `(joined, lidx, ridx)`.
+
+Similarly:
+- `libjoin.inner_join_indexer(sv, ov)`
+- `libjoin.outer_join_indexer(sv, ov)`
+
+And for unique case:
+- `libjoin.left_join_indexer_unique(sv, ov)` - returns just `ridx` (lidx is implicit 0..len-1)
+
+Actually, I need to check right join. For right join, we want all elements from right to appear. The libjoin way is to swap left and right and call left_join, then swap back indexers.
+
+But wait - the existing code for "right" in merge does:
+```python
+"right": lambda x, y, count, **kwargs: libjoin.left_outer_join(
+    y, x, count, **kwargs
+)[::-1],
+```
+
+This swaps x and y (i.e., right and left), calls left_outer_join, then reverses the result. The `[::-1]` reverses the tuple, so it returns `(ridx, lidx)` instead of `(lidx, ridx)`.
+
+For my direct path:
+```python
+if how == "right":
+    _, ridx, lidx = libjoin.left_join_indexer(right_k, left_k)
+```
+
+Yes, this is correct.
+
+Now, one more thing: `outer_join_indexer` should exist based on the pattern, but let me verify... Actually, I don't see it in base.py. Let me check what Index uses for outer join.
+
+In `_join_monotonic`:
+```python
+elif how == "outer":
+    join_array, lidx, ridx = self._outer_indexer(other)
+```
+
+And `_outer_indexer`:
+```python
+def _outer_indexer(self, other):
+    sv = self._get_join_target()
+    ov = other._get_join_target()
+    joined_ndarray, lidx, ridx = libjoin.outer_join_indexer(sv, ov)
+    ...
+```
+
+Yes, `libjoin.outer_join_indexer` exists.
+
+Great, now for the unique-optimized case. If both keys are unique, we can use faster functions:
+- `left_join_indexer_unique` instead of `left_join_indexer`
+
+The unique version returns just the right indexer (since left indexer is simply `np.arange(len(left_k))`).
+
+For inner with unique keys: `inner_join_indexer` vs no unique version... Actually, looking at base.py:
+
+```python
+if self.is_unique and other.is_unique:
+    # We can perform much better than the general case
+    if how == "left":
+        join_index = self
+        lidx = None
+        ridx = self._left_indexer_unique(other)
+    elif how == "right":
+        join_index = other
+        lidx = other._left_indexer_unique(self)
+        ridx = None
+    elif how == "inner":
+        join_array, lidx, ridx = self._inner_indexer(other)
+        ...
+```
+
+So for left and right with unique keys, it uses `_left_indexer_unique`. For inner and outer, it still uses the regular `_inner_indexer` and `_outer_indexer`.
+
+And `_left_indexer_unique`:
+```python
+def _left_indexer_unique(self, other):
+    sv = self._get_join_target()
+    ov = other._get_join_target()
+    return libjoin.left_join_indexer_unique(sv, ov)
+```
+
+This returns just `ridx`, and `lidx` is implicitly `np.arange(len(self))`.
+
+For my fast path, I'll handle the unique case too for extra performance.
+
+Now let me write the full implementation. Actually, I need to figure out where to add this code. Let me look at the file structure...
+
+In `pandas/core/reshape/merge.py`, I'll add the helper functions before `get_join_indexers` and modify `get_join_indexers`.
+
+But actually, there's a cleaner place. Let me look at `_MergeOperation._get_join_indexers`:
+
+```python
+def _get_join_indexers(self):
+    """return the join indexers"""
+    # make mypy happy
+    assert self.how != "asof"
+    return get_join_indexers(
+        self.left_join_keys, self.right_join_keys, sort=self.sort, how=self.how
+    )
+```
+
+I can override this or modify `get_join_indexers`. I think modifying `get_join_indexers` is more general and correct, since it's the public-ish function for this purpose.
+
+BUT - I need to be careful about what types come through. In `_MergeOperation._get_join_indexers`, the keys are already extracted from DataFrames and might be various array types.
+
+Let me think about this more. The fast path should work when:
+1. Single key (len(left_join_keys) == len(right_join_keys) == 1)
+2. Both keys are monotonic increasing
+3. Both keys can be converted to libjoin-compatible arrays
+
+For condition 3, I need to check types. The key types that work with libjoin are those where sorting/comparison is well-defined and efficient.
+
+Looking at `_can_use_libjoin` more carefully:
+
+```python
+@final
+@cache_readonly
+def _can_use_libjoin(self) -> bool:
+    if type(self) is Index:
+        return (
+            isinstance(self.dtype, np.dtype)
+            or isinstance(self._values, (ArrowExtensionArray, BaseMaskedArray))
+            or self.dtype == "string[python]"
+        )
+    return not isinstance(self, (ABCIntervalIndex, ABCMultiIndex))
+```
+
+So for plain Index: numpy dtypes, some EAs, and string[python].
+
+For my fast path, I'll support:
+- numpy arrays with numeric dtypes (i, u, f, c - wait, not complex for comparison?)
+- Actually, let me check if libjoin supports complex... probably not for ordering. 
+
+Actually for monotonic optimization, we need ordering. So I'll require:
+- numpy arrays 
+- dtype kind in 'iuf' (integer, unsigned, float) - not complex
+- Or datetime64, timedelta64
+- And potentially others, but start with basic numeric
+
+Let me just check for basic numpy types and skip the rest for the fast path. The slow path will handle everything else.
+
+Actually, I can let it try and fail gracefully. Convert to numpy, check monotonic, try libjoin, catch exceptions and fall back.
+
+Here's my refined approach:
+
+```python
+def _maybe_use_monotonic_fastpath(left_key, right_key, how, sort):
+    """
+    Attempt to use a fast path for monotonic keys.
+    Returns (left_indexer, right_indexer) or None if fast path not applicable.
+    """
+    # Quick type checks
+    if hasattr(left_key, 'is_monotonic_increasing'):
+        if not left_key.is_monotonic_increasing:
+            return None
+        # Convert to numpy if needed
+        left_arr = _to_numpy_for_libjoin(left_key)
+    else:
+        try:
+            left_arr = np.asarray(left_key)
+            # Check monotonic
+            if len(left_arr) > 1 and not (left_arr[1:] >= left_arr[:-1]).all():
+                return None
+        except (TypeError, ValueError):
+            return None
+    
+    if hasattr(right_key, 'is_monotonic_increasing'):
+        if not right_key.is_monotonic_increasing:
+            return None
+        right_arr = _to_numpy_for_libjoin(right_key)
+    else:
+        try:
+            right_arr = np.asarray(right_key)
+            if len(right_arr) > 1 and not (right_arr[1:] >= right_arr[:-1]).all():
+                return None
+        except (TypeError, ValueError):
+            return None
+    
+    # Try to use libjoin
+    try:
+        return _compute_monotonic_join_indexers(left_arr, right_arr, how)
+    except (TypeError, ValueError):
+        return None
+```
+
+Hmm, but checking `(arr[1:] >= arr[:-1]).all()` for large arrays is expensive (full scan). I should avoid this if I can use a cheaper check first, or only do it when I suspect the array might be monotonic.
+
+Actually, for the fast path to be worthwhile, I want to check monotonicity. But for non-monotonic data, this check adds overhead. So I need the check to be fast for the common case where data is NOT monotonic.
+
+One optimization: check first few and last few elements. If they're not monotonic, reject quickly without full scan.
+
+```python
+def _quick_is_monotonic_increasing(arr, n=5):
+    """Quick check for monotonic increasing. May have false negatives."""
+    if len(arr) <= 1:
+        return True
+    # Check boundaries
+    if arr[0] > arr[-1]:
+        return False
+    # Check first n elements
+    if len(arr) > 2:
+        for i in range(min(n, len(arr) - 1)):
+            if arr[i] > arr[i + 1]:
+                return False
+    return None  # Maybe, need full check
+```
+
+Actually this is getting too complex. Let me simplify: for the fast path, I'll check the `is_monotonic_increasing` property if available (Index, Series, some EAs), and for plain numpy arrays, I'll do a quick boundary check then full check if needed.
+
+Or even simpler: since the user specifically asked to optimize for monotonic, sorted keys, we can assume they often are and the full scan is acceptable overhead when it enables the fast path.
+
+Let me also think about memory: for large arrays, `np.asarray` might copy. I want to avoid unnecessary copies.
+
+OK, let me just write the code. I'll add it to `merge.py` near `get_join_indexers`.
+
+Actually, one more thing: the `sort` parameter. If `sort=True` and `how='inner'`, the existing code passes `sort=True` to `libjoin.inner_join`. For my fast path with libjoin direct calls, do I need to handle sort?
+
+Looking at `libjoin.inner_join_indexer`: since inputs are sorted, output is naturally sorted. So for `sort=True`, the fast path naturally produces sorted output. For `sort=False` with pre-sorted inputs, this is also correct.
+
+The issue is: `sort=False` with `how='inner'` should preserve left order. With sorted inputs and the libjoin functions, does `inner_join_indexer` preserve left order?
+
+For inner join on sorted inputs: `(left=[1,2,3,5], right=[2,3,4])` -> result should be `[2,3]`, with left_indexer `[1,2]` and right_indexer `[0,1]`. This preserves left order.
+
+For outer join: result is `[1,2,3,4,5]`, which is sorted. If sort=False, should this be sorted? For outer join, sort=True means sort by join key. With sorted inputs, the merge naturally produces sorted output. So it's fine.
+
+Actually, for left join with `sort=False`: result is `[1,2,3,5]` (left order). The `left_join_indexer` on sorted inputs will produce... let me think. Left join on `[1,2,3,5]` with `[2,3,4]` gives:
+- 1: no match in right
+- 2: match with 2
+- 3: match with 3
+- 5: no match
+
+Output: `[1, 2, 3, 5]` with right matches `[NA, 2, 3, NA]`. This is in left order, which is correct for `sort=False`. And for `sort=True`, it's still in left order since left is already sorted.
+
+So the fast path works correctly for both sort=True and sort=False when inputs are monotonic!
+
+Wait, but what if `sort=True` and `how='left'` and left is not sorted but we said it's monotonic... No, my fast path requires monotonic, so left IS sorted.
+
+OK I think I have enough understanding. Let me write the final implementation.
+
+One subtlety: `libjoin.left_join_indexer` (the non-unique version) might have a different calling convention than I expect. Let me verify from existing code usage.
+
+In `base.py`:
+```python
+def _left_indexer(self, other):
+    sv = self._get_join_target()
+    ov = other._get_join_target()
+    joined_ndarray, lidx, ridx = libjoin.left_join_indexer(sv, ov)
+    ...
+```
+
+For unique case:
+```python
+def _left_indexer_unique(self, other):
+    sv = self._get_join_target()
+    ov = other._get_join_target()
+    return libjoin.left_join_indexer_unique(sv, ov)
+```
+
+So `left_join_indexer_unique` returns just `ridx`, not a tuple. The left indexer is `np.arange(len(sv))`.
+
+Now for my code, I'll handle the general case (may have duplicates) using the regular `_indexer` functions, and add a special case for unique keys.
+
+Let me now write the actual code to insert. I'll modify `get_join_indexers`:
+
+```python
+def get_join_indexers(left_keys, right_keys, sort=False, how="inner"):
+    # ... existing code ...
+    
+    # FAST PATH: single key, both monotonic increasing
+    if (
+        len(left_keys) == 1 
+        and len(right_keys) == 1
+        and not sort  # Actually no, sort can be True too
+    ):
+        # ...
+```
+
+Wait, I said sort doesn't matter for monotonic inputs. Let me re-verify.
+
+For `libjoin.inner_join_indexer`, the output is always sorted by key (since inputs are sorted). For pandas merge with `sort=True`, we want output sorted by key. ✓
+
+For `sort=False` with `how='inner'`, we want output in left's original order. Since left is monotonic increasing, the inner join result in sorted order IS the left order (for elements that match). Actually wait, is that true?
+
+Example: left=[1, 1, 2, 3], right=[1, 2, 2]. Inner join (sorted):
+- 1 (left[0]) matches right[0]
+- 1 (left[1]) matches right[0]
+- 2 (left[2]) matches right[1], right[2]
+- 3 (left[3]) no match
+
+Hmm, with duplicates, the left order within a key group might be preserved, but keys with duplicates in right create extra rows. 
+
+Actually, I need to check what pandas expects. With `how='inner'`, `sort=False`:
+- left=[1, 1, 2, 3], right=[1, 2, 2]
+- The left rows with key=1 appear first (positions 0, 1), then key=2 (position 2)
+- For key=1, we get 1 row from right. Result: (1,1) - but wait, both left[0] and left[1] have value 1, so we get 2 rows: (left[0], right[0]) and (left[1], right[0]).
+
+If we use sorted join, the result would be ordered by key, which happens to also be left order since left is sorted. But within a key group, left rows appear in order, and for each left row, right matches appear in right order.
+
+So for `sort=False`, does pandas guarantee this ordering? Let me check the documentation... Generally, pandas merge on unsorted data with sort=False preserves left order for left rows. For sorted data, the left order matches the sorted order.
+
+I think for monotonic inputs, the libjoin output will match pandas' expectations for both sort=True and sort=False. Let me proceed with this assumption and verify with the test suite.
+
+Now, I need to figure out the exact function names and their behavior. Let me search the codebase for `libjoin.` usage to confirm all the names.
+
+From what I've seen:
+- `libjoin.left_join_indexer` - left join
+- `libjoin.left_join_indexer_unique` - left join, unique keys
+- `libjoin.inner_join_indexer` - inner join
+- `libjoin.outer_join_indexer` - outer/full join
+- `libjoin.ffill_indexer` - forward fill
+
+And for factorized:
+- `libjoin.inner_join`
+- `libjoin.left_outer_join`
+- `libjoin.full_outer_join`
+
+For my fast path, I need the `_indexer` versions.
+
+OK here's my plan for the code change:
+
+```python
+def _get_join_indexers_monotonic(left_k, right_k, how):
+    """Fast path using libjoin for monotonic keys."""
+    import pandas._libs.join as libjoin
+    
+    if how == "inner":
+        _, lidx, ridx = libjoin.inner_join_indexer(left_k, right_k)
+        return lidx, ridx
+    elif how == "left":
+        _, lidx, ridx = libjoin.left_join_indexer(left_k, right_k)
+        return lidx, ridx
+    elif how == "right":
+        # Swap: left join from right perspective
+        _, ridx, lidx = libjoin.left_join_indexer(right_k, left_k)
+        return lidx, ridx
+    elif how == "outer":
+        _, lidx, ridx = libjoin.outer_join_indexer(left_k, right_k)
+        return lidx, ridx
+
+
+def get_join_indexers(left_keys, right_keys, sort=False, how="inner"):
+    # ... existing validation ...
+    
+    # Fast path for single-key monotonic merge
+    if len(left_keys) == 1 and len(right_keys) == 1:
+        left_k = left_keys[0]
+        right_k = right_keys[0]
+        
+        # Check if both are numpy arrays with simple dtypes
+        if isinstance(left_k, np.ndarray) and isinstance(right_k, np.ndarray):
+            # Quick monotonic check
+            if (
+                len(left_k) <= 1 
+                or (left_k[1:] >= left_k[:-1]).all()
+            ) and (
+                len(right_k) <= 1 
+                or (right_k[1:] >= right_k[:-1]).all()
+            ):
+                # Both monotonic increasing
+                if left_k.dtype.kind in "iuf" and right_k.dtype.kind in "iuf":
+                    # unsigned int, signed int, or float
+                    try:
+                        return _get_join_indexers_monotonic(left_k, right_k, how)
+                    except Exception:
+                        pass
+    
+    # ... existing slow path ...
+```
+
+Hmm, but wait. I'm importing libjoin inside the function. It's already imported at module level in the original code. Let me check...
+
+Looking at the top of `merge.py`:
+```python
+from pandas._libs import lib as libalgos
+# ...
+# I need to check if libjoin is imported
+```
+
+Looking at merge.py context provided, I see:
+```python
+from pandas._libs import lib as libalgos
+```
+
+And in the code, `get_join_indexers` uses:
+```python
+join_func = {
+    "inner": libjoin.inner_join,
+    ...
+}
+```
+
+So `libjoin` is imported. Let me verify: it's likely `from pandas._libs.join import libjoin` or similar. Actually, looking at the code:
+
+In `pandas/core/indexes/base.py`:
+```python
+import pandas._libs.join as libjoin
+```
+
+In `pandas/core/reshape/merge.py`, it's probably:
+```python
+from pandas._libs.join import get_join_indexers  # no wait
+```
+
+Let me check... The code shows `libjoin.inner_join`, `libjoin.left_outer_join`, etc. But I don't see the import. It might be:
+```python
+from pandas._libs import join as libjoin
+```
+
+I'll assume `libjoin` is available in `merge.py`. Let me check by searching the provided code...
+
+In the provided `merge.py`, I don't see the import explicitly in the shown code. But `libjoin` is used. Let me search...
+
+Looking carefully at the merge.py code provided, I see `libjoin` used but not where it's imported. It must be imported somewhere in the file. I'll assume it's available.
+
+Actually, I need to write the exact code. Let me be careful about what to import.
+
+From existing code in merge.py:
+```python
+# At top level, probably:
+# import pandas._libs.join as libjoin
+# or
+# from pandas._libs.join import inner_join, ...
+```
+
+Actually I can see it in the code: `libjoin.inner_join`, `libjoin.left_outer_join`, `libjoin.full_outer_join` are used. So `libjoin` module is imported.
+
+OK, one more thing: my fast path needs to handle the case where result should be sorted. For `sort=True` with monotonic inputs, the libjoin output is already sorted. But wait - what about `sort=False` with `how='outer'`?
+
+For outer join with `sort=False`, pandas docs say the result preserves the order of left keys then right keys. But with libjoin `outer_join_indexer` on sorted inputs, the result is sorted by key.
+
+Let me check pandas behavior for sort=False with outer join. Looking at `_maybe_try_sort` in index code and docstrings... 
+
+Actually, for `get_join_indexers` in the context of DataFrame.merge, the `sort` parameter's meaning is: should the result be sorted by the join keys? For `how='outer'` and `sort=True`, yes. For `how='outer'` and `sort=False`, the result order is determined by the join algorithm.
+
+For my fast path, I'll only apply when `sort` is True OR when the natural sort order of the join matches expectations. This is complex.
+
+Actually, looking at the existing code:
+```python
+kwargs = {}
+if how in ("inner", "left", "right"):
+    kwargs["sort"] = sort
+```
+
+So `sort` is only passed for inner, left, right. For outer, it's always... actually `self.sort = sort or how == "outer"`, so outer always has sort=True effectively.
+
+Let me re-read: `sort: bool, default False`. But in `_MergeOperation.__init__`:
+```python
+self.sort = sort or how == "outer"
+```
+
+So `self.sort` is True if user passed `sort=True` or if `how='outer'`. Then in `_get_join_indexers`:
+```python
+return get_join_indexers(
+    self.left_join_keys, self.right_join_keys, sort=self.sort, how=self.how
+)
+```
+
+So `sort` is passed as `True` for outer joins always. For other joins, it's whatever the user specified (default False).
+
+And in `get_join_indexers`, `sort` is used:
+```python
+kwargs = {}
+if how in ("inner", "left", "right"):
+    kwargs["sort"] = sort
+```
+
+For `how='left'`, `sort=True` means sort the result by key. But with monotonic left, left join naturally produces left-ordered output, which is also key-sorted.
+
+I think the safe approach is: my fast path works correctly for all cases with monotonic inputs because the output order from libjoin on sorted inputs matches pandas' expectations.
+
+But actually, I'm not 100% sure about `how='right'`, `sort=False`. Let me think:
+
+Right join with right=[2,3,4], left=[1,2,3,5]:
+- Sort=False, result should be in right order: [2, 3, 4]
+- 2 matches left[1], 3 matches left[2], 4 has no left match
+
+Using my code for right join: swap and do left join. So left_join([2,3,4], [1,2,3,5]):
+- Result key order: [1, 2, 3] wait no...
+
+Actually `left_join_indexer([2,3,4], [1,2,3,5])`:
+- 2 matches 2 in right (position 1)
+- 3 matches 3 in right (position 2)
+- 4 has no match
+
+Result: [2, 3, 4] with indexers into left: [0, 1, 2] and right: [1, 2, -1]
+
+But wait, I swapped for right join! So I called `left_join_indexer(right_k, left_k)` which is `left_join_indexer([2,3,4], [1,2,3,5])`. The result lidx (into right_k) = [0, 1, 2], ridx (into left_k) = [1, 2, -1]. Then I swap back: lidx (into original left) = [1, 2, -1], ridx (into original right=[2,3,4]) = [0, 1, 2].
+
+So `left_indexer = [1, 2, -1]`, `right_indexer = [0, 1, 2]`. Result keys: [2, 3, 4] (from right). This is right order, which is correct for sort=False!
+
+For sort=True with right join, we'd want sorted by key. Since right is monotonic, right order = sorted order. ✓
+
+Great, my fast path should work.
+
+One more case: `how='inner'`, `sort=False`, left=[3, 2, 1] (wait, but this isn't monotonic increasing!).
+
+My fast path requires monotonic increasing, so left=[1, 2, 3]. Inner join with right=[2, 3, 4]:
+- Expected with sort=False: preserve left order for matching elements
+- 1 no match, 2 matches position 0 of right, 3 matches position 1 of right
+
+Result rows: (2, right[0]), (3, right[1]) with left_indexer [1, 2], right_indexer [0, 1]. This is in left order, which matches sort=False.
+
+For sort=True, same thing since left is sorted.
+
+OK I'm convinced. Let me write the final code.
+
+One more optimization: if I know the keys are unique, I can use faster functions. I can check uniqueness cheaply for monotonic arrays: just check if any consecutive elements are equal.
+
+```python
+is_left_unique = len(left_k) <= 1 or (left_k[1:] > left_k[:-1]).all()  # strict
+```
+
+Or for potentially large arrays, use `len(np.unique(left_k)) == len(left_k)` but that's expensive. For monotonic arrays, checking strict monotonicity is O(n) but with early exit.
+
+I'll add a helper to check this and use faster paths when possible.
+
+Actually, `left_join_indexer_unique` only requires left to be unique? Or both? Let me check...
+
+From base.py:
+```python
+if self.is_unique and other.is_unique:
+    # We can perform much better than the general case
+    if how == "left":
+        join_index = self
+        lidx = None
+        ridx = self._left_indexer_unique(other)
+```
+
+So for left join, if both are unique, it uses `_left_indexer_unique` which returns just `ridx`. `lidx` is implicit `range(len(self))`. The result has the same length as `self` since all left elements have exactly one match.
+
+For inner join with both unique: uses `_inner_indexer`. Let me check if there's a unique-optimzied version... In the code, it still uses `_inner_indexer` (the general version). So no special fast path.
+
+For my fast path, I can still use the general `inner_join_indexer` etc., or if both are unique, I might skip some work. Let me keep it simple and not special-case uniqueness at first.
+
+Actually wait, for unique keys, the general `_join_indexer` functions are also optimized. Let me just use them and trust the implementation.
+
+OK, final code. I need to be very careful about the exact formatting to match pandas style.
+
+Let me review the existing `get_join_indexers` code:
+
+```python
+def get_join_indexers(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    sort: bool = False,
+    how: JoinHow = "inner",
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+... (the function)
+```
+
+I'll insert my fast path after the initial validation.
+
+Here's my final implementation:
+
+```python
+def _get_join_indexers_monotonic(
+    left_k: np.ndarray,
+    right_k: np.ndarray,
+    how: JoinHow,
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+    """
+    Compute join indexers for monotonic increasing keys using libjoin.
+    
+    Parameters
+    ----------
+    left_k : np.ndarray
+        Monotonic increasing array.
+    right_k : np.ndarray
+        Monotonic increasing array.
+    how : str
+        One of 'inner', 'left', 'right', 'outer'.
+    
+    Returns
+    -------
+    tuple of (left_indexer, right_indexer)
+    """
+    if how == "inner":
+        _join = libjoin.inner_join_indexer
+        _, lidx, ridx = _join(left_k, right_k)
+        return lidx, ridx
+    elif how == "left":
+        _join = libjoin.left_join_indexer
+        _, lidx, ridx = _join(left_k, right_k)
+        return lidx, ridx
+    elif how == "right":
+        # Swap to use left join
+        _join = libjoin.left_join_indexer
+        _, ridx, lidx = _join(right_k, left_k)
+        return lidx, ridx
+    else:  # outer
+        _join = libjoin.outer_join_indexer
+        _, lidx, ridx = _join(left_k, right_k)
+        return lidx, ridx
+
+
+def get_join_indexers(
+...
+```
+
+Wait, I need to double-check: does `inner_join_indexer` exist? Let me search the codebase...
+
+From base.py, I see: `_inner_indexer` uses `libjoin.inner_join_indexer`. Yes, it exists.
+
+What about return type? `_inner_indexer` returns `(joined, lidx, ridx)`. So `libjoin.inner_join_indexer(left_k, right_k)` returns `(joined_array, left_indexer, right_indexer)`.
+
+Similarly, `left_join_indexer` returns `(joined_array, left_indexer, right_indexer)`.
+
+And `outer_join_indexer` returns `(joined_array, left_indexer, right_indexer)`.
+
+Great.
+
+But wait, I need to verify `libjoin.outer_join_indexer` exists. In base.py:
+```python
+def _outer_indexer(self, other):
+    sv = self._get_join_target()
+    ov = other._get_join_target()
+    joined_ndarray, lidx, ridx = libjoin.outer_join_indexer(sv, ov)
+    ...
+```
+
+Yes, it exists.
+
+OK, I'm confident in the implementation. Let me also make sure I handle potential type issues. The libjoin functions might only work with certain numpy dtypes. I'll catch exceptions and fall back.
+
+Now, about the `sort` parameter in `get_join_indexers`: my fast path naturally produces sorted output for monotonic inputs. For `sort=False`, the output order might need to be different.
+
+Wait, I need to re-verify this. Let me check what `sort=False` means for inner join.
+
+For `how='inner'`, `sort=False` with my fast path: the libjoin `inner_join_indexer` on sorted inputs produces output sorted by key. Is this the same as preserving left order?
+
+For left=[1, 2, 3], right=[2, 3, 4], inner result should be [2, 3]. Left order: 2 (at position 1) then 3 (at position 2). This matches key order. ✓
+
+For left=[1, 1, 2, 3], right=[1, 2], inner result:
+- left[0]=1 matches right[0]=1
+- left[1]=1 matches right[0]=1
+- left[2]=2 matches right[1]=2
+
+Results with my sort=False expectation: (left[0], right[0]), (left[1], right[0]), (left[2], right[1]). Key order: 1, 1, 2. This matches left order. ✓
+
+Actually, I think the libjoin output for inner join on sorted data with duplicates might not match pandas' expectations for sort=False in all cases. Let me think more carefully...
+
+Hmm, for the general case with many-to-many, pandas inner join with sort=False produces results in the order that left rows appear, and for each left row, right matches appear in right's order. With monotonic left and right, this is the same as sorted by key. 
+
+Actually no - consider left=[1, 3, 2], right=[2, 1, 3]. left is NOT monotonic. For sort=False, result preserves left order for matches: 1 matches, 3 matches, 2 matches. But with my fast path, we require monotonic, so this case is excluded.
+
+For monotonic left=[1, 2, 2, 3], right=[1, 2, 3, 3]. Inner join sort=False:
+- left[0]=1 matches right[0]=1
+- left[1]=2 matches right[1]=2
+- left[2]=2 matches right[1]=2
+- left[3]=3 matches right[2]=2 and right[3]=3
+
+Wait, 3 matches 3 twice? Let me recalculate: right=[1, 2, 3, 3]. So 3 appears at positions 2 and 3.
+
+Result with left order preservation:
+- (1, 1)
+- (2, 2)
+- (2, 2)  -- duplicate 2 in left
+- (3, 3)
+- (3, 3)  -- two 3s in right, both match
+
+This is [1, 2, 2, 3, 3] which is sorted! So again, left order = key-sorted for monotonic inputs.
+
+I'm even more confident now. Let me write the code.
+
+One final check: what dtypes does `libjoin.inner_join_indexer` support? I'll add a dtype check to only use fast path for supported types.
+
+From `_can_use_libjoin`, supported types for Index include numpy dtypes. For arrays directly, I should check.
+
+Actually, let me just try and catch exceptions. This is safer.
+
+Now, where exactly to insert? Looking at `get_join_indexers`:
+
+```python
+def get_join_indexers(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    sort: bool = False,
+    how: JoinHow = "inner",
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+    """
+
+    Parameters
+    ----------
+    left_keys : list[ndarray, ExtensionArray, Index, Series]
+    right_keys : list[ndarray, ExtensionArray, Index, Series]
+    sort : bool, default False
+    how : {'inner', 'outer', 'left', 'right'}, default 'inner'
+
+    Returns
+    -------
+    np.ndarray[np.intp]
+        Indexer into the left_keys.
+    np.ndarray[np.intp]
+        Indexer into the right_keys.
+    """
+    assert len(left_keys) == len(
+        right_keys
+    ), "left_keys and right_keys must be the same length"
+
+    # fast-path for empty left/right
+    ...
+```
+
+I'll insert after the null checks, before the main logic. Actually, let me put it right after the empty checks, so we skip for empty inputs too.
+
+Wait, no - empty inputs are handled specially and return immediately. So I'll put my fast path after the assert and before or after the empty checks.
+
+Actually, for empty arrays, the fast path wouldn't help (no data to join). And the empty checks already return optimized results. So I'll put my fast path after the empty checks.
+
+Hmm, but for one-empty and one-non-empty with monotonic, it's already handled. Let me put my fast path right after the empty checks:
+
+```python
+    # fast-path for empty left/right
+    left_n = len(left_keys[0])
+    right_n = len(right_keys[0])
+    if left_n == 0:
+        ...
+    elif right_n == 0:
+        ...
+
+    # FAST PATH: single-key monotonic merge
+    if len(left_keys) == 1 and len(right_keys) == 1:
+        ...
+```
+
+This is the right place.
+
+Let me now write the final code. I'll define the helper function inside `get_join_indexers` or at module level. Module level is cleaner.
+
+Actually, I realize I should also check for decreasing monotonic and potentially handle it too. But that's more complex (would need to reverse arrays or use different logic). For now, I'll just handle the increasing case, which is by far the most common.
+
+If data is monotonic decreasing, I can reverse it, compute, and then reverse indexers? Actually, that's tricky with duplicates. Let me just handle increasing for now; decreasing will fall through to slow path.
+
+Here's my code:
+
+```python
+def _get_join_indexers_for_monotonic(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    how: JoinHow,
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]] | None:
+    """
+    Try to compute join indexers using a fast path for monotonic keys.
+    
+    Returns None if fast path is not applicable.
+    """
+    if len(left_keys) != 1 or len(right_keys) != 1:
+        return None
+    
+    left_k = left_keys[0]
+    right_k = right_keys[0]
+    
+    # Extract numpy arrays if possible
+    if isinstance(left_k, np.ndarray):
+        left_arr = left_k
+    elif hasattr(left_k, "_ndarray"):  # e.g., DatetimeArray
+        left_arr = left_k._ndarray  # type: ignore[union-attr]
+    elif hasattr(left_k, "__array__"):
+        try:
+            left_arr = np.asarray(left_k)
+        except (TypeError, ValueError):
+            return None
+    else:
+        return None
+    
+    if isinstance(right_k, np.ndarray):
+        right_arr = right_k
+    elif hasattr(right_k, "_ndarray"):
+        right_arr = right_k._ndarray  # type: ignore[union-attr]
+    elif hasattr(right_k, "__array__"):
+        try:
+            right_arr = np.asarray(right_k)
+        except (TypeError, ValueError):
+            return None
+    else:
+        return None
+    
+    # Check monotonic increasing
+    if len(left_arr) > 1 and not (left_arr[1:] >= left_arr[:-1]).all():
+        return None
+    if len(right_arr) > 1 and not (right_arr[1:] >= right_arr[:-1]).all():
+        return None
+    
+    # Use libjoin directly
+    try:
+        if how == "inner":
+            _, lidx, ridx = libjoin.inner_join_indexer(left_arr, right_arr)
+            return lidx, ridx
+        elif how == "left":
+            _, lidx, ridx = libjoin.left_join_indexer(left_arr, right_arr)
+            return lidx, ridx
+        elif how == "right":
+            _, ridx, lidx = libjoin.left_join_indexer(right_arr, left_arr)
+            return lidx, ridx
+        else:  # outer
+            _, lidx, ridx = libjoin.outer_join_indexer(left_arr, right_arr)
+            return lidx, ridx
+    except TypeError:
+        # libjoin may not support this dtype
+        return None
+```
+
+Wait, this `_ndarray` attribute access might not be right for all EAs. Let me check... For DatetimeArray, it's `._data` or `._ndarray`? 
+
+Actually, let me keep it simpler. For EA types that are commonly monotonic (like datetime, timedelta), the `np.asarray` conversion should work, or they might have `is_monotonic_increasing` property. But for performance, I want to avoid copying if possible.
+
+Let me check: `np.asarray(datetime_array)` - does this copy? For DatetimeArray, `np.asarray` might return a view or copy. Let me not worry about this for now and just use `np.asarray`.
+
+Actually, even simpler: my fast path only triggers for numpy arrays directly, avoiding EA complexity. This covers the most common performance-sensitive case (numeric data as numpy arrays).
+
+Or: check `isinstance(left_k, np.ndarray)` and skip otherwise. This is conservative but safe.
+
+Hmm, but what if the user uses `pd.merge(df1, df2, on='date_col')` where date_col is datetime64[ns]? This would be stored as DatetimeArray, not np.ndarray. The fast path would skip it.
+
+Let me check what `left_join_keys` contains in this case. From `_get_merge_keys`:
+```python
+left_keys.append(left._get_label_or_level_values(lk))
+```
+
+This returns the column values, which for datetime would be a DatetimeArray (ExtensionArray).
+
+So my fast path should handle EAs too. Let me check if libjoin supports the underlying numpy representation.
+
+For DatetimeArray, `arr._ndarray` gives `ndarray[datetime64[ns]]`. Can libjoin handle this? The `_get_join_target` method converts to numpy, so probably yes.
+
+But wait, there might be timezone-aware datetimes which store differently. Let me be conservative.
+
+I'll check for specific EA types or just try/except with `np.asarray`.
+
+Actually, let me look at what `_get_join_target` does in `_MergeOperation` context... It doesn't exist there. Let me look at the existing slow path to see how arrays are handled.
+
+In `_factorize_keys` (used by slow path), arrays are factorized to integers, which works for any comparable type.
+
+For my fast path, I need actual comparison. I'll support types that `np.asarray` gives and where `>=` works elementwise with the expected semantics.
+
+Let me use a broader approach: try the fast path and fall back on any exception.
+
+```python
+def _get_join_indexers_for_monotonic(...):
+    ...
+    # Convert to numpy views if possible
+    try:
+        left_arr = np.asarray(left_k, dtype=np.asarray(left_k).dtype)
+        right_arr = np.asarray(right_k, dtype=np.asarray(right_k).dtype)
+    except (TypeError, ValueError):
+        return None
+    
+    # ... check monotonic and proceed
+```
+
+This is too redundant. Let me simplify:
+
+```python
+    try:
+        left_view = np.asarray(left_k)
+        right_view = np.asarray(right_k)
+    except (TypeError, ValueError):
+        return None
+```
+
+If `left_k` is already ndarray, `np.asarray` is zero-copy. For some EAs, it might copy.
+
+OK, I think I need to stop overthinking and write the code. The key insight is even a conservative fast path (only numpy arrays, no EAs) would be valuable. I can always extend it later.
+
+Let me write the cleanest possible version:
+
+```python
+def _get_join_indexers_for_monotonic(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    how: JoinHow,
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]] | None:
+    """
+    Fast path using libjoin for single-key joins on monotonic keys.
+    
+    Returns None if fast path is not applicable.
+    """
+    if len(left_keys) != 1 or len(right_keys) != 1:
+        return None
+    
+    left_k = left_keys[0]
+    right_k = right_keys[0]
+    
+    # Require numpy arrays for direct libjoin usage
+    if not isinstance(left_k, np.ndarray) or not isinstance(right_k, np.ndarray):
+        return None
+    
+    # Quick reject: check first/last for monotonic trend
+    if len(left_k) > 1 and left_k[0] > left_k[-1]:
+        return None
+    if len(right_k) > 1 and right_k[0] > right_k[-1]:
+        return None
+    
+    # Full monotonic check
+    if len(left_k) > 1 and not (left_k[1:] >= left_k[:-1]).all():
+        return None
+    if len(right_k) > 1 and not (right_k[1:] >= right_k[:-1]).all():
+        return None
+    
+    # Use libjoin directly
+    try:
+        if how == "inner":
+            _, lidx, ridx = libjoin.inner_join_indexer(left_k, right_k)
+            return lidx, ridx
+        elif how == "left":
+            _, lidx, ridx = libjoin.left_join_indexer(left_k, right_k)
+            return lidx, ridx
+        elif how == "right":
+            _, ridx, lidx = libjoin.left_join_indexer(right_k, left_k)
+            return lidx, ridx
+        else:  # how == "outer"
+            _, lidx, ridx = libjoin.outer_join_indexer(left_k, right_k)
+            return lidx, ridx
+    except TypeError:
+        # libjoin doesn't support this dtype
+        return None
+```
+
+This is clean and conservative. 
+
+Wait, I need to check if `libjoin.left_join_indexer` etc. actually exist as module-level functions or if they're something else. Looking at base.py usage:
+
+```python
+joined_ndarray, lidx, ridx = libjoin.left_join_indexer(sv, ov)
+```
+
+Yes, they're module-level functions.
+
+But actually, let me also handle the case where arrays have NaN values. `np.ndarray` with floats can have NaN. The monotonic check with `>=` will fail for NaN (NaN comparisons return False). But wait, if NaN is at the end (which pandas often does when sorting), `arr[1:] >= arr[:-1]` might still work if NaN is handled... actually no, `NaN >= anything` is False.
+
+Hmm, actually for monotonic arrays with NaN, pandas typically puts NaN at the end. So an array like `[1, 2, NaN]` would have `1 <= 2 <= NaN`? No, `2 <= NaN` is False.
+
+Actually, `Index.is_monotonic_increasing` might handle NaN specially. Let me check... In `base.py`, it uses `self._engine.is_monotonic_increasing`. The engine might handle NaN.
+
+For my numpy check, if there's NaN, `arr[1:] >= arr[:-1]` might fail. For example, `[1, NaN]` gives `NaN >= 1` which is False.
+
+So my fast path won't trigger for arrays with NaN at the end. Is this correct? Well, with NaN, you can't really do a libjoin join properly without special handling. The slow path handles NaN through factorization. So it's OK to skip the fast path for NaN-containing arrays.
+
+Actually wait, pandas puts NaN at the end for sort, but `is_monotonic_increasing` might still return True for `[1, NaN]`? Let me check: In numpy, `np.sort([1, NaN])` puts NaN at the end. And `pd.Index([1, np.nan]).is_monotonic_increasing` - I'm not sure. Given that `NaN >= 1` is False, but `1 <= NaN` is also False, so `is_monotonic_increasing` on `[1, NaN]`... actually, the `is_monotonic_increasing` checks `a[i] <= a[i+1]` for all i. So `1 <= NaN` is False, so it's NOT monotonic increasing. But `pd.Index([1, np.nan]).is_monotonic_increasing` might return True due to special NaN handling.
+
+Let me check if I can handle this: if my numpy check gives False, fall back to slow path. This is safe.
+
+But actually, if pandas' Index considers `[1, NaN]` as monotonic, and I want to optimize that case too, I need to detect it. This is getting complicated.
+
+For safety, let me only use the fast path when the simple numpy check passes. Arrays with NaN will use the slow path, which is correct.
+
+Hmm, but what about integer arrays? They can't have NaN, so we're good.
+
+What about datetime arrays with NaT? Similar to NaN, `NaT` comparisons behave specially.
+
+I'll just use the numpy check and not worry about edge cases. The slow path handles everything correctly.
+
+One more edge case: empty arrays. `len(arr) <= 1` is already handled by my conditions.
+
+And what about arrays with all same values? `[1, 1, 1]` - this is monotonic (non-decreasing). My check with `>=` passes. Good.
+
+What about one-element arrays? `len > 1 and ...` skips the check, treated as monotonic. Good.
+
+OK, final code. Let me also verify the import of `libjoin` in merge.py.
+
+Looking at the provided code, I don't see an explicit `import pandas._libs.join as libjoin` in merge.py. But the code uses `libjoin.inner_join` etc. So the import must be there.
+
+Let me search more carefully... I don't see it in the provided merge.py code. But in the code snippet:
+
+```python
+join_func = {
+    "inner": libjoin.inner_join,
+    "left": libjoin.left_outer_join,
+    "right": lambda x, y, count, **kwargs: libjoin.left_outer_join(
+        y, x, count, **kwargs
+    )[::-1],
+    "outer": libjoin.full_outer_join,
+}[how]
+```
+
+Yes, `libjoin` is used. It's probably imported at the top of the file. Since the file is large, the import might not be in the provided snippet.
+
+For my code, I'll assume `libjoin` is available. If not, the code would fail at module level, which is fine.
+
+Now let me write the actual SEARCH/REPLACE block.
+
+I need to insert the helper and modify `get_join_indexers`. The exact location in `get_join_indexers` to insert the fast path is after the empty checks.
+
+Looking at the provided code for `get_join_indexers`:
+```python
+    # fast-path for empty left/right
+    left_n = len(left_keys[0])
+    right_n = len(right_keys[0])
+    if left_n == 0:
+        if how in ["left", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["right", "outer"]:
+            return _get_no_sort_one_missing_indexer(right_n, True)
+    elif right_n == 0:
+        if how in ["right", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["left", "outer"]:
+            return _get_no_sort_one_missing_indexer(left_n, False)
+
+    # get left & right join labels and num. of levels at each location
+    ...
+```
+
+I'll insert the fast path after the empty checks.
+
+Actually, for the helper function, where should I define it? I'll put it before `get_join_indexers`, making it a module-level helper.
+
+Let me write the complete change:
+
+```python
+def _get_join_indexers_for_monotonic(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    how: JoinHow,
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]] | None:
+    """
+    Fast path using libjoin for single-key joins on monotonic keys.
+    
+    Returns None if fast path is not applicable.
+    """
+    if len(left_keys) != 1 or len(right_keys) != 1:
+        return None
+    
+    left_k = left_keys[0]
+    right_k = right_keys[0]
+    
+    # Require numpy arrays for direct libjoin usage
+    if not isinstance(left_k, np.ndarray) or not isinstance(right_k, np.ndarray):
+        return None
+    
+    # Quick reject: check for any hope of monotonic increasing
+    if len(left_k) > 1 and left_k[0] > left_k[-1]:
+        return None
+    if len(right_k) > 1 and right_k[0] > right_k[-1]:
+        return None
+    
+    # Full monotonic check
+    if len(left_k) > 1 and not (left_k[1:] >= left_k[:-1]).all():
+        return None
+    if len(right_k) > 1 and not (right_k[1:] >= right_k[:-1]).all():
+        return None
+    
+    # Use libjoin directly
+    try:
+        if how == "inner":
+            _, lidx, ridx = libjoin.inner_join_indexer(left_k, right_k)
+            return lidx, ridx
+        elif how == "left":
+            _, lidx, ridx = libjoin.left_join_indexer(left_k, right_k)
+            return lidx, ridx
+        elif how == "right":
+            _, ridx, lidx = libjoin.left_join_indexer(right_k, left_k)
+            return lidx, ridx
+        else:  # how == "outer"
+            _, lidx, ridx = libjoin.outer_join_indexer(left_k, right_k)
+            return lidx, ridx
+    except TypeError:
+        # libjoin may not support this dtype
+        return None
+
+
+def get_join_indexers(
+...
+```
+
+Wait, but this changes the return type of `get_join_indexers` only in the fast path case, not in signature. The fast path returns the same type as the slow path.
+
+Now, the issue: where exactly to put this in the file? I need to find the exact location.
+
+From the provided code, `get_join_indexers` is defined after `_OrderedMerge` class. Let me look for a good anchor.
+
+Actually, looking at the provided code layout:
+- `_MergeOperation` class
+- `_OrderedMerge` class  
+- `get_join_indexers` function
+
+The helper should go right before `get_join_indexers`.
+
+For modifying `get_join_indexers`, I need to add the fast path call:
+
+```python
+def get_join_indexers(left_keys, right_keys, sort=False, how='inner'):
+    # ... docstring and assert ...
+    
+    # fast-path for empty left/right
+    ...
+
+    # FAST PATH: single-key monotonic merge
+    maybe_result = _get_join_indexers_for_monotonic(left_keys, right_keys, how)
+    if maybe_result is not None:
+        return maybe_result
+
+    # get left & right join labels...
+```
+
+Hmm, but I should check if the fast path is appropriate for the given `how` and `sort`. For `sort=True` with non-monotonic-but-just-didnt-check-properly... no, my fast path is only for actually monotonic.
+
+Actually, wait - I said `sort` doesn't matter for the fast path. But does it? For outer join, sort is always effectively True. For other joins:
+
+With `how='left'`, `sort=True`: result should be sorted by key. With monotonic left, left join output is naturally in key order.
+With `how='left'`, `sort=False`: result should be in left order. With monotonic left, left order = key order.
+
+So yes, sort doesn't matter for the fast path.
+
+But actually, there's a subtlety for `how='inner'`, `sort=False` with duplicate keys. Let me verify one more time:
+
+left=[1, 2, 2, 3], right=[2, 2, 3]. sort=False, inner join:
+Expected left order: left[1]=2 matches, left[2]=2 matches, left[3]=3 matches.
+For left[1], right matches at [0, 1]: (2, 2) with right values.
+Wait, inner join on [1,2,2,3] and [2,2,3]:
+- 1: no match
+- 2 (pos 1): matches 2 (pos 0) and 2 (pos 1) in right
+- 2 (pos 2): matches 2 (pos 0) and 2 (pos 1) in right  
+- 3 (pos 3): matches 3 (pos 2)
+
+Result should have 5 rows. Order: by left position, then by right position within matches.
+(1, 0), (1, 1), (2, 0), (2, 1), (3, 2).
+
+For sort=True, same thing since left is sorted and sort means "sort by key", which is already done.
+
+Actually wait, what does pandas actually do for sort=False inner join with duplicates? Let me think...
+
+For `merge` with sort=False, the result preserves the order of the left DataFrame, and within matching rows, the order of the right DataFrame. With monotonic keys, this naturally gives a sorted-by-key result.
+
+BUT, for the `libjoin.inner_join_indexer` on sorted inputs, what order do we get? Let me think about what a merge-join (the algorithm) produces:
+
+Merge join algorithm for inner:
+- Initialize i=j=0
+- While i < len(left) and j < len(right):
+  - If left[i] < right[j]: i++
+  - If left[i] > right[j]: j++
+  - If equal: output all (i, j') where right[j'] == left[i], then i++ and j = original j
+
+Hmm, actually for duplicates, it's more complex. The standard merge join for duplicates outputs in a specific order. Let me think...
+
+For left=[1,2,2,3], right=[2,2,3]:
+- i=0,j=0: 1<2, so i++
+- i=1,j=0: 2==2, match! 
+  - Find all right values = 2: positions 0,1
+  - Output (1, 0), (1, 1)
+  - Advance i to find next different left value: i=2, still 2
+  - Output (2, 0), (2, 1)
+  - i=3, now 3
+  - Advance j past 2s: j=2, right[2]=3
+- i=3,j=2: 3==3, match! Output (3, 2)
+
+Result order: (1,0), (1,1), (2,0), (2,1), (3,2).
+
+This matches my "left order, then right order" expectation! 
+
+So `libjoin.inner_join_indexer` on sorted inputs produces sort=False compatible output. For sort=True, it's also correct since keys are already sorted.
+
+I'm fully confident now. Let me write the final code.
+
+Actually, I need to double-check one thing: does `libjoin.inner_join_indexer` with duplicates produce this order, or does it group by left position differently? 
+
+Given that it's used by `Index._join_monotonic` for inner join, and Index.join is supposed to produce correct results, I trust it does the right thing.
+
+One more edge case: how does it handle one-to-many? left=[1,2,3], right=[2]. Inner join:
+- 1 no match
+- 2 matches
+- 3 no match
+
+Result: just (1, 0) with 1-based left indexing, i.e., left_idx=[1], right_idx=[0]. 
+With 0-based: left_idx for result element 0 is position 1 in left.
+
+Wait, the libjoin output uses -1 for no match. For inner join, there are no -1s since only matches are returned.
+
+OK, I think I have enough understanding for the implementation.
+
+Let me also consider: what if someone relies on the exact type of array being returned? `get_join_indexers` returns `np.ndarray[np.intp]`. `libjoin` functions return numpy arrays. This should match.
+
+Also, for the `_get_empty_indexer` and `_get_no_sort_one_missing_indexer` functions, they also return numpy arrays.
+
+The `maybe_result` from my fast path returns two tuples of numpy arrays, same as the slow path's final `return join_func(...)`.
+
+Wait, the slow path returns: `join_func(lkey, rkey, count, **kwargs)` which returns two arrays (left and right indexers). My fast path returns a tuple of two arrays. Same format.
+
+Great. Let me write the actual file changes.
+
+Actually, one more thought: I should also consider using this fast path for ExtensionArray types that support efficient conversion. For example, RangeIndex can be converted to arange trivially. But I'll keep it simple for now.
+
+Final code structure:
+1. Add helper function `_get_join_indexers_for_monotonic` before `get_join_indexers`
+2. Modify `get_join_indexers` to call the helper
+
+Let me write the exact SEARCH and REPLACE blocks.
+
+For adding the helper, I'll search for the start of `get_join_indexers`:
+
+```python
+def get_join_indexers(
+```
+
+But I should find a unique anchor that includes more context, like the end of the previous class or function.
+
+Looking at the code, before `get_join_indexers` there might be `_get_join_keys` or other functions. Let me search the provided code...
+
+Actually, in the provided code, after `_OrderedMerge` class, I see `get_join_indexers` starts. Let me find exactly what precedes it.
+
+Looking at the code snippet:
+```python
+        return result
+
+
+def get_join_indexers(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    sort: bool = False,
+    how: JoinHow = "inner",
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+```
+
+So there's a blank line and then `get_join_indexers`. I'll search for the blank line plus the function definition.
+
+For the INSERT in `get_join_indexers`, I'll add after the empty checks:
+
+```python
+    # fast-path for empty left/right
+    left_n = len(left_keys[0])
+    right_n = len(right_keys[0])
+    if left_n == 0:
+        if how in ["left", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["right", "outer"]:
+            return _get_no_sort_one_missing_indexer(right_n, True)
+    elif right_n == 0:
+        if how in ["right", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["left", "outer"]:
+            return _get_no_sort_one_missing_indexer(left_n, False)
+
+    # FAST PATH: single-key monotonic merge
+    maybe_result = _get_join_indexers_for_monotonic(left_keys, right_keys, how)
+    if maybe_result is not None:
+        return maybe_result
+```
+
+Now let me write the complete blocks:
+
+```python
+pandas/core/reshape/merge.py
+[SEARCH]
+def get_join_indexers(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    sort: bool = False,
+    how: JoinHow = "inner",
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+[/SEARCH]
+[REPLACE]
+def _get_join_indexers_for_monotonic(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    how: JoinHow,
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]] | None:
+    """
+    Fast path using libjoin for single-key joins on monotonic keys.
+    
+    Returns None if fast path is not applicable.
+    """
+    if len(left_keys) != 1 or len(right_keys) != 1:
+        return None
+    
+    left_k = left_keys[0]
+    right_k = right_keys[0]
+    
+    # Require numpy arrays for direct libjoin usage
+    if not isinstance(left_k, np.ndarray) or not isinstance(right_k, np.ndarray):
+        return None
+    
+    # Quick reject: check for any hope of monotonic increasing
+    if len(left_k) > 1 and left_k[0] > left_k[-1]:
+        return None
+    if len(right_k) > 1 and right_k[0] > right_k[-1]:
+        return None
+    
+    # Full monotonic check
+    if len(left_k) > 1 and not (left_k[1:] >= left_k[:-1]).all():
+        return None
+    if len(right_k) > 1 and not (right_k[1:] >= right_k[:-1]).all():
+        return None
+    
+    # Use libjoin directly
+    try:
+        if how == "inner":
+            _, lidx, ridx = libjoin.inner_join_indexer(left_k, right_k)
+            return lidx, ridx
+        elif how == "left":
+            _, lidx, ridx = libjoin.left_join_indexer(left_k, right_k)
+            return lidx, ridx
+        elif how == "right":
+            _, ridx, lidx = libjoin.left_join_indexer(right_k, left_k)
+            return lidx, ridx
+        else:  # how == "outer"
+            _, lidx, ridx = libjoin.outer_join_indexer(left_k, right_k)
+            return lidx, ridx
+    except TypeError:
+        # libjoin may not support this dtype
+        return None
+
+
+def get_join_indexers(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    sort: bool = False,
+    how: JoinHow = "inner",
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+[/REPLACE]
+```
+
+And for the insert inside the function:
+
+```python
+pandas/core/reshape/merge.py
+[SEARCH]
+    elif right_n == 0:
+        if how in ["right", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["left", "outer"]:
+            return _get_no_sort_one_missing_indexer(left_n, False)
+
+    # get left & right join labels and num. of levels at each location
+[/SEARCH]
+[REPLACE]
+    elif right_n == 0:
+        if how in ["right", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["left", "outer"]:
+            return _get_no_sort_one_missing_indexer(left_n, False)
+
+    # FAST PATH: single-key monotonic merge
+    if (maybe_indexers := _get_join_indexers_for_monotonic(left_keys, right_keys, how)) is not None:
+        return maybe_indexers
+
+    # get left & right join labels and num. of levels at each location
+[/REPLACE]
+```
+
+Wait, I used `:=` walrus operator. Is that OK for pandas? They support Python 3.9+ where this is available (since 3.8 actually). Let me use a simpler form to be safe.
+
+```python
+    # FAST PATH: single-key monotonic merge
+    maybe_indexers = _get_join_indexers_for_monotonic(left_keys, right_keys, how)
+    if maybe_indexers is not None:
+        return maybe_indexers
+```
+
+This is cleaner and more compatible.
+
+Let me also double-check the exact text in the original. The provided code says:
+```python
+    elif right_n == 0:
+        if how in ["right", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["left", "outer"]:
+            return _get_no_sort_one_missing_indexer(left_n, False)
+
+    # get left & right join labels and num. of levels at each location
+```
+
+Yes, this matches my search.
+
+Hmm, but wait - I need to double check the exact line containing `    # get left & right join labels and num. of levels at each location`. Let me verify in the provided code...
+
+From the provided code:
+```python
+    # get left & right join labels and num. of levels at each location
+    mapped = (
+        _factorize_keys(left_keys[n], right_keys[n], sort=sort)
+```
+
+Yes, that's correct.
+
+Let me also check the function signature of `get_join_indexers` in the original to match exactly:
+
+```python
+def get_join_indexers(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    sort: bool = False,
+    how: JoinHow = "inner",
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+```
+
+Yes, matches.
+
+But wait - looking at my first replacement, I need to make sure the exact search text doesn't include the newline before the function. Let me check in the original:
+
+Looking at end of `_OrderedMerge`:
+```python
+        result = self._reindex_and_concat(
+            join_index, left_join_indexer, right_join_indexer, copy=copy
+        )
+        self._maybe_add_join_keys(result, left_indexer, right_indexer)
+
+        return result
+
+
+def get_join_indexers(
+```
+
+So there's `return result`, blank line, then `def get_join_indexers`. My search starts with `def get_join_indexers...` which should be fine.
+
+Actually, for safety, let me include the previous blank line context or use a more unique anchor. The function definition with type hints should be unique enough.
+
+One more thing: I need to make sure `np` is imported in merge.py. Looking at the file, it should be since it uses numpy arrays. Let me check...
+
+I don't see the import in provided code, but `np.ndarray` etc. are used, so it must be imported. For safety, I'll assume it's imported as `import numpy as np`.
+
+Actually, wait - looking at the code, I see `npt.NDArray` used, which comes from `numpy.typing`. So numpy is definitely imported.
+
+Now, final verification of my code:
+
+1. `_get_join_indexers_for_monotonic` checks for single key, both numpy arrays
+2. Checks monotonic increasing with `>=` (handles duplicates correctly: non-decreasing)
+3. Uses libjoin functions based on `how`
+4. Returns `(lidx, ridx)` or `None`
+
+For `how='right'`, swaps and uses `left_join_indexer`, then swaps indexers back. Correct.
+
+Error handling: catches `TypeError` from libjoin and returns None. The original slow path will be used.
+
+One potential issue: if `libjoin.inner_join_indexer` etc. don't exist, we get `AttributeError`, not `TypeError`. My except only catches `TypeError`. I should also catch `AttributeError`.
+
+Actually, the libjoin functions should exist. But for safety:
+
+```python
+    except (TypeError, AttributeError, ValueError):
+```
+
+Actually, `ValueError` might hide real bugs. Let me just catch `TypeError` and `AttributeError`.
+
+Actually, if these functions don't exist, it's a programming error that should fail fast. But to be safe during development/testing, I'll catch both.
+
+Hmm, better yet, I'll just catch `Exception` to be safe, but that's too broad. Let me check what errors libjoin might raise for unsupported types... probably `TypeError` for incompatible types.
+
+OK, I'll keep `TypeError` and also add `ValueError` just in case.
+
+```python
+    except (TypeError, ValueError):
+        return None
+```
+
+Actually, for my specific use, `TypeError` should cover everything. The libjoin Cython code would raise TypeError for unsupported dtypes. I'll keep just `TypeError` for now.
+
+Wait, I just realized: `np.ndarray` with `dtype=object` is a numpy array, but libjoin might not support it. My code would try to use libjoin, get TypeError, and fall back. Correct!
+
+Also, for large arrays, the monotonic check `(left_k[1:] >= left_k[:-1]).all()` creates a temporary boolean array of size `len-1`. For very large arrays, this is a memory allocation. But it's still O(n) which is needed anyway, and it's faster than the hashing in the slow path. For the fast path to be worth it, the join itself must be expensive enough. For small arrays, the overhead doesn't matter. For large arrays, the fast path saves significant time.
+
+One optimization: I can do a streaming check or early-exit to avoid allocating large temporary arrays. But numpy's `.all()` is already quite optimized. I'll leave it.
+
+Hmm, actually there's a neat trick: `np.all(left_k[1:] >= left_k[:-1])` vs `(left_k[1:] >= left_k[:-1]).all()` - same thing. But for memory, we can use `np.diff` or a loop with early exit:
+
+```python
+def _is_monotonic_increasing(arr):
+    """Check if array is non-decreasing with early exit."""
+    for i in range(1, len(arr)):
+        if arr[i] < arr[i-1]:
+            return False
+    return True
+```
+
+But this is pure Python and slow for large arrays. NumPy's vectorized operation is faster despite the memory allocation.
+
+Actually, for very large arrays, we could use:
+
+```python
+it = np.nditer([left_k[1:], left_k[:-1]])
+for a, b in it:
+    if a < b:
+        return False
+return True
+```
+
+No, that's also slow.
+
+Best approach: use `numba` or just accept the memory overhead. For typical use, a boolean array of size n-1 is small compared to the original data.
+
+I'll stick with the numpy vectorized approach.
+
+One more thought: I should also check that the dtype comparison is valid. For mixed dtypes (e.g., int64 and float64), libjoin might handle it or might not. If both are numpy arrays, comparison and libjoin should work if they're comparable.
+
+Actually, for `left_k[1:] >= left_k[:-1]` to work, the dtype must support comparison. All numpy numeric types do. Object arrays depend on the actual Python objects.
+
+And for `libjoin.inner_join_indexer(left_k, right_k)`, both arrays should be of the same or compatible dtype.
+
+Let me trust libjoin to handle this or raise TypeError.
+
+OK, I'm ready to finalize. Let me write the exact blocks.
+
+Looking at my helper again, I want to make sure the types are imported properly. `ArrayLike` and `JoinHow` should be available at module level. Let me check... `JoinHow` is used in `get_join_indexers` signature, so it's imported. `ArrayLike` is also used. Good.
+
+For `npt`, it's `numpy.typing` and is used in `get_join_indexers` too.
+
+My helper function doesn't need to reference complex types if I don't use them in the signature, but I do for consistency.
+
+Actually, looking at the original code, I see the function signature uses `JoinHow` and `ArrayLike`. Let me match that style.
+
+Final helper:
+```python
+def _get_join_indexers_for_monotonic(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    how: JoinHow,
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]] | None:
+```
+
+This matches the style.
+
+Hmm wait, but `npt` might not be imported at the top of the file for use in function signatures. Let me check if the module uses `from __future__ import annotations`... 
+
+Actually, in the provided code for `get_join_indexers`, it uses `npt.NDArray[np.intp]` in the return annotation. So `npt` is available.
+
+But for my helper, the return type `tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]] | None` - this uses `|` union syntax which requires `from __future__ import annotations` or Python 3.10+. The existing code might use this already, or use `Optional` or `Union`.
+
+Looking at `get_join_indexers`:
+```python
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+```
+
+This doesn't use union. My function returns `... | None`. To be safe, I should check if `__future__` annotations are imported, or use `Optional`.
+
+Looking at the provided code for `merge.py`, I don't see imports. But the style seems to be modern Python (uses `list[...]` not `List[...]`, etc.). So likely `from __future__ import annotations` is used, or it's Python 3.10+.
+
+To be safe, I'll match the existing style. Since `get_join_indexers` doesn't use `Optional`, but my function needs it, I'll use `... | None` and trust it's supported.
+
+Actually, looking more carefully at the codebase, I'll use a simpler return type or no annotation for safety:
+
+```python
+) -> tuple | None:
+```
+
+Or just not annotate. But I like type hints.
+
+OK, let me just use the annotation. If it's wrong, it'll be caught by tests or mypy.
+
+Actually wait - I need to check: does the module import `__future__` annotations? If not, `tuple[...]` would fail at runtime in Python < 3.9. But since the existing code uses `list[ArrayLike]`, which also requires 3.9+ or `__future__`, and the code runs, it must have the import.
+
+Hmm, `list[...]` with lowercase `list` as generic works in Python 3.9+ natively. So they require Python 3.9+. And `tuple[...]` also works in 3.9+. And `|` for unions works in 3.10+ or with `__future__` annotations.
+
+Given that pandas requires Python 3.9+ now, they must be using `__future__` annotations or Python 3.10+. I'll assume it's fine.
+
+Let me finalize. Here's my complete answer:
+
+```python
+pandas/core/reshape/merge.py
+[SEARCH]
+def get_join_indexers(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    sort: bool = False,
+    how: JoinHow = "inner",
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+[/SEARCH]
+[REPLACE]
+def _get_join_indexers_for_monotonic(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    how: JoinHow,
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]] | None:
+    """
+    Fast path using libjoin for single-key joins on monotonic keys.
+
+    Returns None if fast path is not applicable.
+    """
+    if len(left_keys) != 1 or len(right_keys) != 1:
+        return None
+
+    left_k = left_keys[0]
+    right_k = right_keys[0]
+
+    # Require numpy arrays for direct libjoin usage
+    if not isinstance(left_k, np.ndarray) or not isinstance(right_k, np.ndarray):
+        return None
+
+    # Quick reject: check for any hope of monotonic increasing
+    if len(left_k) > 1 and left_k[0] > left_k[-1]:
+        return None
+    if len(right_k) > 1 and right_k[0] > right_k[-1]:
+        return None
+
+    # Full monotonic check
+    if len(left_k) > 1 and not (left_k[1:] >= left_k[:-1]).all():
+        return None
+    if len(right_k) > 1 and not (right_k[1:] >= right_k[:-1]).all():
+        return None
+
+    # Use libjoin directly
+    try:
+        if how == "inner":
+            _, lidx, ridx = libjoin.inner_join_indexer(left_k, right_k)
+            return lidx, ridx
+        elif how == "left":
+            _, lidx, ridx = libjoin.left_join_indexer(left_k, right_k)
+            return lidx, ridx
+        elif how == "right":
+            _, ridx, lidx = libjoin.left_join_indexer(right_k, left_k)
+            return lidx, ridx
+        else:  # how == "outer"
+            _, lidx, ridx = libjoin.outer_join_indexer(left_k, right_k)
+            return lidx, ridx
+    except TypeError:
+        # libjoin may not support this dtype
+        return None
+
+
+def get_join_indexers(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    sort: bool = False,
+    how: JoinHow = "inner",
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+[/REPLACE]
+```
+
+```python
+pandas/core/reshape/merge.py
+[SEARCH]
+    elif right_n == 0:
+        if how in ["right", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["left", "outer"]:
+            return _get_no_sort_one_missing_indexer(left_n, False)
+
+    # get left & right join labels and num. of levels at each location
+[/SEARCH]
+[REPLACE]
+    elif right_n == 0:
+        if how in ["right", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["left", "outer"]:
+            return _get_no_sort_one_missing_indexer(left_n, False)
+
+    # FAST PATH: single-key monotonic merge
+    maybe_indexers = _get_join_indexers_for_monotonic(left_keys, right_keys, how)
+    if maybe_indexers is not None:
+        return maybe_indexers
+
+    # get left & right join labels and num. of levels at each location
+[/REPLACE]
+```
+
+Let me verify these changes are correct and complete.
+
+First block: Adds the helper function before `get_join_indexers`. The function:
+- Takes `left_keys`, `right_keys`, `how`
+- Checks single key
+- Checks numpy arrays
+- Checks monotonic increasing
+- Uses appropriate libjoin function
+- Returns indexers or None
+
+Second block: Uses the helper in `get_join_indexers` after empty checks.
+
+One potential issue: what if `how` is not one of "inner", "left", "right", "outer"? The existing code would also fail since `join_func` dict only has those keys. So my code is consistent.
+
+Another issue: the helper catches `TypeError` but not `ValueError` or other exceptions. If libjoin raises something else, the exception propagates. This might be fine, or I might want to catch more broadly.
+
+Actually, let me also consider: is `libjoin` definitely imported in `merge.py`? Looking at the code, the only import shown from `_libs` is `lib as libalgos`. But `libjoin` is used.
+
+Wait, let me search more carefully...
+
+In the provided `merge.py` code, I see:
+```python
+from pandas._libs import lib as libalgos
+```
+
+But `libjoin` appears in the code without explicit import in the shown portion. It's possible that:
+1. The import is below the shown code (unlikely)
+2. The import is in an `if TYPE_CHECKING:` block
+3. There's a star import
+4. The import was omitted from the shown code
+
+Actually, looking at pandas conventions, it's likely imported at the top of the file. The provided code snippet is partial (only showing relevant context). I'll assume `libjoin` is available.
+
+Hmm, but what if it's not? My code would fail at runtime when the module is loaded (since the function references `libjoin` at definition time).
+
+To be safe, I should check if libjoin is imported or import it. But I can't easily add imports with SEARCH/REPLACE.
+
+Let me search the original code again for `libjoin`... In the context provided:
+
+```python
+join_func = {
+    "inner": libjoin.inner_join,
+    "left": libjoin.left_outer_join,
+    "right": lambda x, y, count, **kwargs: libjoin.left_outer_join(
+        y, x, count, **kwargs
+    )[::-1],
+    "outer": libjoin.full_outer_join,
+}[how]
+```
+
+This confirms `libjoin` is used and must be imported. I'll trust it's available.
+
+But wait, I'm using `libjoin.inner_join_indexer` etc., which are different from `libjoin.inner_join`. These have `_indexer` suffix. Are they from the same module?
+
+In `base.py`, `import pandas._libs.join as libjoin` is used for `libjoin.inner_join_indexer`. In `merge.py`, maybe a different join module is imported? Or the same module with different aliases?
+
+Looking at `merge.py`, it uses `libjoin.inner_join` not `libjoin.inner_join_indexer`. These are different functions. The `merge.py` code might be importing `pandas.core.reshape._join` or a different submodule.
+
+Actually, let me check: in pandas, `pandas._libs.join` contains the `_indexer` functions. What's used in `merge.py`?
+
+Looking at the `merge.py` code in the provided context, I don't see how `libjoin` is imported. But based on usage patterns, I suspect it might be:
+
+```python
+from pandas._libs.join import (
+    inner_join,
+    left_outer_join,
+    full_outer_join,
+)
+# and then assigned to libjoin namespace? or used directly?
+```
+
+Or perhaps:
+```python
+import pandas._libs.join as libjoin
+```
+
+And then in merge.py, `libjoin.inner_join` refers to `pandas._libs.join.inner_join`, while in base.py, `libjoin.inner_join_indexer` refers to `pandas._libs.join.inner_join_indexer`. These would be the same module!
+
+So `libjoin.inner_join_indexer` should be available in `merge.py` too.
+
+But wait, let me re-verify. The module `pandas._libs.join` is a Cython module. It exports both sets of functions:
+- `inner_join`, `left_outer_join`, `full_outer_join` (factorized version)
+- `inner_join_indexer`, `left_join_indexer`, `outer_join_indexer` (direct array version)
+
+Both should be available from the same module. So my code is correct.
+
+Actually, I want to double-check this. Let me look at how pandas structures these...
+
+In `pandas/_libs/join.pyx` (the Cython source), there might be:
+```cython
+cpdef inner_join(...)  # factorized
+cpdef inner_join_indexer(...)  # direct
+```
+
+Or they might be in separate modules. But based on the import pattern in base.py (`import pandas._libs.join as libjoin`), they're in the same module.
+
+I'm fairly confident, but let me make my code more robust by using a try/except around the libjoin access too, just in case:
+
+```python
+    try:
+        if how == "inner":
+            _join = libjoin.inner_join_indexer
+        # ... etc
+```
+
+Actually, this would fail at function definition time if `libjoin` doesn't have these attributes. Better to put it all in the try-except:
+
+```python
+    try:
+        if how == "inner":
+            _, lidx, ridx = libjoin.inner_join_indexer(left_k, right_k)
+            ...
+```
+
+This is what I have. The `except TypeError:` catches runtime errors from the function call. If `libjoin.inner_join_indexer` doesn't exist, we'd get `AttributeError` at call time. Let me also catch that:
+
+```python
+    except (TypeError, AttributeError):
+```
+
+Actually no, if `libjoin` doesn't have `inner_join_indexer`, it's a bug in my code that should fail tests. I'll keep just `TypeError` and trust the module exports the functions.
+
+One more final check: I realize that `libjoin.left_join_indexer` might not exist! Let me verify from base.py:
+
+In `_left_indexer` (base.py):
+```python
+sv = self._get_join_target()
+ov = other._get_join_target()
+joined_ndarray, lidx, ridx = libjoin.left_join_indexer(sv, ov)
+```
+
+Yes, `libjoin.left_join_indexer` exists.
+
+For `libjoin.left_join_indexer_unique`:
+```python
+return libjoin.left_join_indexer_unique(sv, ov)
+```
+
+Yes, exists.
+
+For `inner`, `outer`:
+```python
+def _inner_indexer(self, other):
+    ...
+    joined_ndarray, lidx, ridx = libjoin.inner_join_indexer(sv, ov)
+```
+
+Yes, exist.
+
+Great, all confirmed.
+
+Now, let me think about whether there are any tests that would fail with this change. The fast path should produce identical results to the slow path for all supported cases. The key risk is if libjoin functions have slightly different behavior (e.g., with NaN handling, duplicate handling, or type coercion).
+
+For NaN in float arrays: my check `left_k[1:] >= left_k[:-1]` will fail for NaN (since NaN comparisons are False), so fast path won't trigger. Good.
+
+For integer arrays with no NaN: safe.
+
+For datetime: my check requires numpy array, but datetime64 is a numpy dtype. However, `np.ndarray` check requires actual ndarray, not DatetimeArray. The fast path won't trigger for EAs. This is safe but misses some optimization.
+
+Actually, wait - pandas DatetimeArray is NOT a subclass of np.ndarray. It's an ExtensionArray. So my `isinstance(left_k, np.ndarray)` check will be False for datetime data in DataFrames. The fast path won't apply.
+
+To handle datetime, I'd need to also accept DatetimeArray and extract its `_ndarray`. But this adds complexity. For the initial optimization, supporting plain numpy numeric arrays is the highest impact and safest.
+
+However, I should verify: when you do `df.merge(...)` on integer columns, what type are `left_join_keys`? From `_get_merge_keys`, they come from `_get_label_or_level_values` which for DataFrame columns returns the underlying array. For numeric columns in a DataFrame with default backend, this would be `np.ndarray` (since DataFrames store numpy arrays for simple dtypes). For DataFrames with nullable dtypes, it would be a masked array (ExtensionArray).
+
+So for typical integer/float merges, my fast path applies. For nullable integers or other EAs, it falls through.
+
+This seems like a reasonable trade-off.
+
+Let me also think about whether there could be any issue with memory views or read-only arrays causing problems with libjoin. The libjoin functions might modify arrays or require specific flags. Looking at the Cython code patterns, they typically read-only access. And numpy arrays from DataFrames are usually writable. Should be fine.
+
+One more thing: I should make sure my code doesn't cause performance regressions for non-monotonic data. The added checks are:
+- `len(left_keys) != 1 or len(right_keys) != 1` - O(1)
+- `not isinstance(left_k, np.ndarray)` - O(1)
+- `left_k[0] > left_k[-1]` - O(1)
+- `(left_k[1:] >= left_k[:-1]).all()` - O(n) with memory allocation
+
+For non-monotonic arrays, the full scan is wasteful. We could do a cheaper check first.
+
+Actually, I already have `left_k[0] > left_k[-1]` as a quick reject. For random data, this catches about 50% of cases (since random data is about as likely to start < end as > end, though with equal distribution it's 50%).
+
+But for data that's "almost" monotonic, we still do the full scan. Let me add one more quick check:
+
+```python
+    # Quick checks before full scan
+    if len(left_k) > 10:
+        # Sample check: if not monotonic at start, skip
+        if left_k[1] < left_k[0] or left_k[-1] < left_k[-2]:
+            return None
+```
+
+Hmm, this is hacky. Let me keep it simple. The full scan is acceptable overhead for the correctness it provides.
+
+Actually, I just realized I can use a more efficient numpy check: `np.searchsorted` or `np.diff`. But `diff` also allocates.
+
+For very large arrays where this matters, the data is more likely to be intentionally sorted (e.g., time series data), so the fast path will trigger and be beneficial. For random unsorted data, the slow path is used, and the scan overhead is minor compared to the join cost.
+
+I'll keep the simple implementation.
+
+Now, let me write the final, exact SEARCH/REPLACE blocks with no extra prose.
+
+Wait, I want to re-check one more thing. The `_get_join_indexers_for_monotonic` function is defined at module level, but it references `libjoin` which is used in `get_join_indexers`. If there's any issue with `libjoin` not being imported at the top level, the function would fail.
+
+Looking at the provided code more carefully, in `pandas/core/reshape/merge.py`, I see `libjoin` used but the import isn't shown. In `pandas/core/indexes/base.py`, the import is shown as `import pandas._libs.join as libjoin`. 
+
+For `merge.py`, based on convention and usage, it's most likely:
+```python
+from pandas._libs import join as libjoin
+```
+or
+```python
+import pandas._libs.join as libjoin
+```
+
+Either way, my code should work since it accesses `libjoin` as a module attribute.
+
+Actually, one more concern: my helper function might be called before `get_join_indexers` in the module loading, if it's defined above. But since the function is only called at runtime (when `get_join_indexers` is invoked), the import order doesn't matter as long as `libjoin` is imported when the module is loaded.
+
+I'll finalize my answer now.
+
+Actually, re-reading my code, I want to make one simplification: instead of early-reject with `left_k[0] > left_k[-1]`, I can just do the full check. The early reject saves a memory allocation for obviously non-monotonic arrays, but it's minor.
+
+Without the early reject:
+```python
+    if len(left_k) > 1 and not (left_k[1:] >= left_k[:-1]).all():
+        return None
+    if len(right_k) > 1 and not (right_k[1:] >= right_k[:-1]).all():
+        return None
+```
+
+This is cleaner. The memory allocation for the boolean array is the main cost, but for non-monotonic arrays, `all()` short-circuits on first False... wait, no! `a.all()` for numpy doesn't short-circuit! It always evaluates all elements.
+
+Actually, `np.all()` with `out` might, but `.all()` method... let me check. In NumPy, `arr.all()` does not short-circuit for boolean arrays; it computes the reduction. However, it can stop early at the C level. Actually, I'm not sure if it short-circuits. Let me assume it doesn't for safety.
+
+To get short-circuiting, I could use `np.searchsorted` or iterate. But this is a micro-optimization. For typical data, the array is about 50% monotonic or not, and the cost is acceptable.
+
+Actually, I just remembered: for `arr.all()` on a boolean array, NumPy might short-circuit! Let me think... In C implementations, reduction operations can short-circuit. But I'm not sure if NumPy actually does this.
+
+Regardless, for the common case of non-monotonic data, the memory allocation is a one-time cost. Let me keep the code simple.
+
+OK, truly final answer now. Here are my two blocks:
+
+```python
+pandas/core/reshape/merge.py
+[SEARCH]
+def get_join_indexers(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    sort: bool = False,
+    how: JoinHow = "inner",
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+[/SEARCH]
+[REPLACE]
+def _get_join_indexers_for_monotonic(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    how: JoinHow,
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]] | None:
+    """
+    Fast path using libjoin for single-key joins on monotonic keys.
+
+    Returns None if fast path is not applicable.
+    """
+    if len(left_keys) != 1 or len(right_keys) != 1:
+        return None
+
+    left_k = left_keys[0]
+    right_k = right_keys[0]
+
+    # Require numpy arrays for direct libjoin usage
+    if not isinstance(left_k, np.ndarray) or not isinstance(right_k, np.ndarray):
+        return None
+
+    # Check monotonic increasing
+    if len(left_k) > 1 and not (left_k[1:] >= left_k[:-1]).all():
+        return None
+    if len(right_k) > 1 and not (right_k[1:] >= right_k[:-1]).all():
+        return None
+
+    # Use libjoin directly
+    try:
+        if how == "inner":
+            _, lidx, ridx = libjoin.inner_join_indexer(left_k, right_k)
+            return lidx, ridx
+        elif how == "left":
+            _, lidx, ridx = libjoin.left_join_indexer(left_k, right_k)
+            return lidx, ridx
+        elif how == "right":
+            _, ridx, lidx = libjoin.left_join_indexer(right_k, left_k)
+            return lidx, ridx
+        else:  # how == "outer"
+            _, lidx, ridx = libjoin.outer_join_indexer(left_k, right_k)
+            return lidx, ridx
+    except TypeError:
+        # libjoin may not support this dtype
+        return None
+
+
+def get_join_indexers(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    sort: bool = False,
+    how: JoinHow = "inner",
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+[/REPLACE]
+```
+
+```python
+pandas/core/reshape/merge.py
+[SEARCH]
+    elif right_n == 0:
+        if how in ["right", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["left", "outer"]:
+            return _get_no_sort_one_missing_indexer(left_n, False)
+
+    # get left & right join labels and num. of levels at each location
+[/SEARCH]
+[REPLACE]
+    elif right_n == 0:
+        if how in ["right", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["left", "outer"]:
+            return _get_no_sort_one_missing_indexer(left_n, False)
+
+    # FAST PATH: single-key monotonic merge
+    maybe_indexers = _get_join_indexers_for_monotonic(left_keys, right_keys, how)
+    if maybe_indexers is not None:
+        return maybe_indexers
+
+    # get left & right join labels and num. of levels at each location
+[/REPLACE]
+```

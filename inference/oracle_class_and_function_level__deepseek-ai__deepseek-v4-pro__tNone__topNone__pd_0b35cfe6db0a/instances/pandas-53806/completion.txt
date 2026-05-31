@@ -1,0 +1,21 @@
+pandas/core/groupby/groupby.py
+[SEARCH]
+        if self._grouper._filter_empty_groups:
+
+            mask = values != -1
+
+            if mask.all():
+                return size_series
+            else:
+                size_series = size_series[mask]
+
+        return size_series
+[/SEARCH]
+[REPLACE]
+        if self._grouper._filter_empty_groups:
+            mask = values != -1
+            if not mask.all():
+                size_series = size_series[mask]
+
+        return size_series
+[/REPLACE]

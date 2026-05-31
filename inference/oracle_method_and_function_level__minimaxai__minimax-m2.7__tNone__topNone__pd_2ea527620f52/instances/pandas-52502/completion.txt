@@ -1,0 +1,13 @@
+
+
+Looking at the code, the main performance issue is calling `np.asarray()` on extension array values, which can be slow due to potential copies and NA value handling. The optimization is to use `to_numpy()` which can be more efficient for extension arrays and also properly handles NA values.
+
+pandas/core/series.py
+[SEARCH]
+        this_values = np.asarray(this._values)
+        other_values = np.asarray(other._values)
+[/SEARCH]
+[REPLACE]
+        this_values = this._values.to_numpy(dtype=float, na_value=np.nan)
+        other_values = other._values.to_numpy(dtype=float, na_value=np.nan)
+[/REPLACE]

@@ -1,0 +1,58 @@
+ sklearn/linear_model/_base.py
+[SEARCH]
+        elif sp.issparse(X):
+            X_offset_scale = X_offset / X_scale
+
+            def matvec(b):
+                return X.dot(b) - sample_weight_sqrt * b.dot(X_offset_scale)
+
+            def rmatvec(b):
+                return X.T.dot(b) - X_offset_scale * b.dot(sample_weight_sqrt)
+
+            X_centered = sparse.linalg.LinearOperator(
+                shape=X.shape, matvec=matvec, rmatvec=rmatvec
+            )
+            if y.ndim < 2:
+                self.coef_ = lsqr(X_centered, y)[0]
+            else:
+                # sparse_lstsq cannot handle y with shape (M, K)
+                outs = Parallel(n_jobs=n_jobs_)(
+                    delayed(lsqr)(X_centered, y[:, j].ravel())
+                    for j in range(y.shape[1])
+                )
+                self.coef_ = np.vstack([out[0] for out in outs])
+[/SEARCH]
+[REPLACE]
+        elif sp.issparse(X):
+            X_offset_scale = X_offset / X_scale
+
+            if sample_weight_sqrt is not None:
+                # Precompute the product for efficiency in matvec/rmatvec
+                sw = sample_weight_sqrt
+
+                def matvec(b):
+                    return X.dot(b) - sw * b.dot(X_offset_scale)
+
+                def rmatvec(b):
+                    return X.T.dot(b) - X_offset_scale * b.dot(sw)
+            else:
+                def matvec(b):
+                    return X.dot(b) - b.dot(X_offset_scale)
+
+                def rmatvec(b):
+                    return X.T.dot(b) - X_offset_scale * np.sum(b)
+
+            X_centered = sparse.linalg.LinearOperator(
+                shape=X.shape, matvec=matvec, rmatvec=rmatvec
+            )
+            if y.ndim < 2:
+                self.coef_ = lsqr(X_centered, y)[0]
+            else:
+                # sparse_lstsq cannot handle y with shape (M, K)
+                # Use threading backend for better memory efficiency with sparse ops
+                outs = Parallel(n_jobs=n_jobs_, prefer="threads")(
+                    delayed(lsqr)(X_centered, y[:, j].ravel())
+                    for j in range(y.shape[1])
+                )
+                self.coef_ = np.vstack([out[0] for out in outs])
+[/REPLACE]

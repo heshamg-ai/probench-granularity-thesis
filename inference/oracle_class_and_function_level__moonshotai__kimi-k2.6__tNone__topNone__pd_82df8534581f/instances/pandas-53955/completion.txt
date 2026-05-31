@@ -1,0 +1,88 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+    def _wrap_intersection_result(self, other, result) -> MultiIndex:
+        _, result_names = self._convert_can_do_setop(other)
+        return result.set_names(result_names)
+[/SEARCH]
+[REPLACE]
+    def _wrap_intersection_result(self, other, result) -> MultiIndex:
+        _, result_names = self._convert_can_do_setop(other)
+        return result.set_names(result_names)
+
+    def intersection(self, other, sort=False):
+        """
+        Form the intersection of two MultiIndex objects.
+
+        Parameters
+        ----------
+        other : MultiIndex or list / array of tuples
+        sort : bool, default False
+            Sort the resulting MultiIndex if possible.
+
+        Returns
+        -------
+        MultiIndex
+        """
+        other, result_names = self._convert_can_do_setop(other)
+
+        if len(self) == 0:
+            return self._wrap_intersection_result(other, self[:0])
+        if len(other) == 0:
+            return self._wrap_intersection_result(other, other[:0])
+
+        if self.equals(other):
+            return self._wrap_intersection_result(other, self)
+
+        if not isinstance(other, MultiIndex):
+            # Try to convert to MultiIndex for tuple comparison
+            try:
+                other = MultiIndex.from_tuples(other, names=self.names)
+            except (ValueError, TypeError):
+                msg = "other must be a MultiIndex or a list of tuples"
+                raise TypeError(msg)
+
+        # Fast path: if either is unique, we can use a more efficient approach
+        if self.is_unique and other.is_unique:
+            # Use hash-based approach for unique indexes
+            # Convert to tuples for set intersection
+            self_tuples = self._values
+            other_tuples = other._values
+            
+            # Use a set for O(1) lookups
+            other_set = set(other_tuples)
+            result_tuples = [t for t in self_tuples if t in other_set]
+            
+            if len(result_tuples) == 0:
+                result = self[:0]
+            else:
+                result = MultiIndex.from_tuples(result_tuples, names=self.names)
+        else:
+            # Fall back to general approach using get_indexer
+            # This handles duplicates properly
+            lidx = self.get_indexer(other)
+            keep = lidx != -1
+            
+            if not keep.any():
+                result = self[:0]
+            else:
+                # We need to handle duplicates carefully
+                # get_indexer returns first match, but we need all matches
+                # Use isin for proper duplicate handling
+                mask = other.isin(self._values)
+                result = other[mask]._unique()
+
+        if sort is not False:
+            try:
+                result = result.sort_values()
+            except TypeError:
+                if sort is True:
+                    raise
+                warnings.warn(
+                    "The values in the array are unorderable. "
+                    "Pass `sort=False` to suppress this warning.",
+                    RuntimeWarning,
+                    stacklevel=find_stack_level(),
+                )
+
+        return self._wrap_intersection_result(other, result)
+[/REPLACE]

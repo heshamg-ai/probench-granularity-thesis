@@ -1,0 +1,35 @@
+pandas/core/generic.py
+[SEARCH]
+        if items is not None:
+            name = self._get_axis_name(axis)
+            # error: Keywords must be strings
+            return self.reindex(  # type: ignore[misc]
+                **{name: [r for r in items if r in labels]}  # type: ignore[arg-type]
+            )
+[/SEARCH]
+[REPLACE]
+        if items is not None:
+            name = self._get_axis_name(axis)
+            # Convert items to a set for O(1) lookup when large,
+            # but keep order and check membership against labels
+            # Filtering through labels.isin(...) is vectorized and
+            # preserves original order of *labels* (i.e., the DataFrame's)
+            # which matches the semantics of the list comprehension.
+            # We drop duplicates to match reindex behavior on unique labels.
+            if len(items) > 10:
+                # Use Index operations for efficiency with large inputs
+                items_idx = ensure_index(items)
+                # Get the intersection while preserving order from labels
+                mask = labels.isin(items_idx)
+                new_labels = labels[mask]
+                # Remove duplicates to match [r for r in items if r in labels]
+                # where later duplicates in items are ignored by reindex
+                new_labels = new_labels.drop_duplicates()
+            else:
+                # Small lists: keep original path for simplicity
+                new_labels = [r for r in items if r in labels]
+            # error: Keywords must be strings
+            return self.reindex(  # type: ignore[misc]
+                **{name: new_labels}  # type: ignore[arg-type]
+            )
+[/REPLACE]

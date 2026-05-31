@@ -1,0 +1,58 @@
+sklearn/feature_selection/_univariate_selection.py
+[SEARCH]
+    Y = LabelBinarizer().fit_transform(y)
+    if Y.shape[1] == 1:
+        Y = np.append(1 - Y, Y, axis=1)
+
+    observed = safe_sparse_dot(Y.T, X)  # n_classes * n_features
+
+    feature_count = X.sum(axis=0).reshape(1, -1)
+    class_prob = Y.mean(axis=0).reshape(1, -1)
+    expected = np.dot(class_prob.T, feature_count)
+
+    return _chisquare(observed, expected)
+[/SEARCH]
+[REPLACE]
+    Y = LabelBinarizer().fit_transform(y)
+    if Y.shape[1] == 1:
+        Y = np.append(1 - Y, Y, axis=1)
+
+    if issparse(X):
+        observed = safe_sparse_dot(Y.T, X)  # n_classes * n_features (sparse)
+
+        feature_count = X.sum(axis=0).reshape(1, -1)
+        class_prob = Y.mean(axis=0).reshape(1, -1)
+        expected = np.dot(class_prob.T, feature_count)
+
+        return _chisquare(observed, expected)
+
+    # Dense path: avoid LabelBinarizer dense output for many-class problems.
+    # `y` is already encoded as integers; use np.bincount per class column
+    # with a single pass over samples. This is O(n_samples * n_features)
+    # instead of O(n_classes * n_features) with a dense Y intermediate.
+    n_samples, n_features = X.shape
+    classes = np.unique(y)
+    n_classes = classes.size
+
+    # class -> column index mapping for the binary matrix
+    class_to_col = np.empty(classes.max() + 1, dtype=np.intp)
+    class_to_col[classes] = np.arange(n_classes, dtype=np.intp)
+
+    # observed: (n_classes, n_features)
+    observed = np.zeros((n_classes, n_features), dtype=np.float64)
+    counts = np.zeros(n_classes, dtype=np.intp)
+
+    # Single-pass accumulation to avoid materializing the dense (n_samples x n_classes) matrix
+    y_flat = np.asarray(y).ravel()
+    col_indices = class_to_col[y_flat]
+    counts = np.bincount(col_indices, minlength=n_classes).astype(np.intp)
+    # np.add.at is a fast in-place scatter-add for the feature accumulator
+    for j in range(n_features):
+        np.add.at(observed[:, j], col_indices, X[:, j])
+
+    feature_count = X.sum(axis=0).reshape(1, -1).astype(np.float64)
+    class_prob = (counts / n_samples).reshape(1, -1).astype(np.float64)
+    expected = np.dot(class_prob.T, feature_count)
+
+    return _chisquare(observed, expected)
+[/REPLACE]

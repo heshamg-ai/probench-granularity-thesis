@@ -1,0 +1,73 @@
+ pandas/core/arrays/arrow/array.py
+[SEARCH]
+    @doc(ExtensionArray.to_numpy)
+    def to_numpy(
+        self,
+        dtype: npt.DTypeLike | None = None,
+        copy: bool = False,
+        na_value: object = lib.no_default,
+    ) -> np.ndarray:
+        if dtype is None and self._hasna:
+            dtype = object
+        if na_value is lib.no_default:
+            na_value = self.dtype.na_value
+
+        pa_type = self._data.type
+        if (
+            is_object_dtype(dtype)
+            or pa.types.is_timestamp(pa_type)
+            or pa.types.is_duration(pa_type)
+        ):
+            result = np.array(list(self), dtype=dtype)
+        else:
+            result = np.asarray(self._data, dtype=dtype)
+            if copy or self._hasna:
+                result = result.copy()
+
+        if self._hasna:
+            result[self.isna()] = na_value
+        return result
+[/SEARCH]
+[REPLACE]
+    @doc(ExtensionArray.to_numpy)
+    def to_numpy(
+        self,
+        dtype: npt.DTypeLike | None = None,
+        copy: bool = False,
+        na_value: object = lib.no_default,
+    ) -> np.ndarray:
+        if dtype is None and self._hasna:
+            dtype = object
+        if na_value is lib.no_default:
+            na_value = self.dtype.na_value
+
+        pa_type = self._data.type
+        if (
+            is_object_dtype(dtype)
+            or pa.types.is_timestamp(pa_type)
+            or pa.types.is_duration(pa_type)
+        ):
+            if self._hasna and is_object_dtype(dtype):
+                # Fast path for object dtype with nulls: avoid creating Python
+                # scalars for non-null values by using PyArrow's to_numpy with
+                # zero_copy_only=False, then fill nulls with na_value.
+                # This is much faster than list(self) which boxes every element.
+                try:
+                    result = np.asarray(self._data, dtype=object)
+                    if copy:
+                        result = result.copy()
+                    result[self.isna()] = na_value
+                    return result
+                except (pa.ArrowInvalid, ValueError, TypeError):
+                    # Fallback to the slow path if PyArrow can't convert directly
+                    pass
+            result = np.array(list(self), dtype=dtype)
+        else:
+            result = np.asarray(self._data, dtype=dtype)
+            if copy or self._hasna:
+                result = result.copy()
+
+        if self._hasna:
+            result[self.isna()] = na_value
+        return result
+[/REPLACE]

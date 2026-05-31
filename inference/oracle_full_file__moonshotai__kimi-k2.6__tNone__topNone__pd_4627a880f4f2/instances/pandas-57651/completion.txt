@@ -1,0 +1,110 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def _get_indexer(
+        self,
+        target: Index,
+        method: str | None = None,
+        limit: int | None = None,
+        tolerance=None,
+    ) -> npt.NDArray[np.intp]:
+        if com.any_not_none(method, tolerance, limit):
+            return super()._get_indexer(
+                target, method=method, tolerance=tolerance, limit=limit
+            )
+
+        if self.step > 0:
+            start, stop, step = self.start, self.stop, self.step
+        else:
+            # GH 28678: work on reversed range for simplicity
+            reverse = self._range[::-1]
+            start, stop, step = reverse.start, reverse.stop, reverse.step
+
+        target_array = np.asarray(target)
+        locs = target_array - start
+        valid = (locs % step == 0) & (locs >= 0) & (target_array < stop)
+        locs[~valid] = -1
+        locs[valid] = locs[valid] / step
+
+        if step != self.step:
+            # We reversed this range: transform to original locs
+            locs[valid] = len(self) - 1 - locs[valid]
+        return ensure_platform_int(locs)
+[/SEARCH]
+[REPLACE]
+    def _get_indexer(
+        self,
+        target: Index,
+        method: str | None = None,
+        limit: int | None = None,
+        tolerance=None,
+    ) -> npt.NDArray[np.intp]:
+        if com.any_not_none(method, tolerance, limit):
+            return super()._get_indexer(
+                target, method=method, tolerance=tolerance, limit=limit
+            )
+
+        if self.step > 0:
+            start, stop, step = self.start, self.stop, self.step
+        else:
+            # GH 28678: work on reversed range for simplicity
+            reverse = self._range[::-1]
+            start, stop, step = reverse.start, reverse.stop, reverse.step
+
+        target_array = np.asarray(target)
+        locs = target_array - start
+        valid = (locs % step == 0) & (locs >= 0) & (target_array < stop)
+        locs[~valid] = -1
+        locs[valid] = locs[valid] // step
+
+        if step != self.step:
+            # We reversed this range: transform to original locs
+            locs[valid] = len(self) - 1 - locs[valid]
+        return ensure_platform_int(locs)
+
+    def join(
+        self,
+        other: Index,
+        *,
+        how: str = "left",
+        level=None,
+        return_indexers: bool = False,
+        sort: bool = False,
+    ):
+        """
+        See Index.join for docstring and parameters.
+        """
+        if not isinstance(other, RangeIndex):
+            return super().join(
+                other, how=how, level=level, return_indexers=return_indexers, sort=sort
+            )
+
+        if self.equals(other):
+            if how in ("left", "right", "inner", "outer"):
+                if return_indexers:
+                    return self, None, None
+                return self
+            # else: let base class handle unexpected `how` values
+
+        if how == "left":
+            join_index = self
+        elif how == "right":
+            join_index = other
+        elif how == "inner":
+            join_index = self.intersection(other)
+        elif how == "outer":
+            # Use union for outer join; it preserves RangeIndex when possible
+            join_index = self.union(other)
+        else:
+            # fallback for unexpected `how` values
+            return super().join(
+                other, how=how, level=level, return_indexers=return_indexers, sort=sort
+            )
+
+        if return_indexers:
+            lidx = self.get_indexer_for(join_index) if join_index is not self else None
+            ridx = (
+                other.get_indexer_for(join_index) if join_index is not other else None
+            )
+            return join_index, lidx, ridx
+        return join_index
+[/REPLACE]

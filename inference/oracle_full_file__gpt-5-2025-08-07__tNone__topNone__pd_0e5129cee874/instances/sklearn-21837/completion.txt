@@ -1,0 +1,71 @@
+sklearn/feature_selection/_univariate_selection.py
+[SEARCH]
+from scipy.sparse import issparse
+[/SEARCH]
+[REPLACE]
+from scipy.sparse import issparse, csr_matrix
+[/REPLACE]
+
+sklearn/feature_selection/_univariate_selection.py
+[SEARCH]
+    X = check_array(X, accept_sparse="csr")
+    if np.any((X.data if issparse(X) else X) < 0):
+        raise ValueError("Input X must be non-negative.")
+
+    Y = LabelBinarizer().fit_transform(y)
+    if Y.shape[1] == 1:
+        Y = np.append(1 - Y, Y, axis=1)
+
+    observed = safe_sparse_dot(Y.T, X)  # n_classes * n_features
+
+    feature_count = X.sum(axis=0).reshape(1, -1)
+    class_prob = Y.mean(axis=0).reshape(1, -1)
+    expected = np.dot(class_prob.T, feature_count)
+
+    return _chisquare(observed, expected)
+[/SEARCH]
+[REPLACE]
+    X = check_array(X, accept_sparse="csr")
+    if np.any((X.data if issparse(X) else X) < 0):
+        raise ValueError("Input X must be non-negative.")
+
+    # Preserve class ordering semantics of LabelBinarizer without building
+    # a dense one-hot matrix for potentially many classes.
+    lb = LabelBinarizer()
+    lb.fit(y)
+    classes = lb.classes_
+    n_classes = classes.shape[0]
+    n_samples = X.shape[0]
+
+    # Total counts per feature across all samples
+    feature_count = X.sum(axis=0).reshape(1, -1)
+
+    if n_classes == 1:
+        # Single class present: emulate binary case with complementary class
+        observed = np.vstack(
+            [np.asarray(feature_count), np.zeros_like(np.asarray(feature_count))]
+        )
+        class_prob = np.array([[1.0, 0.0]])
+        expected = np.dot(class_prob.T, feature_count)
+        return _chisquare(observed, expected)
+
+    # Map labels to indices consistent with LabelBinarizer ordering
+    y = np.asarray(y)
+    y_ind = np.searchsorted(classes, y)
+
+    # Sparse class indicator to avoid dense (n_samples x n_classes) matrix
+    indicator = csr_matrix(
+        (np.ones(n_samples), (y_ind, np.arange(n_samples))),
+        shape=(n_classes, n_samples),
+    )
+
+    observed = safe_sparse_dot(indicator, X, dense_output=True)  # n_classes * n_features
+
+    # Class probabilities
+    class_counts = np.bincount(y_ind, minlength=n_classes).astype(np.float64)
+    class_prob = (class_counts / float(n_samples)).reshape(1, -1)
+
+    expected = np.dot(class_prob.T, feature_count)
+
+    return _chisquare(observed, expected)
+[/REPLACE]

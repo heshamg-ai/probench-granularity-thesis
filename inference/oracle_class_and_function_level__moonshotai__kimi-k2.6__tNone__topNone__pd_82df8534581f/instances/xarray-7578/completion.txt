@@ -1,0 +1,74 @@
+xarray/core/rolling.py
+[SEARCH]
+        dataset = {}
+        for key, da in self.obj.data_vars.items():
+            # keeps rollings only for the dataset depending on self.dim
+            dims = [d for d in self.dim if d in da.dims]
+            if dims:
+                wi = {d: window_dims[i] for i, d in enumerate(self.dim) if d in da.dims}
+                st = {d: strides[i] for i, d in enumerate(self.dim) if d in da.dims}
+
+                dataset[key] = self.rollings[key].construct(
+                    window_dim=wi,
+                    fill_value=fill_value,
+                    stride=st,
+                    keep_attrs=keep_attrs,
+                )
+            else:
+                dataset[key] = da.copy()
+
+            # as the DataArrays can be copied we need to delete the attrs
+            if not keep_attrs:
+                dataset[key].attrs = {}
+
+        attrs = self.obj.attrs if keep_attrs else {}
+
+        return Dataset(dataset, coords=self.obj.coords, attrs=attrs).isel(
+            {d: slice(None, None, s) for d, s in zip(self.dim, strides)}
+        )
+[/SEARCH]
+[REPLACE]
+        # When no variable depends on self.dim, we can skip per-variable
+        # construction and do a single fast isel on the whole Dataset.
+        if not any(
+            any(d in da.dims for d in self.dim)
+            for da in self.obj.data_vars.values()
+        ):
+            dataset = {
+                key: da.copy() for key, da in self.obj.data_vars.items()
+            }
+            if not keep_attrs:
+                for da in dataset.values():
+                    da.attrs = {}
+            attrs = self.obj.attrs if keep_attrs else {}
+            return Dataset(dataset, coords=self.obj.coords, attrs=attrs).isel(
+                {d: slice(None, None, s) for d, s in zip(self.dim, strides)}
+            )
+
+        dataset = {}
+        for key, da in self.obj.data_vars.items():
+            # keeps rollings only for the dataset depending on self.dim
+            dims = [d for d in self.dim if d in da.dims]
+            if dims:
+                wi = {d: window_dims[i] for i, d in enumerate(self.dim) if d in da.dims}
+                st = {d: strides[i] for i, d in enumerate(self.dim) if d in da.dims}
+
+                dataset[key] = self.rollings[key].construct(
+                    window_dim=wi,
+                    fill_value=fill_value,
+                    stride=st,
+                    keep_attrs=keep_attrs,
+                )
+            else:
+                dataset[key] = da.copy()
+
+            # as the DataArrays can be copied we need to delete the attrs
+            if not keep_attrs:
+                dataset[key].attrs = {}
+
+        attrs = self.obj.attrs if keep_attrs else {}
+
+        return Dataset(dataset, coords=self.obj.coords, attrs=attrs).isel(
+            {d: slice(None, None, s) for d, s in zip(self.dim, strides)}
+        )
+[/REPLACE]

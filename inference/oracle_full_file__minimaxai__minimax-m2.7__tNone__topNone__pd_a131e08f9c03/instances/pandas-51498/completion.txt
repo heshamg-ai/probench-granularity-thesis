@@ -1,0 +1,115 @@
+
+
+Looking at the `round` method, I need to optimize the integer `decimals` case for numeric blocks. The current implementation iterates through each column and calls `Series.round()`, which has overhead. I'll add a block-level optimization for numeric blocks.
+
+pandas/core/internals/blocks.py
+[SEARCH]
+class NumericBlock(NumpyBlock):
+    __slots__ = ()
+    is_numeric = True
+[/SEARCH]
+[REPLACE]
+class NumericBlock(NumpyBlock):
+    __slots__ = ()
+    is_numeric = True
+
+    def round(self, decimals: int) -> list[Block]:
+        """
+        Implement block-level round operation for numeric data.
+        """
+        if decimals == 0:
+            # Fast path: round to nearest integer
+            new_values = np.round(self.values, decimals)
+        else:
+            new_values = np.round(self.values, decimals)
+        return [self.make_block(new_values)]
+[/REPLACE]
+
+pandas/core/internals/managers.py
+[SEARCH]
+        return type(self)(blocks, new_axes)
+
+    # ----------------------------------------------------------------
+
+    def unstack(self, unstacker, fill_value) -> BlockManager:
+[/SEARCH]
+[REPLACE]
+        return type(self)(blocks, new_axes)
+
+    def round(self: T, decimals: int) -> T:
+        """
+        Apply round operation to all blocks with a single integer decimals value.
+        This is faster than calling round on each Series individually.
+        """
+        return self.apply("round", decimals=decimals)
+
+    # ----------------------------------------------------------------
+
+    def unstack(self, unstacker, fill_value) -> BlockManager:
+[/REPLACE]
+
+pandas/core/frame.py
+[SEARCH]
+        def _series_round(ser: Series, decimals: int) -> Series:
+            if is_integer_dtype(ser.dtype) or is_float_dtype(ser.dtype):
+                return ser.round(decimals)
+            return ser
+
+        nv.validate_round(args, kwargs)
+
+        if isinstance(decimals, (dict, Series)):
+            if isinstance(decimals, Series) and not decimals.index.is_unique:
+                raise ValueError("Index of decimals must be unique")
+            if is_dict_like(decimals) and not all(
+                is_integer(value) for _, value in decimals.items()
+            ):
+                raise TypeError("Values in decimals must be integers")
+            new_cols = list(_dict_round(self, decimals))
+        elif is_integer(decimals):
+            # Dispatch to Series.round
+            new_cols = [_series_round(v, decimals) for _, v in self.items()]
+        else:
+            raise TypeError("decimals must be an integer, a dict-like or a Series")
+
+        if len(new_cols) > 0:
+            return self._constructor(
+                concat(new_cols, axis=1), index=self.index, columns=self.columns
+            ).__finalize__(self, method="round")
+        else:
+            return self.copy(deep=False)
+[/SEARCH]
+[REPLACE]
+        def _series_round(ser: Series, decimals: int) -> Series:
+            if is_integer_dtype(ser.dtype) or is_float_dtype(ser.dtype):
+                return ser.round(decimals)
+            return ser
+
+        nv.validate_round(args, kwargs)
+
+        if isinstance(decimals, (dict, Series)):
+            if isinstance(decimals, Series) and not decimals.index.is_unique:
+                raise ValueError("Index of decimals must be unique")
+            if is_dict_like(decimals) and not all(
+                is_integer(value) for _, value in decimals.items()
+            ):
+                raise TypeError("Values in decimals must be integers")
+            new_cols = list(_dict_round(self, decimals))
+        elif is_integer(decimals):
+            # Fast path: use block-level round for numeric columns
+            if self._mgr.is_numeric_mixed_type:
+                # Mixed numeric/non-numeric, fall back to per-column
+                new_cols = [_series_round(v, decimals) for _, v in self.items()]
+            else:
+                # All numeric or all same type - use block-level round
+                mgr = self._mgr.round(decimals)
+                return self._constructor(mgr).__finalize__(self, method="round")
+        else:
+            raise TypeError("decimals must be an integer, a dict-like or a Series")
+
+        if len(new_cols) > 0:
+            return self._constructor(
+                concat(new_cols, axis=1), index=self.index, columns=self.columns
+            ).__finalize__(self, method="round")
+        else:
+            return self.copy(deep=False)
+[/REPLACE]

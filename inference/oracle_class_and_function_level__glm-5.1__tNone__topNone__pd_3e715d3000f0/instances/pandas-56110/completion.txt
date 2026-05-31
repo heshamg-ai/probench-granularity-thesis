@@ -1,0 +1,82 @@
+pandas/core/arrays/string_arrow.py
+[SEARCH]
+    def _reduce(
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies(self, sep="|"):
+        import pyarrow.compute as pc
+
+        if sep in ("", None):
+            # Empty separator: each whole string is a single dummy
+            arr = self._pa_array
+            # Collect unique non-null values
+            unique_vals = pc.drop_null(pc.unique(arr))
+            # Sort for deterministic column order
+            try:
+                unique_vals = pc.sort_indices(unique_vals)
+                unique_vals = pc.take(unique_vals, pc.sort_indices(unique_vals))
+            except Exception:
+                pass
+            # Fallback: use Python sorted
+            vals_list = unique_vals.to_pylist()
+            vals_list.sort()
+            columns = vals_list
+
+            if not columns:
+                return type(self)(pa.array([], type=pa.string())), np.empty(
+                    (len(arr), 0), dtype=np.uint8
+                )
+
+            data = np.empty((len(arr), len(columns)), dtype=np.uint8)
+            for i, col in enumerate(columns):
+                data[:, i] = pc.equal(arr, col).fill_null(False).to_numpy().astype(np.uint8)
+
+            return type(self)(pa.array(columns, type=pa.string())), data
+
+        # Split the array by separator
+        split_arr = pc.split_pattern(self._pa_array, sep)
+
+        # Get all non-null split elements
+        non_null_splits = pc.drop_null(split_arr)
+        if len(non_null_splits) == 0:
+            # All null or empty
+            n = len(self._pa_array)
+            return type(self)(pa.array([], type=pa.string())), np.empty(
+                (n, 0), dtype=np.uint8
+            )
+
+        # Explode and get unique values
+        exploded = pc.list_flatten(non_null_splits)
+        # Filter empty strings that can result from trailing/leading/consecutive seps
+        exploded = pc.filter(exploded, pc.not_equal(exploded, ""))
+        unique_vals = pc.unique(exploded)
+
+        # Sort for deterministic column order (mimics Python sorted behavior)
+        try:
+            sort_indices = pc.sort_indices(unique_vals)
+            unique_vals = pc.take(unique_vals, sort_indices)
+        except Exception:
+            # Fallback to Python sorting if pyarrow sort fails
+            vals_list = unique_vals.to_pylist()
+            vals_list.sort()
+            unique_vals = pa.array(vals_list, type=pa.string())
+
+        columns = unique_vals.to_pylist()
+
+        if not columns:
+            n = len(self._pa_array)
+            return type(self)(pa.array([], type=pa.string())), np.empty(
+                (n, 0), dtype=np.uint8
+            )
+
+        data = np.empty((len(self._pa_array), len(columns)), dtype=np.uint8)
+        for i, col in enumerate(columns):
+            # Check if the list contains the value
+            has_val = pc.list_contains(split_arr, col)
+            # Replace nulls with False, convert to uint8
+            data[:, i] = has_val.fill_null(False).to_numpy().astype(np.uint8)
+
+        return type(self)(pa.array(columns, type=pa.string())), data
+
+    def _reduce(
+[/REPLACE]

@@ -1,0 +1,73 @@
+Looking at the `Dataset.assign` optimization request, I need to trace the code path to understand where alignment between indexed and non-indexed objects of the same shape occurs.
+
+When `Dataset.assign` is called with new variables, it eventually calls `align()` which creates an `Aligner`. The `Aligner.find_matching_unindexed_dims()` method collects unindexed dimension sizes but doesn't check if they already match indexed dimension sizes from already-computed aligned indexes. Then `assert_unindexed_dim_sizes_equal()` does a redundant set size comparison even when sizes already match.
+
+The key optimization is in `Aligner._need_reindex()`: when `has_unindexed_dims` is True, it forces reindexing even if the unindexed dimensions already have matching sizes in the aligned indexes. This causes unnecessary reindexing in `Dataset.assign` when indexed and non-indexed objects share the same shape.
+
+Additionally, `find_matching_unindexed_dims()` should exclude dimensions already covered by indexes to avoid tracking redundant size information.
+
+xarray/core/alignment.py
+[SEARCH]
+    def find_matching_unindexed_dims(self) -> None:
+        unindexed_dim_sizes = defaultdict(set)
+
+        for obj in self.objects:
+            for dim in obj.dims:
+                if dim not in self.exclude_dims and dim not in obj.xindexes.dims:
+                    unindexed_dim_sizes[dim].add(obj.sizes[dim])
+
+        self.unindexed_dim_sizes = unindexed_dim_sizes
+[/SEARCH]
+[REPLACE]
+    def find_matching_unindexed_dims(self) -> None:
+        unindexed_dim_sizes = defaultdict(set)
+
+        for obj in self.objects:
+            for dim in obj.dims:
+                if dim not in self.exclude_dims and dim not in obj.xindexes.dims and dim not in self.index_vars:
+                    unindexed_dim_sizes[dim].add(obj.sizes[dim])
+
+        self.unindexed_dim_sizes = unindexed_dim_sizes
+[/REPLACE]
+
+xarray/core/alignment.py
+[SEARCH]
+    def _need_reindex(self, dims, cmp_indexes) -> bool:
+        """Whether or not we need to reindex variables for a set of
+        matching indexes.
+
+        We don't reindex when all matching indexes are equal for two reasons:
+        - It's faster for the usual case (already aligned objects).
+        - It ensures it's possible to do operations that don't require alignment
+          on indexes with duplicate values (which cannot be reindexed with
+          pandas). This is useful, e.g., for overwriting such duplicate indexes.
+
+        """
+        has_unindexed_dims = any(dim in self.unindexed_dim_sizes for dim in dims)
+        return not (indexes_all_equal(cmp_indexes)) or has_unindexed_dims
+[/SEARCH]
+[REPLACE]
+    def _need_reindex(self, dims, cmp_indexes) -> bool:
+        """Whether or not we need to reindex variables for a set of
+        matching indexes.
+
+        We don't reindex when all matching indexes are equal for two reasons:
+        - It's faster for the usual case (already aligned objects).
+        - It ensures it's possible to do operations that don't require alignment
+          on indexes with duplicate values (which cannot be reindexed with
+          pandas). This is useful, e.g., for overwriting such duplicate indexes.
+
+        """
+        if not indexes_all_equal(cmp_indexes):
+            return True
+        for dim in dims:
+            if dim in self.unindexed_dim_sizes:
+                sizes = self.unindexed_dim_sizes[dim]
+                index_size = self.new_indexes.dims.get(dim)
+                if index_size is not None:
+                    if any(s != index_size for s in sizes):
+                        return True
+                elif len(sizes) > 1:
+                    return True
+        return False
+[/REPLACE]

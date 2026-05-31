@@ -1,0 +1,13 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        elif pa.types.is_boolean(pa_type):
+            from pandas.core.arrays import BooleanArray
+
+            scalars = BooleanArray._from_sequence_of_strings(strings).to_numpy()
+[/SEARCH]
+[REPLACE]
+        elif pa.types.is_boolean(pa_type):
+            scalars = pa.array(strings, type=pa.string(), from_pandas=True).cast(
+                pa.bool_()
+            )
+[/REPLACE]

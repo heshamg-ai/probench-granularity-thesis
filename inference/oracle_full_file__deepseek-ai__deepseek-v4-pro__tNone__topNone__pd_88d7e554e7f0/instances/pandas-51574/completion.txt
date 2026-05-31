@@ -1,0 +1,82 @@
+pandas/core/generic.py
+[SEARCH]
+        if isinstance(other, (np.ndarray, ExtensionArray)):
+            if other.shape != self.shape:
+                if self.ndim != 1:
+                    # In the ndim == 1 case we may have
+                    #  other length 1, which we treat as scalar (GH#2745, GH#4192)
+                    #  or len(other) == icond.sum(), which we treat like
+                    #  __setitem__ (GH#3235)
+                    raise ValueError(
+                        "other must be the same shape as self when an ndarray"
+                    )
+
+            # we are the same shape, so create an actual object for alignment
+            else:
+                other = self._constructor(other, **self._construct_axes_dict())
+[/SEARCH]
+[REPLACE]
+        if isinstance(other, (np.ndarray, ExtensionArray)):
+            if other.shape != self.shape:
+                if self.ndim != 1:
+                    # In the ndim == 1 case we may have
+                    #  other length 1, which we treat as scalar (GH#2745, GH#4192)
+                    #  or len(other) == icond.sum(), which we treat like
+                    #  __setitem__ (GH#3235)
+                    raise ValueError(
+                        "other must be the same shape as self when an ndarray"
+                    )
+
+            # we are the same shape, so create an actual object for alignment
+            else:
+                other = self._constructor(other, **self._construct_axes_dict())
+
+        # Fast path: when cond is backed by ExtensionArrays, avoid
+        # BlockManager.where overhead by delegating to the column-level
+        # ExtensionArray._where implementation directly.
+        if (
+            isinstance(cond, ABCDataFrame)
+            and isinstance(self, ABCDataFrame)
+            and all(
+                is_extension_array_dtype(c.dtype) for c in (self.dtypes, cond.dtypes)
+            )
+        ):
+            from pandas.core.dtypes.missing import notna
+
+            # cond has already been aligned and is a DataFrame with matching
+            # columns/index. Build a result DataFrame column-by-column.
+            other_np = None
+            other_array = None
+            if isinstance(other, ABCDataFrame):
+                other_array = other
+            elif isinstance(other, np.ndarray) and other.ndim == 2:
+                other_np = other
+            elif is_scalar(other):
+                pass  # scalar passed directly to _where
+            else:
+                other_array = other
+
+            res_columns = {}
+            for i, col in enumerate(self.columns):
+                col_cond = cond[col]._values
+                col_self = self[col]._values
+                if other_array is not None:
+                    col_other = other_array[col]._values
+                elif other_np is not None:
+                    col_other = other_np[:, i]
+                else:
+                    col_other = other
+
+                # ExtensionArray._where accepts a scalar other
+                res_values = col_self._where(col_cond, col_other)
+                res_columns[col] = res_values
+
+            result = self._constructor(
+                res_columns, index=self.index, columns=self.columns
+            )
+            if inplace:
+                self._update_inplace(result)
+                return None
+            return result.__finalize__(self)
+
+[/REPLACE]

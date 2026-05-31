@@ -1,0 +1,85 @@
+pandas/core/dtypes/dtypes.py
+[SEARCH]
+    def update_dtype(self, dtype: str_type | CategoricalDtype) -> CategoricalDtype:
+        """
+        Returns a CategoricalDtype with categories and ordered taken from dtype
+        if specified, otherwise falling back to self if unspecified
+
+        Parameters
+        ----------
+        dtype : CategoricalDtype
+
+        Returns
+        -------
+        new_dtype : CategoricalDtype
+        """
+        if isinstance(dtype, str) and dtype == "category":
+            # dtype='category' should not change anything
+            return self
+        elif not self.is_dtype(dtype):
+            raise ValueError(
+                f"a CategoricalDtype must be passed to perform an update, "
+                f"got {dtype!r}"
+            )
+        else:
+            # from here on, dtype is a CategoricalDtype
+            dtype = cast(CategoricalDtype, dtype)
+
+        # update categories/ordered unless they've been explicitly passed as None
+        new_categories = (
+            dtype.categories if dtype.categories is not None else self.categories
+        )
+        new_ordered = dtype.ordered if dtype.ordered is not None else self.ordered
+
+        return CategoricalDtype(new_categories, new_ordered)
+[/SEARCH]
+[REPLACE]
+    def update_dtype(self, dtype: str_type | CategoricalDtype) -> CategoricalDtype:
+        """
+        Returns a CategoricalDtype with categories and ordered taken from dtype
+        if specified, otherwise falling back to self if unspecified
+
+        Parameters
+        ----------
+        dtype : CategoricalDtype
+
+        Returns
+        -------
+        new_dtype : CategoricalDtype
+        """
+        if isinstance(dtype, str) and dtype == "category":
+            # dtype='category' should not change anything
+            return self
+        elif not self.is_dtype(dtype):
+            raise ValueError(
+                f"a CategoricalDtype must be passed to perform an update, "
+                f"got {dtype!r}"
+            )
+
+        # from here on, dtype is a CategoricalDtype
+        # Avoid unnecessary cast and constructor calls when dtype is already resolved
+        if isinstance(dtype, CategoricalDtype):
+            other = dtype
+        else:
+            other = cast(CategoricalDtype, dtype)
+
+        other_categories = other.categories
+        other_ordered = other.ordered
+
+        if other_categories is not None:
+            new_categories = other_categories
+        else:
+            new_categories = self.categories
+
+        if other_ordered is not None:
+            new_ordered = other_ordered
+        else:
+            new_ordered = self.ordered
+
+        # Fast path: if nothing changed, return self
+        if new_categories is self._categories and new_ordered is self._ordered:
+            return self
+
+        # Use _from_fastpath to skip redundant validation inside __init__
+        return CategoricalDtype._from_fastpath(new_categories, new_ordered)
+[/REPLACE]

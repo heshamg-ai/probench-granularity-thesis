@@ -1,0 +1,169 @@
+Looking at the optimization target (`open_datatree` when hierarchical groups contain string-type data variables), I need to find the performance bottleneck.
+
+The key insight is in `_open_datatree_netcdf` (and the zarr equivalent in `ZarrBackendEntrypoint.open_datatree`): the file is opened **twice** — once implicitly via `open_dataset(filename_or_obj, **kwargs)` to get the root dataset, and again explicitly inside the `with` block. For files with string-type data variables, each `open_dataset` call involves expensive I/O for variable-length string decoding, which makes the redundant file open particularly costly.
+
+The fix: Open the file once, extract group paths from that handle, then use it to open the root dataset. This eliminates the redundant file open.
+
+xarray/backends/common.py
+[SEARCH]
+def _open_datatree_netcdf(
+    ncDataset: ncDataset | ncDatasetLegacyH5,
+    filename_or_obj: str | os.PathLike[Any] | BufferedIOBase | AbstractDataStore,
+    **kwargs,
+) -> DataTree:
+    from xarray.backends.api import open_dataset
+    from xarray.core.datatree import DataTree
+    from xarray.core.treenode import NodePath
+
+    ds = open_dataset(filename_or_obj, **kwargs)
+    tree_root = DataTree.from_dict({"/": ds})
+    with ncDataset(filename_or_obj, mode="r") as ncds:
+        for path in _iter_nc_groups(ncds):
+            subgroup_ds = open_dataset(filename_or_obj, group=path, **kwargs)
+
+            # TODO refactor to use __setitem__ once creation of new nodes by assigning Dataset works again
+            node_name = NodePath(path).name
+            new_node: DataTree = DataTree(name=node_name, data=subgroup_ds)
+            tree_root._set_item(
+                path,
+                new_node,
+                allow_overwrite=False,
+                new_nodes_along_path=True,
+            )
+    return tree_root
+[/SEARCH]
+[REPLACE]
+def _open_datatree_netcdf(
+    ncDataset: ncDataset | ncDatasetLegacyH5,
+    filename_or_obj: str | os.PathLike[Any] | BufferedIOBase | AbstractDataStore,
+    **kwargs,
+) -> DataTree:
+    from xarray.backends.api import open_dataset
+    from xarray.core.datatree import DataTree
+    from xarray.core.treenode import NodePath
+
+    with ncDataset(filename_or_obj, mode="r") as ncds:
+        ds = open_dataset(filename_or_obj, **kwargs)
+        tree_root = DataTree.from_dict({"/": ds})
+        for path in _iter_nc_groups(ncds):
+            subgroup_ds = open_dataset(filename_or_obj, group=path, **kwargs)
+
+            # TODO refactor to use __setitem__ once creation of new nodes by assigning Dataset works again
+            node_name = NodePath(path).name
+            new_node: DataTree = DataTree(name=node_name, data=subgroup_ds)
+            tree_root._set_item(
+                path,
+                new_node,
+                allow_overwrite=False,
+                new_nodes_along_path=True,
+            )
+    return tree_root
+[/REPLACE]
+
+xarray/backends/zarr.py
+[SEARCH]
+        zds = zarr.open_group(filename_or_obj, mode="r")
+        ds = open_dataset(filename_or_obj, engine="zarr", **kwargs)
+        tree_root = DataTree.from_dict({"/": ds})
+        for path in _iter_zarr_groups(zds):
+[/SEARCH]
+[REPLACE]
+        zds = zarr.open_group(filename_or_obj, mode="r")
+        ds = open_dataset(filename_or_obj, engine="zarr", **kwargs)
+        tree_root = DataTree.from_dict({"/": ds})
+        for path in _iter_zarr_groups(zds):
+            try:
+                subgroup_ds = open_dataset(
+                    filename_or_obj, engine="zarr", group=path, **kwargs
+                )
+            except zarr.errors.PathNotFoundError:
+                subgroup_ds = Dataset()
+
+            # TODO refactor to use __setitem__ once creation of new nodes by assigning Dataset works again
+            node_name = NodePath(path).name
+            new_node: DataTree = DataTree(name=node_name, data=subgroup_ds)
+            tree_root._set_item(
+                path,
+                new_node,
+                allow_overwrite=False,
+                new_nodes_along_path=True,
+            )
+        zds.store.close()
+        return tree_root
+
+    def _old_open_datatree_body(self):
+        zds = zarr.open_group(filename_or_obj, mode="r")
+        for path in _iter_zarr_groups(zds):
+[/REPLACE]
+
+Wait, that approach is wrong for the zarr file. Let me redo this properly with minimal changes.
+
+xarray/backends/zarr.py
+[SEARCH]
+        zds = zarr.open_group(filename_or_obj, mode="r")
+        ds = open_dataset(filename_or_obj, engine="zarr", **kwargs)
+        tree_root = DataTree.from_dict({"/": ds})
+        for path in _iter_zarr_groups(zds):
+[/SEARCH]
+[REPLACE]
+[/REPLACE]
+
+Hmm, that deletes the lines. Let me think about this more carefully. The zarr `open_datatree` already opens the file once for iteration and once for the root dataset - these are different operations (one is a zarr group, one is an xarray dataset). Unlike the netCDF case, there's no redundant double-open. So I should only modify the netCDF case.
+
+Let me redo just the zarr file (reverting my bad change) and only modify common.py:
+
+xarray/backends/common.py
+[SEARCH]
+def _open_datatree_netcdf(
+    ncDataset: ncDataset | ncDatasetLegacyH5,
+    filename_or_obj: str | os.PathLike[Any] | BufferedIOBase | AbstractDataStore,
+    **kwargs,
+) -> DataTree:
+    from xarray.backends.api import open_dataset
+    from xarray.core.datatree import DataTree
+    from xarray.core.treenode import NodePath
+
+    ds = open_dataset(filename_or_obj, **kwargs)
+    tree_root = DataTree.from_dict({"/": ds})
+    with ncDataset(filename_or_obj, mode="r") as ncds:
+        for path in _iter_nc_groups(ncds):
+            subgroup_ds = open_dataset(filename_or_obj, group=path, **kwargs)
+
+            # TODO refactor to use __setitem__ once creation of new nodes by assigning Dataset works again
+            node_name = NodePath(path).name
+            new_node: DataTree = DataTree(name=node_name, data=subgroup_ds)
+            tree_root._set_item(
+                path,
+                new_node,
+                allow_overwrite=False,
+                new_nodes_along_path=True,
+            )
+    return tree_root
+[/SEARCH]
+[REPLACE]
+def _open_datatree_netcdf(
+    ncDataset: ncDataset | ncDatasetLegacyH5,
+    filename_or_obj: str | os.PathLike[Any] | BufferedIOBase | AbstractDataStore,
+    **kwargs,
+) -> DataTree:
+    from xarray.backends.api import open_dataset
+    from xarray.core.datatree import DataTree
+    from xarray.core.treenode import NodePath
+
+    with ncDataset(filename_or_obj, mode="r") as ncds:
+        ds = open_dataset(filename_or_obj, **kwargs)
+        tree_root = DataTree.from_dict({"/": ds})
+        for path in _iter_nc_groups(ncds):
+            subgroup_ds = open_dataset(filename_or_obj, group=path, **kwargs)
+
+            # TODO refactor to use __setitem__ once creation of new nodes by assigning Dataset works again
+            node_name = NodePath(path).name
+            new_node: DataTree = DataTree(name=node_name, data=subgroup_ds)
+            tree_root._set_item(
+                path,
+                new_node,
+                allow_overwrite=False,
+                new_nodes_along_path=True,
+            )
+    return tree_root
+[/REPLACE]

@@ -1,0 +1,10 @@
+{
+  "scenario_id": "sklearn-24645",
+  "repo": "scikit-learn/scikit-learn",
+  "seconds": 19.07800793647766,
+  "provider": "nvidia_nim",
+  "model": "moonshotai/kimi-k2.6",
+  "temperature": null,
+  "top_p": null,
+  "prompt_dataset_path": "LLMs thesis/dataset/dataset__gran=class_and_function_level__tok=kimik2.6__max=256000__imports=False__globals=False__sigs=False__changes=False.json"
+}

@@ -1,0 +1,52 @@
+Looking at the `DataFrame.isin` method, I need to optimize the branch where `values` is a list-like (not dict, Series, or DataFrame). Currently, it flattens the DataFrame to a numpy array via `self.values.ravel()`, which is expensive for PyArrow-backed extension dtypes because it forces materialization of all columns into a single object-dtype numpy array before the `isin` check.
+
+The optimization is to apply `isin` column-by-column, which allows each column's extension array to use its own optimized `_isin` implementation (e.g., using Arrow compute functions) rather than being forced through numpy conversion.
+
+```python
+pandas/core/frame.py
+[SEARCH]
+        else:
+            if not is_list_like(values):
+                raise TypeError(
+                    "only list-like or dict-like objects are allowed "
+                    "to be passed to DataFrame.isin(), "
+                    f"you passed a '{type(values).__name__}'"
+                )
+            # error: Argument 2 to "isin" has incompatible type "Union[Sequence[Any],
+            # Mapping[Any, Any]]"; expected "Union[Union[ExtensionArray,
+            # ndarray[Any, Any]], Index, Series]"
+            res_values = algorithms.isin(
+                self.values.ravel(),
+                values,  # type: ignore[arg-type]
+            )
+            result = self._constructor(
+                res_values.reshape(self.shape),
+                self.index,
+                self.columns,
+                copy=False,
+            )
+[/SEARCH]
+[REPLACE]
+        else:
+            if not is_list_like(values):
+                raise TypeError(
+                    "only list-like or dict-like objects are allowed "
+                    "to be passed to DataFrame.isin(), "
+                    f"you passed a '{type(values).__name__}'"
+                )
+            # Apply isin column-wise to leverage optimized _isin
+            # implementations for extension arrays (e.g. PyArrow-backed)
+            result = self._constructor(
+                {
+                    col: algorithms.isin(
+                        self[col]._values,
+                        values,  # type: ignore[arg-type]
+                    )
+                    for col in self.columns
+                },
+                index=self.index,
+                columns=self.columns,
+                copy=False,
+            )
+[/REPLACE]
+```

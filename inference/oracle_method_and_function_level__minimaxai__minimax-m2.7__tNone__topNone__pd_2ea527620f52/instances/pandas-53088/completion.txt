@@ -1,0 +1,26 @@
+
+
+pandas/core/groupby/ops.py
+[SEARCH]
+    @cache_readonly
+    def groups(self) -> dict[Hashable, np.ndarray]:
+        """dict {group name -> group labels}"""
+        if len(self.groupings) == 1:
+            return self.groupings[0].groups
+        else:
+            to_groupby = zip(*(ping.grouping_vector for ping in self.groupings))
+            index = Index(to_groupby)
+            return self.axis.groupby(index)
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def groups(self) -> dict[Hashable, np.ndarray]:
+        """dict {group name -> group labels}"""
+        if len(self.groupings) == 1:
+            return self.groupings[0].groups
+        else:
+            from pandas import MultiIndex
+            codes = [ping.grouping_vector for ping in self._groupings]
+            index = MultiIndex.from_arrays(codes)
+            return self.axis.groupby(index)
+[/REPLACE]

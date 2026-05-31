@@ -1,0 +1,37 @@
+
+
+Looking at the code, the optimization opportunity is to remove the premature fallback to the slow parent method when `method` is not None, and instead let PyArrow's native `fill_null_forward`/`fill_null_backward` handle it, only falling back to the parent if PyArrow raises an `ArrowNotImplementedError`.
+
+Currently, the code unconditionally calls `super().fillna()` after a performance warning, bypassing the fast PyArrow compute functions even when they would succeed (for most types). The try/except block that uses PyArrow is only reached when PyArrow *would* fail (duration types), so it's effectively dead code for successful cases.
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        if limit is not None:
+            return super().fillna(value=value, method=method, limit=limit)
+
+        if method is not None:
+            fallback_performancewarning()
+            return super().fillna(value=value, method=method, limit=limit)
+
+        if isinstance(value, (np.ndarray, ExtensionArray)):
+[/SEARCH]
+[REPLACE]
+        if limit is not None:
+            return super().fillna(value=value, method=method, limit=limit)
+
+        if method is not None:
+            try:
+                if method == "pad":
+                    return type(self)(pc.fill_null_forward(self._pa_array))
+                elif method == "backfill":
+                    return type(self)(pc.fill_null_backward(self._pa_array))
+            except pa.ArrowNotImplementedError:
+                # ArrowNotImplementedError: Function 'coalesce' has no kernel
+                #   matching input types (duration[ns], duration[ns])
+                # TODO: remove try/except wrapper if/when pyarrow implements
+                #   a kernel for duration types.
+                fallback_performancewarning()
+                return super().fillna(value=value, method=method, limit=limit)
+
+        if isinstance(value, (np.ndarray, ExtensionArray)):
+[/REPLACE]

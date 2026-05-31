@@ -1,0 +1,35 @@
+pandas/core/groupby/groupby.py
+[SEARCH]
+            ncols = 1
+            if vals.ndim == 2:
+                ncols = vals.shape[0]
+                shaped_labels = np.broadcast_to(
+                    labels_for_lexsort, (ncols, len(labels_for_lexsort))
+                )
+            else:
+                shaped_labels = labels_for_lexsort
+
+            out = np.empty((ncols, ngroups, nqs), dtype=np.float64)
+
+            # Get an index of values sorted by values and then labels
+            order = (vals, shaped_labels)
+            sort_arr = np.lexsort(order).astype(np.intp, copy=False)
+[/SEARCH]
+[REPLACE]
+            ncols = 1
+            if vals.ndim == 2:
+                ncols = vals.shape[0]
+                shaped_labels = np.broadcast_to(
+                    labels_for_lexsort, (ncols, len(labels_for_lexsort))
+                )
+            else:
+                shaped_labels = labels_for_lexsort
+
+            out = np.empty((ncols, ngroups, nqs), dtype=np.float64)
+
+            # Get an index of values sorted by labels and then values.
+            # np.lexsort sorts by the last key first, so we pass labels
+            # before values, which is also faster than the reverse order.
+            order = (shaped_labels, vals)
+            sort_arr = np.lexsort(order).astype(np.intp, copy=False)
+[/REPLACE]

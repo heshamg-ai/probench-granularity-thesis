@@ -1,0 +1,12 @@
+xarray/core/alignment.py
+[SEARCH]
+        has_unindexed_dims = any(dim in self.unindexed_dim_sizes for dim in dims)
+        return not (indexes_all_equal(cmp_indexes)) or has_unindexed_dims
+[/SEARCH]
+[REPLACE]
+        has_unindexed_dims = any(
+            (dim in self.unindexed_dim_sizes) and (len(self.unindexed_dim_sizes[dim]) > 1)
+            for dim in dims
+        )
+        return not (indexes_all_equal(cmp_indexes)) or has_unindexed_dims
+[/REPLACE]

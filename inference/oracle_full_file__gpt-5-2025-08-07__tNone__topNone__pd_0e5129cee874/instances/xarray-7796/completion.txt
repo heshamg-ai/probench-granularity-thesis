@@ -1,0 +1,92 @@
+xarray/core/accessor_dt.py
+[SEARCH]
+def _round_through_series_or_index(values, name, freq):
+    """Coerce an array of datetime-like values to a pandas Series or xarray
+    CFTimeIndex and apply requested rounding
+    """
+    from xarray.coding.cftimeindex import CFTimeIndex
+
+    if is_np_datetime_like(values.dtype):
+        values_as_series = pd.Series(values.ravel(), copy=False)
+        method = getattr(values_as_series.dt, name)
+    else:
+        values_as_cftimeindex = CFTimeIndex(values.ravel())
+        method = getattr(values_as_cftimeindex, name)
+
+    field_values = method(freq=freq).values
+
+    return field_values.reshape(values.shape)
+[/SEARCH]
+[REPLACE]
+def _round_through_series_or_index(values, name, freq):
+    """Coerce an array of datetime-like values to a pandas Series or xarray
+    CFTimeIndex and apply requested rounding
+    """
+    from xarray.coding.cftimeindex import CFTimeIndex
+
+    # Fastpath: empty input
+    if values.size == 0:
+        return values.reshape(values.shape)
+
+    if is_np_datetime_like(values.dtype):
+        # Use DatetimeIndex which avoids Series.dt overhead
+        flat = values.ravel()
+        idx = pd.DatetimeIndex(flat)
+        method = getattr(idx, name)
+        field_values = method(freq=freq).values
+        return field_values.reshape(values.shape)
+    else:
+        # Fastpath for CFTimeIndex floor to daily resolution without constructing CFTimeIndex
+        if name == "floor" and freq == "D":
+            flat = values.ravel()
+            # Try replace-based floor using the first non-missing element to detect signature
+            first_non_missing = None
+            for v in flat:
+                if v is None or (isinstance(v, float) and np.isnan(v)):
+                    continue
+                first_non_missing = v
+                break
+            if first_non_missing is None:
+                # all missing-like entries
+                return flat.reshape(values.shape)
+            use_microsecond = False
+            try:
+                _ = first_non_missing.replace(hour=0, minute=0, second=0, microsecond=0)
+                use_microsecond = True
+            except Exception:
+                try:
+                    _ = first_non_missing.replace(hour=0, minute=0, second=0)
+                    use_microsecond = False
+                except Exception:
+                    # Fallback to CFTimeIndex implementation if replace isn't supported
+                    values_as_cftimeindex = CFTimeIndex(flat)
+                    method = getattr(values_as_cftimeindex, name)
+                    field_values = method(freq=freq).values
+                    return field_values.reshape(values.shape)
+            out = np.empty(flat.shape, dtype=object)
+            if use_microsecond:
+                for i, v in enumerate(flat):
+                    try:
+                        out[i] = v.replace(hour=0, minute=0, second=0, microsecond=0)
+                    except Exception:
+                        # If any element fails, fallback to CFTimeIndex for full array
+                        values_as_cftimeindex = CFTimeIndex(flat)
+                        method = getattr(values_as_cftimeindex, name)
+                        field_values = method(freq=freq).values
+                        return field_values.reshape(values.shape)
+            else:
+                for i, v in enumerate(flat):
+                    try:
+                        out[i] = v.replace(hour=0, minute=0, second=0)
+                    except Exception:
+                        values_as_cftimeindex = CFTimeIndex(flat)
+                        method = getattr(values_as_cftimeindex, name)
+                        field_values = method(freq=freq).values
+                        return field_values.reshape(values.shape)
+            return out.reshape(values.shape)
+        # General case: use CFTimeIndex implementation
+        values_as_cftimeindex = CFTimeIndex(values.ravel())
+        method = getattr(values_as_cftimeindex, name)
+        field_values = method(freq=freq).values
+        return field_values.reshape(values.shape)
+[/REPLACE]

@@ -1,0 +1,76 @@
+
+
+Looking at the code, I need to optimize date parsing when using the PyArrow engine. The issue is that when `engine='pyarrow'` is used with `parse_dates`, the PyArrow engine already handles date parsing efficiently, but the Python-side `_process_date_conversion` still gets called, causing redundant work.
+
+Let me identify the optimization point in `_do_date_conversions`:
+
+```python
+def _do_date_conversions(
+    self,
+    names: Sequence[Hashable] | Index,
+    data: Mapping[Hashable, ArrayLike] | DataFrame,
+) -> tuple[Sequence[Hashable] | Index, Mapping[Hashable, ArrayLike] | DataFrame]:
+    # returns data, columns
+
+    if self.parse_dates is not None:
+        data, names = _process_date_conversion(
+            data,
+            self._date_conv,
+            self.parse_dates,
+            self.index_col,
+            self.index_names,
+            names,
+            keep_date_col=self.keep_date_col,
+        )
+
+    return names, data
+```
+
+pandas/io/parsers/base_parser.py
+[SEARCH]
+    def _do_date_conversions(
+        self,
+        names: Sequence[Hashable] | Index,
+        data: Mapping[Hashable, ArrayLike] | DataFrame,
+    ) -> tuple[Sequence[Hashable] | Index, Mapping[Hashable, ArrayLike] | DataFrame]:
+        # returns data, columns
+
+        if self.parse_dates is not None:
+            data, names = _process_date_conversion(
+                data,
+                self._date_conv,
+                self.parse_dates,
+                self.index_col,
+                self.index_names,
+                names,
+                keep_date_col=self.keep_date_col,
+            )
+
+        return names, data
+[/SEARCH]
+[REPLACE]
+    def _do_date_conversions(
+        self,
+        names: Sequence[Hashable] | Index,
+        data: Mapping[Hashable, ArrayLike] | DataFrame,
+    ) -> tuple[Sequence[Hashable] | Index, Mapping[Hashable, ArrayLike] | DataFrame]:
+        # returns data, columns
+
+        if self.parse_dates is not None:
+            # When using PyArrow engine, date parsing is already done by PyArrow
+            # which is significantly faster. Skip Python-side date conversion
+            # to avoid redundant work.
+            if self.dtype_backend == "pyarrow":
+                return names, data
+            data, names = _process_date_conversion(
+                data,
+                self._date_conv,
+                self.parse_dates,
+                self.index_col,
+                self.index_names,
+                names,
+                keep_date_col=self.keep_date_col,
+            )
+
+        return names, data
+[/REPLACE]

@@ -1,0 +1,84 @@
+
+
+Looking at the `MultiIndex.memory_usage` method and `_nbytes`, I can identify two optimization opportunities:
+
+1. The `_nbytes` method adds `self._engine.sizeof(deep=deep)`, but `memory_usage` (inherited from `Index`) already adds the engine hashtable size, causing duplication.
+
+2. Using multiple `sum()` calls can be slightly optimized with a single accumulator loop.
+
+Let me make the optimization:
+
+pandas/core/indexes/multi.py
+[SEARCH]
+    @doc(Index.memory_usage)  # type: ignore[has-type]
+    def memory_usage(self, deep: bool = False) -> int:
+        # we are overwriting our base class to avoid
+        # computing .values here which could materialize
+        # a tuple representation unnecessarily
+        return self._nbytes(deep)
+
+    @cache_readonly
+    def nbytes(self) -> int:
+        """return the number of bytes in the underlying data"""
+        return self._nbytes(False)
+
+    def _nbytes(self, deep: bool = False) -> int:
+        """
+        return the number of bytes in the underlying data
+        deeply introspect the level data if deep=True
+
+        include the engine hashtable
+
+        *this is in internal routine*
+
+        """
+        # for implementations with no useful getsizeof (PyPy)
+        objsize = 24
+
+        level_nbytes = sum(i.memory_usage(deep=deep) for i in self.levels)
+        label_nbytes = sum(i.nbytes for i in self.codes)
+        names_nbytes = sum(getsizeof(i, objsize) for i in self.names)
+        result = level_nbytes + label_nbytes + names_nbytes
+
+        # include our engine hashtable
+        result += self._engine.sizeof(deep=deep)
+        return result
+[/SEARCH]
+[REPLACE]
+    @doc(Index.memory_usage)  # type: ignore[has-type]
+    def memory_usage(self, deep: bool = False) -> int:
+        # we are overwriting our base class to avoid
+        # computing .values here which could materialize
+        # a tuple representation unnecessarily
+
+        # Calculate memory usage from levels, codes, and names
+        result = 0
+        # for implementations with no useful getsizeof (PyPy)
+        objsize = 24
+
+        # Add level memory (already includes engine size via parent Index.memory_usage)
+        for level in self.levels:
+            result += level.memory_usage(deep=deep)
+
+        # Add codes memory
+        for code in self.codes:
+            result += code.nbytes
+
+        # Add names memory
+        for name in self.names:
+            result += getsizeof(name, objsize)
+
+        return result
+
+    @cache_readonly
+    def nbytes(self) -> int:
+        """return the number of bytes in the underlying data"""
+        result = 0
+        for code in self.codes:
+            result += code.nbytes
+        for level in self.levels:
+            result += level.nbytes
+        # for implementations with no useful getsizeof (PyPy)
+        result += 24 * len(self.names)
+        return result
+[/REPLACE]

@@ -1,0 +1,128 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        if isinstance(key, slice):
+            # This case is separated from the conditional above to avoid
+            # pessimization com.is_bool_indexer and ndim checks.
+            result = getitem(key)
+            # Going through simple_new for performance.
+            return type(self)._simple_new(result, name=self._name)
+[/SEARCH]
+[REPLACE]
+        if isinstance(key, slice):
+            # This case is separated from the conditional above to avoid
+            # pessimization com.is_bool_indexer and ndim checks.
+            result = getitem(key)
+            # Going through simple_new for performance.
+            new_index = type(self)._simple_new(result, name=self._name)
+            # Propagate known uniqueness to avoid recomputation on the slice.
+            try:
+                parent_cache = getattr(self, "_cache", None)
+                if isinstance(parent_cache, dict) and parent_cache.get("is_unique", False):
+                    child_cache = getattr(new_index, "_cache", None)
+                    if isinstance(child_cache, dict):
+                        child_cache["is_unique"] = True
+                    else:
+                        setattr(new_index, "_cache", {"is_unique": True})
+                elif getattr(self, "_is_unique", False):
+                    try:
+                        setattr(new_index, "_is_unique", True)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            return new_index
+[/REPLACE]
+
+pandas/core/indexes/base.py
+[SEARCH]
+    def _getitem_slice(self: _IndexT, slobj: slice) -> _IndexT:
+        """
+        Fastpath for __getitem__ when we know we have a slice.
+        """
+        res = self._data[slobj]
+        return type(self)._simple_new(res, name=self._name)
+[/SEARCH]
+[REPLACE]
+    def _getitem_slice(self: _IndexT, slobj: slice) -> _IndexT:
+        """
+        Fastpath for __getitem__ when we know we have a slice.
+        """
+        res = self._data[slobj]
+        new_index = type(self)._simple_new(res, name=self._name)
+        # Propagate known uniqueness to avoid recomputation on the slice.
+        try:
+            parent_cache = getattr(self, "_cache", None)
+            if isinstance(parent_cache, dict) and parent_cache.get("is_unique", False):
+                child_cache = getattr(new_index, "_cache", None)
+                if isinstance(child_cache, dict):
+                    child_cache["is_unique"] = True
+                else:
+                    setattr(new_index, "_cache", {"is_unique": True})
+            elif getattr(self, "_is_unique", False):
+                try:
+                    setattr(new_index, "_is_unique", True)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return new_index
+[/REPLACE]
+
+pandas/core/indexes/range.py
+[SEARCH]
+        if isinstance(key, slice):
+            new_range = self._range[key]
+            return self._simple_new(new_range, name=self._name)
+[/SEARCH]
+[REPLACE]
+        if isinstance(key, slice):
+            new_range = self._range[key]
+            new_index = self._simple_new(new_range, name=self._name)
+            # RangeIndex is always unique; propagate cache hint for consistency.
+            try:
+                child_cache = getattr(new_index, "_cache", None)
+                if isinstance(child_cache, dict):
+                    child_cache["is_unique"] = True
+                else:
+                    setattr(new_index, "_cache", {"is_unique": True})
+            except Exception:
+                pass
+            return new_index
+[/REPLACE]
+
+pandas/core/indexes/interval.py
+[SEARCH]
+    _requires_unique_msg = (
+        "cannot handle overlapping indices; use IntervalIndex.get_indexer_non_unique"
+    )
+[/SEARCH]
+[REPLACE]
+    _requires_unique_msg = (
+        "cannot handle overlapping indices; use IntervalIndex.get_indexer_non_unique"
+    )
+
+    def _getitem_slice(self, slobj: slice):
+        """
+        Fastpath for __getitem__ when we know we have a slice.
+        Propagate known uniqueness information to the sliced index to
+        avoid recomputation.
+        """
+        res = self._data[slobj]
+        new_index = type(self)._simple_new(res, name=self._name)
+        try:
+            parent_cache = getattr(self, "_cache", None)
+            if isinstance(parent_cache, dict) and parent_cache.get("is_unique", False):
+                child_cache = getattr(new_index, "_cache", None)
+                if isinstance(child_cache, dict):
+                    child_cache["is_unique"] = True
+                else:
+                    setattr(new_index, "_cache", {"is_unique": True})
+            elif getattr(self, "_is_unique", False):
+                try:
+                    setattr(new_index, "_is_unique", True)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return new_index
+[/REPLACE]

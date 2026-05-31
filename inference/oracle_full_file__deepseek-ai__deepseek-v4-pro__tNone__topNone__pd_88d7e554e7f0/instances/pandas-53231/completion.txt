@@ -1,0 +1,100 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+    # Some pre-processing for non-ndarray lk / rk
+    lk = extract_array(lk, extract_numpy=True, extract_range=True)
+    rk = extract_array(rk, extract_numpy=True, extract_range=True)
+    # TODO: if either is a RangeIndex, we can likely factorize more efficiently?
+
+    if isinstance(lk.dtype, DatetimeTZDtype) and isinstance(rk.dtype, DatetimeTZDtype):
+        # Extract the ndarray (UTC-localized) values
+        # Note: we dont need the dtypes to match, as these can still be compared
+        lk, rk = cast("DatetimeArray", lk)._ensure_matching_resos(rk)
+        lk = cast("DatetimeArray", lk)._ndarray
+        rk = cast("DatetimeArray", rk)._ndarray
+
+    elif (
+        isinstance(lk.dtype, CategoricalDtype)
+        and isinstance(rk.dtype, CategoricalDtype)
+        and lk.dtype == rk.dtype
+    ):
+        assert isinstance(lk, Categorical)
+        assert isinstance(rk, Categorical)
+        # Cast rk to encoding so we can compare codes with lk
+
+        rk = lk._encode_with_my_categories(rk)
+
+        lk = ensure_int64(lk.codes)
+        rk = ensure_int64(rk.codes)
+
+    elif isinstance(lk, ExtensionArray) and lk.dtype == rk.dtype:
+        if not isinstance(lk, BaseMaskedArray) and not (
+            # exclude arrow dtypes that would get cast to object
+            isinstance(lk.dtype, ArrowDtype)
+            and is_numeric_dtype(lk.dtype.numpy_dtype)
+        ):
+            lk, _ = lk._values_for_factorize()
+
+            # error: Item "ndarray" of "Union[Any, ndarray]" has no attribute
+            # "_values_for_factorize"
+            rk, _ = rk._values_for_factorize()  # type: ignore[union-attr]
+[/SEARCH]
+[REPLACE]
+    # Some pre-processing for non-ndarray lk / rk
+    lk = extract_array(lk, extract_numpy=True, extract_range=True)
+    rk = extract_array(rk, extract_numpy=True, extract_range=True)
+    # TODO: if either is a RangeIndex, we can likely factorize more efficiently?
+
+    if isinstance(lk.dtype, DatetimeTZDtype) and isinstance(rk.dtype, DatetimeTZDtype):
+        # Extract the ndarray (UTC-localized) values
+        # Note: we dont need the dtypes to match, as these can still be compared
+        lk, rk = cast("DatetimeArray", lk)._ensure_matching_resos(rk)
+        lk = cast("DatetimeArray", lk)._ndarray
+        rk = cast("DatetimeArray", rk)._ndarray
+
+    elif (
+        isinstance(lk.dtype, CategoricalDtype)
+        and isinstance(rk.dtype, CategoricalDtype)
+        and lk.dtype == rk.dtype
+    ):
+        assert isinstance(lk, Categorical)
+        assert isinstance(rk, Categorical)
+        # Cast rk to encoding so we can compare codes with lk
+
+        rk = lk._encode_with_my_categories(rk)
+
+        lk = ensure_int64(lk.codes)
+        rk = ensure_int64(rk.codes)
+
+    elif (
+        lk.dtype.kind == "M"
+        and rk.dtype.kind == "M"
+        and not isinstance(lk.dtype, DatetimeTZDtype)
+        and not isinstance(rk.dtype, DatetimeTZDtype)
+    ):
+        # Optimize for non-timezone-aware datetime64 merges:
+        # Ensure matching resolution before factorizing to avoid
+        # expensive object-dtype casts in find_common_type.
+        # Use _ensure_matching_resos logic for i8-backed datetime arrays.
+        if lk.dtype != rk.dtype:
+            from pandas.core.arrays import DatetimeArray
+
+            if not isinstance(lk, DatetimeArray):
+                lk = DatetimeArray._from_sequence(lk)
+            if not isinstance(rk, DatetimeArray):
+                rk = DatetimeArray._from_sequence(rk)
+            lk, rk = lk._ensure_matching_resos(rk)
+            lk = lk._ndarray
+            rk = rk._ndarray
+
+    elif isinstance(lk, ExtensionArray) and lk.dtype == rk.dtype:
+        if not isinstance(lk, BaseMaskedArray) and not (
+            # exclude arrow dtypes that would get cast to object
+            isinstance(lk.dtype, ArrowDtype)
+            and is_numeric_dtype(lk.dtype.numpy_dtype)
+        ):
+            lk, _ = lk._values_for_factorize()
+
+            # error: Item "ndarray" of "Union[Any, ndarray]" has no attribute
+            # "_values_for_factorize"
+            rk, _ = rk._values_for_factorize()  # type: ignore[union-attr]
+[/REPLACE]

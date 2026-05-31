@@ -1,0 +1,64 @@
+pandas/core/generic.py
+[SEARCH]
+    def _find_valid_index(self, *, how: str) -> Hashable | None:
+        """
+        Retrieves the index of the first valid value.
+
+        Parameters
+        ----------
+        how : {'first', 'last'}
+            Use this parameter to change between the first or last valid index.
+
+        Returns
+        -------
+        idx_first_valid : type of index
+        """
+        idxpos = find_valid_index(self._values, how=how, is_valid=~isna(self._values))
+        if idxpos is None:
+            return None
+        return self.index[idxpos]
+[/SEARCH]
+[REPLACE]
+    def _find_valid_index(self, *, how: str) -> Hashable | None:
+        """
+        Retrieves the index of the first valid value.
+
+        Parameters
+        ----------
+        how : {'first', 'last'}
+            Use this parameter to change between the first or last valid index.
+
+        Returns
+        -------
+        idx_first_valid : type of index
+        """
+        # Fast-path for 2D objects (e.g. DataFrame) that avoids constructing
+        # an object-dtype ndarray via self._values, which is expensive for
+        # ExtensionArray-backed data.
+        if self.ndim == 2:
+            if len(self.index) == 0:
+                return None
+
+            # A row is considered valid if any element in the row is non-NA.
+            # Use block-manager aware operations to build the boolean mask.
+            row_has_valid = self.notna().any(axis=1)
+
+            # Convert to a plain numpy bool array (treat any missing as False).
+            arr = row_has_valid.to_numpy(dtype=bool, na_value=False)
+
+            if not arr.any():
+                return None
+
+            if how == "first":
+                pos = int(arr.argmax())
+            else:
+                pos = int(len(arr) - 1 - arr[::-1].argmax())
+
+            return self.index[pos]
+
+        # 1D fallback
+        idxpos = find_valid_index(self._values, how=how, is_valid=~isna(self._values))
+        if idxpos is None:
+            return None
+        return self.index[idxpos]
+[/REPLACE]

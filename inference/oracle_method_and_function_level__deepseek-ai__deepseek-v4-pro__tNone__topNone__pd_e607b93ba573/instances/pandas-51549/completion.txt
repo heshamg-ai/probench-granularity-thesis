@@ -1,0 +1,31 @@
+pandas/core/missing.py
+[SEARCH]
+    if how == "first":
+        idxpos = is_valid[::].argmax()
+
+    elif how == "last":
+        idxpos = len(values) - 1 - is_valid[::-1].argmax()
+
+    chk_notna = is_valid[idxpos]
+
+    if not chk_notna:
+        return None
+    # Incompatible return value type (got "signedinteger[Any]",
+    # expected "Optional[int]")
+    return idxpos  # type: ignore[return-value]
+[/SEARCH]
+[REPLACE]
+    if how == "first":
+        if is_valid.any():
+            idxpos = is_valid.argmax()
+        else:
+            return None
+
+    elif how == "last":
+        if is_valid.any():
+            idxpos = len(values) - 1 - is_valid[::-1].argmax()
+        else:
+            return None
+
+    return idxpos  # type: ignore[return-value]
+[/REPLACE]

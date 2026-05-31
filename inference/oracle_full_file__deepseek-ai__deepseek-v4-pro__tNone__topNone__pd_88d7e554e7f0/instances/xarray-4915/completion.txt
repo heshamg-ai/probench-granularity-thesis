@@ -1,0 +1,236 @@
+xarray/core/rolling.py
+[SEARCH]
+        if (
+            bottleneck_move_func is not None
+            and not is_duck_dask_array(self.obj.data)
+            and len(self.dim) == 1
+        ):
+            # TODO: renable bottleneck with dask after the issues
+            # underlying https://github.com/pydata/xarray/issues/2940 are
+            # fixed.
+            return self._bottleneck_reduce(
+                bottleneck_move_func, keep_attrs=keep_attrs, **kwargs
+            )
+        else:
+            return self.reduce(array_agg_func, keep_attrs=keep_attrs, **kwargs)
+[/SEARCH]
+[REPLACE]
+        if (
+            bottleneck_move_func is not None
+            and not is_duck_dask_array(self.obj.data)
+            and len(self.dim) == 1
+        ):
+            # TODO: renable bottleneck with dask after the issues
+            # underlying https://github.com/pydata/xarray/issues/2940 are
+            # fixed.
+            return self._bottleneck_reduce(
+                bottleneck_move_func, keep_attrs=keep_attrs, **kwargs
+            )
+        else:
+            if (
+                array_agg_func is duck_array_ops.mean
+                and not is_duck_dask_array(self.obj.data)
+                and len(self.dim) == 1
+            ):
+                return self._mean_via_sum_count(keep_attrs=keep_attrs, **kwargs)
+            return self.reduce(array_agg_func, keep_attrs=keep_attrs, **kwargs)
+[/REPLACE]
+
+xarray/core/rolling.py
+[SEARCH]
+    def _bottleneck_reduce(self, func, keep_attrs, **kwargs):
+        from .dataarray import DataArray
+
+        # bottleneck doesn't allow min_count to be 0, although it should
+        # work the same as if min_count = 1
+        # Note bottleneck only works with 1d-rolling.
+        if self.min_periods is not None and self.min_periods == 0:
+            min_count = 1
+        else:
+            min_count = self.min_periods
+
+        axis = self.obj.get_axis_num(self.dim[0])
+
+        padded = self.obj.variable
+        if self.center[0]:
+            if is_duck_dask_array(padded.data):
+                # workaround to make the padded chunk size larger than
+                # self.window - 1
+                shift = -(self.window[0] + 1) // 2
+                offset = (self.window[0] - 1) // 2
+                valid = (slice(None),) * axis + (
+                    slice(offset, offset + self.obj.shape[axis]),
+                )
+            else:
+                shift = (-self.window[0] // 2) + 1
+                valid = (slice(None),) * axis + (slice(-shift, None),)
+            padded = padded.pad({self.dim[0]: (0, -shift)}, mode="constant")
+
+        if is_duck_dask_array(padded.data):
+            raise AssertionError("should not be reachable")
+            values = dask_rolling_wrapper(
+                func, padded.data, window=self.window[0], min_count=min_count, axis=axis
+            )
+        else:
+            values = func(
+                padded.data, window=self.window[0], min_count=min_count, axis=axis
+            )
+
+        if self.center[0]:
+            values = values[valid]
+
+        attrs = self.obj.attrs if keep_attrs else {}
+
+        return DataArray(values, self.obj.coords, attrs=attrs, name=self.obj.name)
+[/SEARCH]
+[REPLACE]
+    def _bottleneck_reduce(self, func, keep_attrs, **kwargs):
+        from .dataarray import DataArray
+
+        # bottleneck doesn't allow min_count to be 0, although it should
+        # work the same as if min_count = 1
+        # Note bottleneck only works with 1d-rolling.
+        if self.min_periods is not None and self.min_periods == 0:
+            min_count = 1
+        else:
+            min_count = self.min_periods
+
+        axis = self.obj.get_axis_num(self.dim[0])
+
+        padded = self.obj.variable
+        if self.center[0]:
+            if is_duck_dask_array(padded.data):
+                # workaround to make the padded chunk size larger than
+                # self.window - 1
+                shift = -(self.window[0] + 1) // 2
+                offset = (self.window[0] - 1) // 2
+                valid = (slice(None),) * axis + (
+                    slice(offset, offset + self.obj.shape[axis]),
+                )
+            else:
+                shift = (-self.window[0] // 2) + 1
+                valid = (slice(None),) * axis + (slice(-shift, None),)
+            padded = padded.pad({self.dim[0]: (0, -shift)}, mode="constant")
+
+        if is_duck_dask_array(padded.data):
+            raise AssertionError("should not be reachable")
+            values = dask_rolling_wrapper(
+                func, padded.data, window=self.window[0], min_count=min_count, axis=axis
+            )
+        else:
+            values = func(
+                padded.data, window=self.window[0], min_count=min_count, axis=axis
+            )
+
+        if self.center[0]:
+            values = values[valid]
+
+        attrs = self.obj.attrs if keep_attrs else {}
+
+        return DataArray(values, self.obj.coords, attrs=attrs, name=self.obj.name)
+
+    def _mean_via_sum_count(self, keep_attrs=None, **kwargs):
+        """Compute rolling mean as rolling sum / rolling count.
+
+        This is a memory- and speed-efficient alternative to the generic
+        bottleneck move_mean + reduce path: it avoids materializing the full
+        strided window array and uses bottleneck's move_sum + move_count
+        under the hood, then divides. Semantics are identical to the
+        existing mean implementation.
+        """
+        from .dataarray import DataArray
+
+        if self.min_periods is not None and self.min_periods == 0:
+            min_count = 1
+        else:
+            min_count = self.min_periods
+
+        window = self.window[0]
+        dim = self.dim[0]
+        axis = self.obj.get_axis_num(dim)
+
+        # ---- center padding (same logic as _bottleneck_reduce) ----
+        padded = self.obj.variable
+        valid: Any = None  # noqa: F841
+        if self.center[0]:
+            if is_duck_dask_array(padded.data):
+                shift = -(window + 1) // 2
+                offset = (window - 1) // 2
+                valid = (slice(None),) * axis + (
+                    slice(offset, offset + self.obj.shape[axis]),
+                )
+            else:
+                shift = (-window // 2) + 1
+                valid = (slice(None),) * axis + (slice(-shift, None),)
+            padded = padded.pad({dim: (0, -shift)}, mode="constant")
+
+        data = padded.data
+
+        # bottleneck.move_sum / move_mean are used when available.
+        # If missing (bottleneck = None), fall back to the generic path.
+        if bottleneck is not None:
+            move_sum = getattr(bottleneck, "move_sum", None)
+            move_count_impl = getattr(
+                bottleneck, "move_sum", None
+            )  # we compute non-nan count manually below
+        else:
+            move_sum = None
+            move_count_impl = None
+
+        if move_sum is not None:
+            # Sum over the rolling window.
+            rolling_sum = move_sum(data, window=window, min_count=min_count, axis=axis)
+
+            # Count of non-NaN entries in the rolling window.
+            # We compute it efficiently by summing a mask of finite (non-NaN) values.
+            finite_mask = np.isfinite(data)
+            if np.issubdtype(data.dtype, np.floating):
+                finite_mask = ~np.isnan(data)
+            elif np.issubdtype(data.dtype, np.complexfloating):
+                raise NotImplementedError(
+                    "rolling mean via sum/count is not implemented for complex dtypes"
+                )
+            elif np.issubdtype(data.dtype, np.datetime64) or np.issubdtype(
+                data.dtype, np.timedelta64
+            ):
+                finite_mask = ~np.isnat(data)
+            else:
+                # For non-float types (e.g., integer, bool), all values are
+                # considered "non-null" for counting purposes.
+                finite_mask = np.ones(data.shape, dtype=np.int64)
+
+            if move_sum is not None:
+                rolling_count = move_sum(
+                    finite_mask.astype(np.float64),
+                    window=window,
+                    min_count=1,
+                    axis=axis,
+                )
+            else:
+                # Fallback: generic reduce path for count
+                rolling_count = None
+
+            # Compute rolling mean as sum / count.
+            # To exactly match existing behavior, we must respect min_periods.
+            # bottleneck.move_sum already respects min_count, so rolling_sum will
+            # have NaNs where the effective count < min_count. We still need to
+            # produce a valid mean only where count >= min_periods.
+            with np.errstate(invalid="ignore", divide="ignore"):
+                values = rolling_sum / rolling_count
+
+            # Mask out windows with insufficient count.
+            if min_count is not None and min_count > 1:
+                values = np.where(rolling_count >= min_count, values, np.nan)
+        else:
+            # Fallback: use the generic _bottleneck_reduce path.
+            return self._bottleneck_reduce(
+                bottleneck.move_mean, keep_attrs=keep_attrs, **kwargs
+            )
+
+        if self.center[0]:
+            values = values[valid]
+
+        attrs = self.obj.attrs if keep_attrs else {}
+
+        return DataArray(values, self.obj.coords, attrs=attrs, name=self.obj.name)
+[/REPLACE]

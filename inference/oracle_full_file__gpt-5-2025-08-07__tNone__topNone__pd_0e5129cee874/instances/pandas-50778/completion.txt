@@ -1,0 +1,104 @@
+pandas/core/internals/blocks.py
+[SEARCH]
+        pairs = [
+            (x, y) for x, y in zip(src_list, dest_list) if self._can_hold_element(x)
+        ]
+        if not len(pairs):
+            # shortcut, nothing to replace
+            return [self] if inplace else [self.copy()]
+[/SEARCH]
+[REPLACE]
+        pairs = [
+            (x, y) for x, y in zip(src_list, dest_list) if self._can_hold_element(x)
+        ]
+        if not len(pairs):
+            # shortcut, nothing to replace
+            return [self] if inplace else [self.copy()]
+
+        # Fast path for large dict-like replacements on 1D numpy-backed blocks without regex
+        if (
+            not regex
+            and (self.ndim == 1 or self.shape[0] == 1)
+            and not isinstance(values, ExtensionArray)
+            and len(pairs) > 1
+        ):
+            # Separate source and destination lists
+            src_vals = [s for s, _ in pairs]
+            dest_vals = [d for _, d in pairs]
+
+            # Identify NA-like keys and keep last destination for NA (last-wins)
+            na_key_indices = [i for i, s in enumerate(src_vals) if isna(s)]
+            has_na_key = len(na_key_indices) > 0
+            dest_na_last = dest_vals[na_key_indices[-1]] if has_na_key else None
+
+            # Prepare non-NA items in reverse order for last-wins semantics
+            non_na_items = [
+                (s, d) for i, (s, d) in enumerate(zip(src_vals, dest_vals)) if i not in na_key_indices
+            ]
+            if non_na_items:
+                keys_non_na_rev = [s for s, _ in non_na_items[::-1]]
+                dest_non_na_rev = [d for _, d in non_na_items[::-1]]
+                arr1d = values[0] if values.ndim == 2 else values
+                # Build key array as object to preserve exact equality semantics
+                key_arr = np.asarray(keys_non_na_rev, dtype=object)
+                # Compute indexer mapping positions to key indices (-1 for no match)
+                indexer = algos.match(arr1d, key_arr)
+                matched = indexer >= 0
+            else:
+                indexer = None
+                arr1d = values[0] if values.ndim == 2 else values
+                matched = np.zeros(arr1d.shape, dtype=bool)
+
+            # Mask for NA matches
+            mask_na = isna(arr1d) if has_na_key else None
+
+            # If no matches at all, follow existing semantics for no-op
+            any_match = matched.any() or (has_na_key and mask_na is not None and mask_na.any())
+            if not any_match:
+                if using_cow and inplace:
+                    return [self.copy()]
+                return [self] if inplace else [self.copy()]
+
+            # Determine set of destination values actually used (for dtype coercion)
+            used_dest_objs = []
+            if matched.any():
+                used_idx = np.unique(indexer[matched])
+                used_dest_objs.extend(dest_non_na_rev[i] for i in used_idx.tolist())
+            if has_na_key and mask_na is not None and mask_na.any():
+                used_dest_objs.append(dest_na_last)
+
+            # Choose appropriate block to mutate respecting CoW/inplace semantics
+            if using_cow and inplace:
+                nb = self.copy()
+            else:
+                nb = self if inplace else self.copy()
+
+            # Coerce dtype if needed to hold all used destination values
+            new_dtype = self.dtype
+            if used_dest_objs:
+                try:
+                    new_dtype = find_result_type(self.values, np.array(used_dest_objs, dtype=object))
+                except Exception:
+                    new_dtype = np.dtype("object")
+            if new_dtype != self.dtype:
+                nb = nb.astype(new_dtype, copy=False)
+
+            out_vals = nb.values
+            out_arr1d = out_vals[0] if out_vals.ndim == 2 else out_vals
+
+            # Apply non-NA replacements in a single vectorized pass
+            if matched.any():
+                rep_arr = np.empty(len(dest_non_na_rev), dtype=object)
+                rep_arr[:] = dest_non_na_rev
+                out_arr1d[matched] = rep_arr[indexer[matched]]
+
+            # Apply NA replacement (last-wins)
+            if has_na_key and mask_na is not None and mask_na.any():
+                out_arr1d[mask_na] = dest_na_last
+
+            # Final convert step to mirror original behavior for object dtype
+            blocks_out = [nb]
+            if nb.is_object and not all(x is None for x in dest_vals):
+                blocks_out = extend_blocks([b.convert(copy=True) for b in blocks_out])
+            return blocks_out
+[/REPLACE]

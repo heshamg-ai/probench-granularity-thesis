@@ -1,0 +1,120 @@
+ pandas/core/methods/selectn.py
+[SEARCH]
+        # slow method
+        if n >= len(self.obj):
+            ascending = method == "nsmallest"
+            return self.obj.sort_values(ascending=ascending).head(n)
+
+        # fast method
+        new_dtype = dropped.dtype
+[/SEARCH]
+[REPLACE]
+        # slow method
+        if n >= len(self.obj):
+            ascending = method == "nsmallest"
+            return self.obj.sort_values(ascending=ascending).head(n)
+
+        # fast method
+        new_dtype = dropped.dtype
+
+        # Check for duplicate index - if present, use alt fast path
+        # to avoid alignment issues in concat
+        if not dropped.index.is_unique:
+            return self._compute_with_duplicates(method, n, dropped, nan_index)
+[/REPLACE]
+
+pandas/core/methods/selectn.py
+[SEARCH]
+        if self.keep == "last":
+            # reverse indices
+            inds = narr - 1 - inds
+
+        return concat([dropped.iloc[inds], nan_index]).iloc[:findex]
+[/SEARCH]
+[REPLACE]
+        if self.keep == "last":
+            # reverse indices
+            inds = narr - 1 - inds
+
+        return concat([dropped.iloc[inds], nan_index]).iloc[:findex]
+
+    def _compute_with_duplicates(
+        self, method: str, n: int, dropped: Series, nan_index: Series
+    ) -> Series:
+        """
+        Alternative fast path when the index contains duplicates.
+
+        Uses positional indexing throughout to avoid expensive index
+        alignment during concat/iloc operations with duplicate indices.
+        """
+        from pandas import RangeIndex
+
+        nbase = n
+        narr = len(dropped)
+
+        # Work with positional integer index to avoid duplicate alignment issues
+        dropped_pos = dropped.copy()
+        dropped_pos.index = RangeIndex(narr)
+
+        new_dtype = dropped_pos.dtype
+        arr = dropped_pos._values
+        if needs_i8_conversion(arr.dtype):
+            arr = arr.view("i8")
+        elif isinstance(arr.dtype, BaseMaskedDtype):
+            arr = arr._data
+        else:
+            arr = np.asarray(arr)
+        if arr.dtype.kind == "b":
+            arr = arr.view(np.uint8)
+
+        if method == "nlargest":
+            arr = -arr
+            if is_integer_dtype(new_dtype):
+                arr -= 1
+            elif is_bool_dtype(new_dtype):
+                arr = 1 - (-arr)
+
+        if self.keep == "last":
+            arr = arr[::-1]
+
+        n = min(n, narr)
+
+        if len(arr) > 0:
+            kth_val = libalgos.kth_smallest(arr.copy(order="C"), n - 1)
+        else:
+            kth_val = np.nan
+
+        (ns,) = np.nonzero(arr <= kth_val)
+        inds = ns[arr[ns].argsort(kind="mergesort")]
+
+        if self.keep != "all":
+            inds = inds[:n]
+            findex = nbase
+        else:
+            if len(inds) < nbase <= len(nan_index) + len(inds):
+                findex = len(nan_index) + len(inds)
+            else:
+                findex = len(inds)
+
+        if self.keep == "last":
+            inds = narr - 1 - inds
+
+        # Reconstruct result using positional indexing only, then map back
+        result_values = dropped_pos.iloc[inds]._values
+        result_index = dropped.index[inds]
+
+        # Build final result directly without concat alignment overhead
+        if len(nan_index) > 0 and findex > len(result_values):
+            # Need to include some NaN values
+            from pandas.core.reshape.concat import concat
+
+            result = dropped.iloc[inds]
+            result = concat([result, nan_index])
+            return result.iloc[:findex]
+        else:
+            # No NaN values needed, or exact fit
+            from pandas import Series
+
+            result = Series(result_values, index=result_index, dtype=dropped.dtype)
+            return result.iloc[:findex]
+[/REPLACE]

@@ -1,0 +1,17 @@
+
+
+Looking at the code, I can identify a key optimization: when `stride=1` (the default), the `isel` call with `slice(None, None, 1)` is redundant since it selects every element - equivalent to the input. This unnecessary operation can be skipped.
+
+xarray/core/rolling.py
+[SEARCH]
+        return Dataset(dataset, coords=self.obj.coords, attrs=attrs).isel(
+            {d: slice(None, None, s) for d, s in zip(self.dim, strides)}
+        )
+[/SEARCH]
+[REPLACE]
+        result = Dataset(dataset, coords=self.obj.coords, attrs=attrs)
+        # Optimize: skip isel when stride is 1, since it would be a no-op
+        if all(s == 1 for s in strides):
+            return result
+        return result.isel({d: slice(None, None, s) for d, s in zip(self.dim, strides)})
+[/REPLACE]

@@ -1,0 +1,20 @@
+pandas/core/indexing.py
+[SEARCH]
+    def _get_list_like_bool_indexer(self, key, axis: int):
+        # GH#50553 used in _iLocIndexer
+        keyarr = check_array_indexer(self.obj, key, axis)
+        return keyarr
+[/SEARCH]
+[REPLACE]
+    def _get_list_like_bool_indexer(self, key, axis: int):
+        # GH#50553 used in _iLocIndexer
+        # When key is already a boolean array, avoid the full validation
+        # and conversion path inside check_array_indexer.
+        if isinstance(key, np.ndarray) and key.dtype == np.bool_:
+            return key
+        if hasattr(key, "dtype") and key.dtype == np.bool_:
+            # e.g. an Index or Series of bools
+            return np.asarray(key)
+        keyarr = check_array_indexer(self.obj, key, axis)
+        return keyarr
+[/REPLACE]

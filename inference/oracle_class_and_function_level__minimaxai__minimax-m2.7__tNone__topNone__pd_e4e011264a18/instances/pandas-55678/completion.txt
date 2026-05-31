@@ -1,0 +1,189 @@
+
+
+Looking at the code, I need to optimize the `merge_asof` function's handling of `by` columns with different dtypes. The key performance bottlenecks are in `_get_join_indexers`:
+
+1. Single `by` column: unnecessary conversions when both sides have same dtype
+2. Multiple `by` columns: slow iterative `_factorize_keys` approach
+
+Let me create the optimizations:
+
+pandas/core/reshape/merge.py
+[SEARCH]
+            # get tuple representation of values if more than one
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+                if needs_i8_conversion(lbv.dtype):
+                    lbv = lbv.view("i8")
+                if needs_i8_conversion(rbv.dtype):
+                    rbv = rbv.view("i8")
+            else:
+                # We get here with non-ndarrays in test_merge_by_col_tz_aware
+                #  and test_merge_groupby_multiple_column_with_categorical_column
+                mapped = [
+                    _factorize_keys(
+                        left_by_values[n],
+                        right_by_values[n],
+                        sort=False,
+                        how="left",
+                    )
+                    for n in range(len(left_by_values))
+                ]
+                arrs = [np.concatenate(m[:2]) for m in mapped]
+                shape = tuple(m[2] for m in mapped)
+                group_index = get_group_index(
+                    arrs, shape=shape, sort=False, xnull=False
+                )
+                left_len = len(left_by_values[0])
+                lbv = group_index[:left_len]
+                rbv = group_index[left_len:]
+[/SEARCH]
+[REPLACE]
+            # get tuple representation of values if more than one
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # Fast path: if both have same dtype and not datetime-like,
+                # avoid unnecessary conversions and use vectorized hashing
+                lbv_arr = np.asarray(lbv)
+                rbv_arr = np.asarray(rbv)
+                same_dtype = lbv_arr.dtype == rbv_arr.dtype
+
+                if same_dtype and not needs_i8_conversion(lbv_arr.dtype):
+                    # Both same non-datetime dtype - use vectorized hash approach
+                    # This avoids factorization overhead for common cases
+                    lbv_int = lbv_arr.view(np.uint64) if np.issubdtype(lbv_arr.dtype, np.signedinteger) else lbv_arr.astype(np.uint64, copy=False)
+                    rbv_int = rbv_arr.view(np.uint64) if np.issubdtype(rbv_arr.dtype, np.signedinteger) else rbv_arr.astype(np.uint64, copy=False)
+
+                    # Compute combined hash with prime multiplier to reduce collisions
+                    lbv_hash = lbv_int * np.uint64(0x9e3779b97f4a7c15)
+                    rbv_hash = rbv_int * np.uint64(0x9e3779b97f4a7c15)
+
+                    # Build mapping using sorted unique values
+                    all_vals = np.concatenate([lbv_hash, rbv_hash])
+                    unique_vals, inv = np.unique(all_vals, return_inverse=True)
+                    n_left = len(lbv_hash)
+                    left_group = inv[:n_left]
+                    right_group = inv[n_left:]
+                    # Renumber right side to match left side indices
+                    sorter = np.argsort(unique_vals)
+                    right_group = sorter[np.searchsorted(unique_vals, rbv_hash, sorter=sorter)]
+                    lbv = left_group
+                    rbv = right_group
+                elif same_dtype and needs_i8_conversion(lbv_arr.dtype):
+                    # Both same datetime-like dtype
+                    lbv = lbv_arr.view("i8")
+                    rbv = rbv_arr.view("i8")
+                else:
+                    # Fallback for mismatched dtypes or mixed types
+                    lbv = lbv_arr
+                    rbv = rbv_arr
+                    if needs_i8_conversion(lbv.dtype):
+                        lbv = lbv.view("i8")
+                    if needs_i8_conversion(rbv.dtype):
+                        rbv = rbv.view("i8")
+                    # Factorize to handle dtype mismatches
+                    if lbv.dtype != rbv.dtype:
+                        mapped_factorize = _factorize_keys(lbv, rbv, sort=False, how="left")
+                        all_vals = np.concatenate([mapped_factorize[0], mapped_factorize[1]])
+                        unique_vals, inv = np.unique(all_vals, return_inverse=True)
+                        n_left = len(mapped_factorize[0])
+                        left_group = inv[:n_left]
+                        right_group = inv[n_left:]
+                        sorter = np.argsort(unique_vals)
+                        right_group = sorter[np.searchsorted(unique_vals, mapped_factorize[1], sorter=sorter)]
+                        lbv = left_group
+                        rbv = right_group
+            else:
+                # We get here with non-ndarrays in test_merge_by_col_tz_aware
+                #  and test_merge_groupby_multiple_column_with_categorical_column
+                # Optimized path: convert all columns first, then vectorize where possible
+                n_cols = len(left_by_values)
+
+                # Pre-convert all columns to i8 if datetime-like
+                left_converted = []
+                right_converted = []
+                left_dtypes = []
+                all_same_dtype = True
+                prev_dtype = None
+
+                for i in range(n_cols):
+                    lv = np.asarray(left_by_values[i])
+                    rv = np.asarray(right_by_values[i])
+                    left_dtypes.append(lv.dtype)
+                    if prev_dtype is not None and lv.dtype != prev_dtype:
+                        all_same_dtype = False
+                    prev_dtype = lv.dtype
+
+                    if needs_i8_conversion(lv.dtype):
+                        lv = lv.view("i8")
+                    if needs_i8_conversion(rv.dtype):
+                        rv = rv.view("i8")
+                    left_converted.append(lv)
+                    right_converted.append(rv)
+
+                # Check if we can use vectorized hash approach (all same integer dtype)
+                can_vectorize = all_same_dtype and len(left_converted) > 0
+                if can_vectorize:
+                    first_dtype = left_converted[0].dtype
+                    can_vectorize = (
+                        np.issubdtype(first_dtype, np.integer) or
+                        (hasattr(first_dtype, 'kind') and first_dtype.kind in 'iu')
+                    )
+
+                if can_vectorize:
+                    # Vectorized hash-based grouping for multiple columns
+                    left_len = len(left_by_values[0])
+
+                    # Stack columns and compute combined hash
+                    left_stack = np.column_stack(left_converted)
+                    right_stack = np.column_stack(right_converted)
+
+                    # Use prime multiplier to combine multiple column hashes
+                    combined_left_hash = np.zeros(len(left_stack), dtype=np.uint64)
+                    combined_right_hash = np.zeros(len(right_stack), dtype=np.uint64)
+
+                    for i in range(n_cols):
+                        col_hash = left_converted[i].astype(np.uint64, copy=False)
+                        combined_left_hash ^= col_hash * np.uint64(0x9e3779b97f4a7c15 + i * 31)
+                        col_hash = right_converted[i].astype(np.uint64, copy=False)
+                        combined_right_hash ^= col_hash * np.uint64(0x9e3779b97f4a7c15 + i * 31)
+
+                    # Build unique mapping
+                    all_hashes = np.concatenate([combined_left_hash, combined_right_hash])
+                    unique_hashes, inv = np.unique(all_hashes, return_inverse=True)
+                    n_left = len(combined_left_hash)
+                    left_group = inv[:n_left]
+                    right_group = inv[n_left:]
+
+                    # Map right side to left side indices
+                    sorter = np.argsort(unique_hashes)
+                    right_group = sorter[np.searchsorted(unique_hashes, combined_right_hash, sorter=sorter)]
+
+                    lbv = left_group
+                    rbv = right_group
+                else:
+                    # Fallback to original factorization approach for mixed/complex dtypes
+                    mapped = [
+                        _factorize_keys(
+                            left_by_values[n],
+                            right_by_values[n],
+                            sort=False,
+                            how="left",
+                        )
+                        for n in range(n_cols)
+                    ]
+                    arrs = [np.concatenate(m[:2]) for m in mapped]
+                    shape = tuple(m[2] for m in mapped)
+                    group_index = get_group_index(
+                        arrs, shape=shape, sort=False, xnull=False
+                    )
+                    left_len = len(left_by_values[0])
+                    lbv = group_index[:left_len]
+                    rbv = group_index[left_len:]
+[/REPLACE]

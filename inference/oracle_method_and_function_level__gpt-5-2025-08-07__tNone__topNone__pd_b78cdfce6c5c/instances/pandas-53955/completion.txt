@@ -1,0 +1,49 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+    _duplicated = duplicated  # type: ignore[misc]
+[/SEARCH]
+[REPLACE]
+    _duplicated = duplicated  # type: ignore[misc]
+
+    def intersection(self, other, sort=False):
+        # Fast path for MultiIndex vs MultiIndex with identical levels and sort is False
+        if sort is False and isinstance(other, MultiIndex):
+            if self.nlevels == other.nlevels and all(l1.equals(l2) for l1, l2 in zip(self.levels, other.levels)):
+                import numpy as np
+                if len(self) == 0 or len(other) == 0:
+                    # defer to base for correct empty construction
+                    return super().intersection(other, sort=sort)
+                # Build int64 codes matrix views to avoid constructing tuples
+                try:
+                    self_codes = np.vstack([np.asarray(c, dtype=np.int64, order="C") for c in self.codes]).T
+                    other_codes = np.vstack([np.asarray(c, dtype=np.int64, order="C") for c in other.codes]).T
+                except ValueError:
+                    # Fallback if codes cannot be stacked (shouldn't happen), preserve semantics
+                    return super().intersection(other, sort=sort)
+                if self_codes.shape[1] == 0:
+                    # degenerate case with no levels, delegate
+                    return super().intersection(other, sort=sort)
+                view_dtype = np.dtype((np.void, self_codes.dtype.itemsize * self_codes.shape[1]))
+                try:
+                    self_view = self_codes.view(view_dtype).ravel()
+                    other_view = other_codes.view(view_dtype).ravel()
+                except Exception:
+                    # Fallback if view trick fails
+                    return super().intersection(other, sort=sort)
+                # membership of self rows in other rows; assumes no need to sort (sort is False)
+                mask = np.in1d(self_view, other_view, assume_unique=False)
+                if not mask.any():
+                    # return empty with correct metadata: use base
+                    return super().intersection(other, sort=sort)
+                idx = np.flatnonzero(mask)
+                # Deduplicate while preserving order of appearance in self
+                seen = set()
+                keep = []
+                for i in idx:
+                    v = self_view[i]
+                    if v not in seen:
+                        seen.add(v)
+                        keep.append(i)
+                return self.take(np.asarray(keep, dtype=np.intp))
+        return super().intersection(other, sort=sort)
+[/REPLACE]

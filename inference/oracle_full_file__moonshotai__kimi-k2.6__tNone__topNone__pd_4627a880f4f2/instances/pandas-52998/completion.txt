@@ -1,0 +1,13 @@
+ pandas/core/arrays/numeric.py
+[SEARCH]
+    @cache_readonly
+    def dtype(self) -> NumericDtype:
+        mapping = self._dtype_cls._str_to_dtype_mapping()
+        return mapping[str(self._data.dtype)]
+[/SEARCH]
+[REPLACE]
+    @property
+    def dtype(self) -> NumericDtype:
+        mapping = self._dtype_cls._str_to_dtype_mapping()
+        return mapping[str(self._data.dtype)]
+[/REPLACE]

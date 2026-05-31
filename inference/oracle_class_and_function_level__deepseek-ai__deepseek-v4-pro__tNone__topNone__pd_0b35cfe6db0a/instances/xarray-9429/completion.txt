@@ -1,0 +1,94 @@
+xarray/groupers.py
+[SEARCH]
+    def _factorize_unique(self) -> EncodedGroups:
+        # look through group to find the unique values
+        sort = not isinstance(self.group_as_index, pd.MultiIndex)
+        unique_values, codes_ = unique_value_groups(self.group_as_index, sort=sort)
+        if (codes_ == -1).all():
+            raise ValueError(
+                "Failed to group data. Are you grouping by a variable that is all NaN?"
+            )
+        codes = self.group.copy(data=codes_.reshape(self.group.shape))
+        unique_coord = Variable(
+            dims=codes.name, data=unique_values, attrs=self.group.attrs
+        )
+        full_index = pd.Index(unique_values)
+
+        return EncodedGroups(
+            codes=codes,
+            full_index=full_index,
+            unique_coord=unique_coord,
+            coords=_coordinates_from_variable(unique_coord),
+        )
+[/SEARCH]
+[REPLACE]
+    def _factorize_unique(self) -> EncodedGroups:
+        # look through group to find the unique values
+        sort = not isinstance(self.group_as_index, pd.MultiIndex)
+        unique_values, codes_ = unique_value_groups(self.group_as_index, sort=sort)
+        if (codes_ == -1).all():
+            raise ValueError(
+                "Failed to group data. Are you grouping by a variable that is all NaN?"
+            )
+        codes = self.group.copy(data=codes_.reshape(self.group.shape))
+        unique_coord = Variable(
+            dims=codes.name, data=unique_values, attrs=self.group.attrs
+        )
+        full_index = pd.Index(unique_values)
+
+        return EncodedGroups(
+            codes=codes,
+            full_index=full_index,
+            unique_coord=unique_coord,
+            coords=_coordinates_from_variable(unique_coord),
+            group_indices=None,
+        )
+[/REPLACE]
+
+xarray/groupers.py
+[SEARCH]
+    def factorize(self, group: T_Group) -> EncodedGroups:
+        self._init_properties(group)
+        full_index, first_items, codes_ = self._get_index_and_items()
+        sbins = first_items.values.astype(np.int64)
+        group_indices: GroupIndices = tuple(
+            [slice(i, j) for i, j in zip(sbins[:-1], sbins[1:])]
+            + [slice(sbins[-1], None)]
+        )
+
+        unique_coord = Variable(
+            dims=group.name, data=first_items.index, attrs=group.attrs
+        )
+        codes = group.copy(data=codes_.reshape(group.shape))
+
+        return EncodedGroups(
+            codes=codes,
+            group_indices=group_indices,
+            full_index=full_index,
+            unique_coord=unique_coord,
+            coords=_coordinates_from_variable(unique_coord),
+        )
+[/SEARCH]
+[REPLACE]
+    def factorize(self, group: T_Group) -> EncodedGroups:
+        self._init_properties(group)
+        full_index, first_items, codes_ = self._get_index_and_items()
+        sbins = first_items.values.astype(np.int64)
+        group_indices: GroupIndices = tuple(
+            [slice(i, j) for i, j in zip(sbins[:-1], sbins[1:])]
+            + [slice(sbins[-1], None)]
+        )
+
+        unique_coord = Variable(
+            dims=group.name, data=first_items.index, attrs=group.attrs
+        )
+        codes = group.copy(data=codes_.reshape(group.shape))
+
+        return EncodedGroups(
+            codes=codes,
+            group_indices=group_indices,
+            full_index=full_index,
+            unique_coord=unique_coord,
+            coords=_coordinates_from_variable(unique_coord),
+        )
+[/REPLACE]

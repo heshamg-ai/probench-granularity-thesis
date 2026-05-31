@@ -1,0 +1,108 @@
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2025, Siemens AG
+
+global:
+  seed: 42
+
+measure:
+  target_sample_time_s: 0.3
+  safety_factor: 1.2
+  max_runtime_invocations: 1000
+  min_runtime_invocations: 5
+  min_probe_time_s: 1.0
+  calibrate_warmup_runs: 3
+  min_probe_runs: 3
+  max_probe_runs: 10
+
+  warmup_min_calls: 5
+  warmup_max_calls: 12
+  warmup_window: 4 # need to be smaller than warmup_min_calls
+  warmup_cv_threshold: 0.08
+
+  tm_target_samples: 60
+  tm_default_interval_s: 0.005
+  tm_min_interval_s: 0.0002
+  tm_max_interval_s: 0.05
+
+  min_samples: 5
+  max_samples: 15
+  max_total_time_s: 30.0
+  rciw_threshold: 0.1
+
+analysis:
+  metrics:
+    runtime_s:
+      enabled: true
+      raw_key: runtime_invocation_median_s
+      direction: lower_better
+      unit: s
+
+    memory_twmu_mib:
+      enabled: true
+      raw_key: memory_twmu_mib
+      direction: lower_better
+      unit: MiB
+
+    memory_peak_mib:
+      enabled: true
+      raw_key: memory_final_delta_peak_mib
+      direction: lower_better
+      unit: MiB
+
+  rciw_cleaning:
+    enabled: true
+    k: 3.5
+    min_keep: 5
+
+  decisions:
+    workload:
+      min_required_samples: 5
+      max_total_system_noise_pct: 20.0
+      snr_threshold: 2.0 # SNR 2.0 = ~95% confidence = Limit of Detection
+      min_practical_effect_pct: 5.0
+
+    metric:
+      min_quality_coverage_pct: 70.0
+      min_directional_dominance_pct: 60.0
+      min_conflict_presence_pct: 20.0
+
+docker:
+  build_context: "."
+  cpuset: "2"
+  cpuset_mems: "0"
+  memory: "30g"
+  workdir: "/app" # working directory inside container
+  env:
+    PYTHONUNBUFFERED: "1"
+    PYTHONHASHSEED: "0"
+    OMP_NUM_THREADS: "1"
+    OPENBLAS_NUM_THREADS: "1"
+    MKL_NUM_THREADS: "1"
+    NUMEXPR_MAX_THREADS: "1"
+    VECLIB_MAXIMUM_THREADS: "1"
+    BLIS_NUM_THREADS: "1"
+
+libraries:
+  pandas-dev/pandas:
+    module_name: pandas
+    repo_url: https://github.com/pandas-dev/pandas.git
+    repo_root: ../repos/pandas/
+    tests_root: ../repos/pandas/pandas/tests
+    results_root: results
+    dockerfile: docker/Dockerfile.pandas
+
+  scikit-learn/scikit-learn:
+    module_name: sklearn
+    repo_url: https://github.com/scikit-learn/scikit-learn.git
+    repo_root: ../repos/sklearn/
+    tests_root: ../repos/sklearn
+    results_root: results
+    dockerfile: docker/Dockerfile.sklearn
+
+  pydata/xarray:
+    module_name: xarray
+    repo_url: https://github.com/pydata/xarray.git
+    repo_root: ../repos/xarray/
+    tests_root: ../repos/xarray/xarray/tests
+    results_root: results
+    dockerfile: docker/Dockerfile.xarray

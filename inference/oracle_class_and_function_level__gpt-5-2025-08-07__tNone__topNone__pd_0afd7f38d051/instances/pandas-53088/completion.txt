@@ -1,0 +1,31 @@
+pandas/core/groupby/ops.py
+[SEARCH]
+        else:
+            to_groupby = zip(*(ping.grouping_vector for ping in self.groupings))
+            index = Index(to_groupby)
+            return self.axis.groupby(index)
+[/SEARCH]
+[REPLACE]
+        else:
+            indexer_dict = self.indices
+            if not indexer_dict:
+                return {}
+            ids, _, _ = self.group_info
+            ngroups = self.ngroups
+            visited = np.zeros(ngroups, dtype=bool)
+            order = []
+            for k in ids:
+                if k >= 0:
+                    ik = int(k)
+                    if not visited[ik]:
+                        visited[ik] = True
+                        order.append(ik)
+            res_index = self.result_index
+            ax = self.axis
+            result = {}
+            for ord_ in order:
+                key = res_index[ord_]
+                positions = indexer_dict[key]
+                result[key] = ax.take(positions)
+            return result
+[/REPLACE]

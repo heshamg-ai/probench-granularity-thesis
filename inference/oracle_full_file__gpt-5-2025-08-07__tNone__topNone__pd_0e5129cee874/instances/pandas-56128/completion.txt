@@ -1,0 +1,43 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        """
+        # GH 35584. Sort missing values according to na_position kwarg
+[/SEARCH]
+[REPLACE]
+        """
+        # Fastpaths for already-sorted indexes without missing values
+        # Apply key mapping if provided, as sorting is based on the transformed values
+        idx_mapped = self if key is None else cast(Index, ensure_key_mapped(self, key))
+        if not isinstance(self, ABCMultiIndex) and not idx_mapped.hasnans:
+            n = len(self)
+            if ascending:
+                if idx_mapped.is_monotonic_increasing:
+                    sorted_index = self._view()
+                    if return_indexer:
+                        return sorted_index, np.arange(n, dtype=np.intp)
+                    else:
+                        return sorted_index
+                elif idx_mapped._is_strictly_monotonic_decreasing:
+                    indexer = np.arange(n - 1, -1, -1, dtype=np.intp)
+                    sorted_index = self[::-1]
+                    if return_indexer:
+                        return sorted_index, indexer
+                    else:
+                        return sorted_index
+            else:
+                if idx_mapped.is_monotonic_decreasing:
+                    sorted_index = self._view()
+                    if return_indexer:
+                        return sorted_index, np.arange(n, dtype=np.intp)
+                    else:
+                        return sorted_index
+                elif idx_mapped._is_strictly_monotonic_increasing:
+                    indexer = np.arange(n - 1, -1, -1, dtype=np.intp)
+                    sorted_index = self[::-1]
+                    if return_indexer:
+                        return sorted_index, indexer
+                    else:
+                        return sorted_index
+
+        # GH 35584. Sort missing values according to na_position kwarg
+[/REPLACE]

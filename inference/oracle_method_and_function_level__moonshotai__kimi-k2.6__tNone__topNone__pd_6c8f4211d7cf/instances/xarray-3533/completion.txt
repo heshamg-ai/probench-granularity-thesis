@@ -1,0 +1,73 @@
+ xarray/core/dataarray.py
+[SEARCH]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/SEARCH]
+[REPLACE]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        if drop:
+            ds = self._to_temp_dataset().isel(drop=True, indexers=indexers)
+            return self._from_temp_dataset(ds)
+        # Fast path for simple integer indexing on small arrays
+        # Avoids Dataset creation overhead when we're just pulling out scalar indices
+        from .indexing import is_fancy_indexer
+        if (
+            len(indexers) == 1
+            and not any(is_fancy_indexer(v) for v in indexers.values())
+        ):
+            dim, indexer = next(iter(indexers.items()))
+            if dim in self.dims and isinstance(indexer, int):
+                var = self._variable.isel({dim: indexer})
+                coords: Dict[Any, Variable] = {}
+                indexes: Dict[Hashable, pd.Index] = {}
+                for k, v in self._coords.items():
+                    if dim in v.dims:
+                        if v.dims == (dim,):
+                            # scalar coord
+                            coord_var = v.isel({dim: indexer})
+                            coords[k] = coord_var
+                            if k in (self._indexes or {}):
+                                indexes[k] = pd.Index([coord_var.data])
+                        else:
+                            coords[k] = v.isel({dim: indexer})
+                    else:
+                        coords[k] = v.copy(deep=False)
+                        if k in (self._indexes or {}):
+                            indexes[k] = self._indexes[k]
+                return type(self)(
+                    var,
+                    coords,
+                    name=self._name,
+                    indexes=indexes,
+                    fastpath=True,
+                )
+        ds = self._to_temp_dataset().isel(drop=False, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/REPLACE]

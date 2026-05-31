@@ -1,0 +1,101 @@
+
+
+Looking at the code, I notice that `RangeIndex` doesn't have an explicit `argmin` method, so it likely inherits from the base `Index` class. For a `RangeIndex`, which is a monotonic integer range, we can implement a highly optimized version that avoids creating any arrays.
+
+The key insight is:
+- If step > 0 (monotonically increasing), the minimum is at index 0
+- If step < 0 (monotonically decreasing), the minimum is at the last index
+- If empty, return -1 (standard behavior)
+
+Let me add an optimized `argmin` method to `RangeIndex`:
+</think>
+
+pandas/core/indexes/range.py
+[SEARCH]
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+
+    # --------------------------------------------------------------------
+    # Reductions
+[/SEARCH]
+[REPLACE]
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+
+    def argmin(self, axis=None, skipna=True, *args, **kwargs) -> int:
+        """
+        Return an ndarray of the minimum argument indexer.
+
+        Parameters
+        ----------
+        axis : None
+            Must be None. Has no effect but is accepted for compatibility
+            with numpy.
+        skipna : bool, default True
+            Must be None or True. Has no effect but is accepted for
+            compatibility with numpy.
+
+        Returns
+        -------
+        int
+            The index of the minimum value.
+
+        See Also
+        --------
+        numpy.ndarray.argmin : Equivalent functionality.
+        """
+        # Validate axis parameter
+        if axis is not None:
+            raise TypeError(f"argmin only supports axis=None, got {axis}")
+        nv.validate_argmin(args, kwargs)
+
+        # RangeIndex is monotonic, so argmin is simply:
+        # - 0 if step > 0 (minimum at start)
+        # - len(self)-1 if step < 0 (minimum at end)
+        # - -1 if empty
+        if len(self) == 0:
+            return -1
+        if self.step > 0:
+            return 0
+        return len(self) - 1
+
+    def argmax(self, axis=None, skipna=True, *args, **kwargs) -> int:
+        """
+        Return an ndarray of the maximum argument indexer.
+
+        Parameters
+        ----------
+        axis : None
+            Must be None. Has no effect but is accepted for compatibility
+            with numpy.
+        skipna : bool, default True
+            Must be None or True. Has no effect but is accepted for
+            compatibility with numpy.
+
+        Returns
+        -------
+        int
+            The index of the maximum value.
+
+        See Also
+        --------
+        numpy.ndarray.argmax : Equivalent functionality.
+        """
+        # Validate axis parameter
+        if axis is not None:
+            raise TypeError(f"argmax only supports axis=None, got {axis}")
+        nv.validate_argmax(args, kwargs)
+
+        # RangeIndex is monotonic, so argmax is simply:
+        # - len(self)-1 if step > 0 (maximum at end)
+        # - 0 if step < 0 (maximum at start)
+        # - -1 if empty
+        if len(self) == 0:
+            return -1
+        if self.step > 0:
+            return len(self) - 1
+        return 0
+
+    # --------------------------------------------------------------------
+    # Reductions
+[/REPLACE]

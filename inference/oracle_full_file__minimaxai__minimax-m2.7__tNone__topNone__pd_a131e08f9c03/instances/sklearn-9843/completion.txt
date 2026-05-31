@@ -1,0 +1,59 @@
+
+
+Looking at the current implementation, I can identify several optimization opportunities for integral labels:
+
+1. The list comprehension `[label_to_ind.get(x, n_labels + 1) for x in y_pred]` is slow due to Python loop overhead
+2. Using `np.searchsorted` for vectorized index lookup instead of dictionary lookups
+3. Using direct array indexing when labels are contiguous integers starting from 0
+
+Let me implement these optimizations:
+
+sklearn/metrics/_classification.py
+[SEARCH]
+    n_labels = labels.size
+    label_to_ind = {y: x for x, y in enumerate(labels)}
+    # convert yt, yp into index
+    y_pred = np.array([label_to_ind.get(x, n_labels + 1) for x in y_pred])
+    y_true = np.array([label_to_ind.get(x, n_labels + 1) for x in y_true])
+
+    # intersect y_pred, y_true with labels, eliminate items not in labels
+    ind = np.logical_and(y_pred < n_labels, y_true < n_labels)
+    y_pred = y_pred[ind]
+    y_true = y_true[ind]
+    # also eliminate weights of eliminated items
+    sample_weight = sample_weight[ind]
+[/SEARCH]
+[REPLACE]
+    n_labels = labels.size
+
+    # Fast path for integral labels: use vectorized operations
+    if np.issubdtype(labels.dtype, np.integer):
+        # Check if labels form a contiguous range [0, n_labels-1]
+        # This allows direct indexing without any mapping
+        if labels.size > 0 and labels[0] == 0 and np.all(labels[1:] - labels[:-1] == 1):
+            # Labels are [0, 1, 2, ..., n_labels-1], use direct conversion
+            max_label = n_labels - 1
+            y_pred = np.asarray(y_pred, dtype=np.intp)
+            y_true = np.asarray(y_true, dtype=np.intp)
+        else:
+            # Use searchsorted: O(n log k) where k is number of labels
+            # searchsorted returns len(labels) for values not in labels,
+            # which equals n_labels, which will be filtered out
+            sorted_labels = np.asarray(labels)
+            y_pred = np.searchsorted(sorted_labels, y_pred, side='right')
+            y_true = np.searchsorted(sorted_labels, y_true, side='right')
+            max_label = n_labels
+    else:
+        # Slow path for non-integral labels
+        label_to_ind = {y: x for x, y in enumerate(labels)}
+        y_pred = np.array([label_to_ind.get(x, n_labels + 1) for x in y_pred])
+        y_true = np.array([label_to_ind.get(x, n_labels + 1) for x in y_true])
+        max_label = n_labels
+
+    # Filter out predictions/labels not in the provided label set
+    # Using separate boolean indexing is faster than np.logical_and
+    ind = (y_pred < max_label) & (y_true < max_label)
+    y_pred = y_pred[ind]
+    y_true = y_true[ind]
+    sample_weight = sample_weight[ind]
+[/REPLACE]

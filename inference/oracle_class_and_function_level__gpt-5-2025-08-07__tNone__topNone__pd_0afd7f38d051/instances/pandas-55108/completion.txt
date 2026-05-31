@@ -1,0 +1,57 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        if not self._should_compare(other):
+            # Nothing matches -> difference is everything
+            result = self.rename(result_name)
+            if sort is True:
+                return result.sort_values()
+            return result
+
+        result = self._difference(other, sort=sort)
+        return self._wrap_difference_result(other, result)
+[/SEARCH]
+[REPLACE]
+        if not self._should_compare(other):
+            # Nothing matches -> difference is everything
+            result = self.rename(result_name)
+            if sort is True:
+                return result.sort_values()
+            return result
+
+        # Fastpath for datetime-like (and timedelta-like) monotonic, disjoint indexes
+        if (
+            self.dtype == other.dtype
+            and needs_i8_conversion(self.dtype)
+            and len(self) != 0
+            and len(other) != 0
+            and not self._is_multi
+        ):
+            try:
+                if self.is_monotonic_increasing and other.is_monotonic_increasing:
+                    smin, smax = self[0], self[-1]
+                    omin, omax = other[0], other[-1]
+                    disjoint = (smax < omin) or (omax < smin)
+                elif self.is_monotonic_decreasing and other.is_monotonic_decreasing:
+                    smin, smax = self[-1], self[0]
+                    omin, omax = other[-1], other[0]
+                    disjoint = (smax < omin) or (omax < smin)
+                else:
+                    disjoint = False
+            except TypeError:
+                # incomparable elements; fall back to general path
+                disjoint = False
+            if disjoint:
+                this = self.unique()
+                if sort is False:
+                    res_vals = this._values
+                else:
+                    # sort is True or None: return ascending order
+                    if this.is_monotonic_increasing:
+                        res_vals = this._values
+                    else:
+                        res_vals = this.sort_values()._values
+                return self._wrap_difference_result(other, res_vals)
+
+        result = self._difference(other, sort=sort)
+        return self._wrap_difference_result(other, result)
+[/REPLACE]

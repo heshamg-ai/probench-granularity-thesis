@@ -1,0 +1,101 @@
+pandas/core/groupby/groupby.py
+[SEARCH]
+    def apply(self, func, *args, **kwargs):
+        """
+        Apply function ``func`` group-wise and combine the results together.
+        ...
+        """
+        func = com.is_builtin_func(func)
+
+        # this is needed so we don't try and wrap strings. If we could
+        # resolve functions to their callable functions prior, this
+        # wouldn't be needed
+        if args or kwargs:
+            if callable(func):
+
+                @wraps(func)
+                def f(g):
+                    with np.errstate(all="ignore"):
+                        return func(g, *args, **kwargs)
+
+            elif hasattr(func, "__name__"):
+                # Don't overwrite attributes on the provided function
+                @wraps(func)
+                def f(g):
+                    return func(g, *args, **kwargs)
+
+            else:
+                raise ValueError(
+                    "func must be a callable if args or kwargs are supplied"
+                )
+        else:
+            f = func
+
+        # ignore SettingWithCopy here in case the user mutates
+        with option_context("mode.chained_assignment", None):
+            try:
+                result = self._python_apply_general(f, self._selected_obj)
+            except TypeError:
+                # gh-20949
+                # try again, with .apply acting as a filtering
+                # operation, by excluding the grouping column
+                # This would normally not be triggered
+                # except if the udf is trying an operation that
+                # fails on the grouping column (e.g. str operations
+                # on numeric column)
+                result = self._python_apply_general(
+                    f, self._selected_obj.drop(self.columns, axis=1)
+                )
+
+        return result
+[/SEARCH]
+[REPLACE]
+    def apply(self, func, *args, **kwargs):
+        """
+        Apply function ``func`` group-wise and combine the results together.
+        ...
+        """
+        func = com.is_builtin_func(func)
+
+        # this is needed so we don't try and wrap strings. If we could
+        # resolve functions to their callable functions prior, this
+        # wouldn't be needed
+        if args or kwargs:
+            if callable(func):
+
+                @wraps(func)
+                def f(g):
+                    with np.errstate(all="ignore"):
+                        return func(g, *args, **kwargs)
+
+            elif hasattr(func, "__name__"):
+                # Don't overwrite attributes on the provided function
+                @wraps(func)
+                def f(g):
+                    return func(g, *args, **kwargs)
+
+            else:
+                raise ValueError(
+                    "func must be a callable if args or kwargs are supplied"
+                )
+        else:
+            f = func
+
+        # ignore SettingWithCopy here in case the user mutates
+        with option_context("mode.chained_assignment", None):
+            try:
+                result = self._python_apply_general(f, self._selected_obj)
+            except TypeError:
+                # gh-20949
+                # try again, with .apply acting as a filtering
+                # operation, by excluding the grouping column
+                # This would normally not be triggered
+                # except if the udf is trying an operation that
+                # fails on the grouping column (e.g. str operations
+                # on numeric column)
+                result = self._python_apply_general(
+                    f, self._selected_obj.drop(self.columns, axis=1)
+                )
+
+        return self._reindex_output(result)
+[/REPLACE]

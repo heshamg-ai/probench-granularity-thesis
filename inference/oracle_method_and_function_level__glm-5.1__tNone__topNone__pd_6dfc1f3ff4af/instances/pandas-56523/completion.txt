@@ -1,0 +1,119 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+    # fast-path for empty left/right
+    left_n = len(left_keys[0])
+    right_n = len(right_keys[0])
+    if left_n == 0:
+        if how in ["left", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["right", "outer"]:
+            return _get_no_sort_one_missing_indexer(right_n, True)
+    elif right_n == 0:
+        if how in ["right", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["left", "outer"]:
+            return _get_no_sort_one_missing_indexer(left_n, False)
+
+    # get left & right join labels and num. of levels at each location
+    mapped = (
+        _factorize_keys(left_keys[n], right_keys[n], sort=sort)
+        for n in range(len(left_keys))
+    )
+    zipped = zip(*mapped)
+    llab, rlab, shape = (list(x) for x in zipped)
+
+    # get flat i8 keys from label lists
+    lkey, rkey = _get_join_keys(llab, rlab, tuple(shape), sort)
+
+    # factorize keys to a dense i8 space
+    # `count` is the num. of unique keys
+    # set(lkey) | set(rkey) == range(count)
+
+    lkey, rkey, count = _factorize_keys(lkey, rkey, sort=sort)
+    # preserve left frame order if how == 'left' and sort == False
+    kwargs = {}
+    if how in ("inner", "left", "right"):
+        kwargs["sort"] = sort
+    join_func = {
+        "inner": libjoin.inner_join,
+        "left": libjoin.left_outer_join,
+        "right": lambda x, y, count, **kwargs: libjoin.left_outer_join(
+            y, x, count, **kwargs
+        )[::-1],
+        "outer": libjoin.full_outer_join,
+    }[how]
+
+    # error: Cannot call function of unknown type
+    return join_func(lkey, rkey, count, **kwargs)  # type: ignore[operator]
+[/SEARCH]
+[REPLACE]
+    # fast-path for empty left/right
+    left_n = len(left_keys[0])
+    right_n = len(right_keys[0])
+    if left_n == 0:
+        if how in ["left", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["right", "outer"]:
+            return _get_no_sort_one_missing_indexer(right_n, True)
+    elif right_n == 0:
+        if how in ["right", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["left", "outer"]:
+            return _get_no_sort_one_missing_indexer(left_n, False)
+
+    # Optimization: fast-path for monotonic sorted keys
+    if len(left_keys) == 1 and sort:
+        from pandas.core.algorithms import is_sorted
+        lk = left_keys[0]
+        rk = right_keys[0]
+        if isinstance(lk, (np.ndarray, ExtensionArray)):
+            lk_values = lk
+        else:
+            lk_values = lk._values
+        if isinstance(rk, (np.ndarray, ExtensionArray)):
+            rk_values = rk
+        else:
+            rk_values = rk._values
+
+        if is_sorted(lk_values) and is_sorted(rk_values):
+            from pandas._libs.join import sorted_inner_join, sorted_left_outer_join, sorted_full_outer_join
+            join_func = {
+                "inner": sorted_inner_join,
+                "left": sorted_left_outer_join,
+                "right": lambda x, y: np.array(sorted_left_outer_join(y, x), dtype=np.intp)[::-1],
+                "outer": sorted_full_outer_join,
+            }[how]
+            return join_func(lk_values, rk_values)
+
+    # get left & right join labels and num. of levels at each location
+    mapped = (
+        _factorize_keys(left_keys[n], right_keys[n], sort=sort)
+        for n in range(len(left_keys))
+    )
+    zipped = zip(*mapped)
+    llab, rlab, shape = (list(x) for x in zipped)
+
+    # get flat i8 keys from label lists
+    lkey, rkey = _get_join_keys(llab, rlab, tuple(shape), sort)
+
+    # factorize keys to a dense i8 space
+    # `count` is the num. of unique keys
+    # set(lkey) | set(rkey) == range(count)
+
+    lkey, rkey, count = _factorize_keys(lkey, rkey, sort=sort)
+    # preserve left frame order if how == 'left' and sort == False
+    kwargs = {}
+    if how in ("inner", "left", "right"):
+        kwargs["sort"] = sort
+    join_func = {
+        "inner": libjoin.inner_join,
+        "left": libjoin.left_outer_join,
+        "right": lambda x, y, count, **kwargs: libjoin.left_outer_join(
+            y, x, count, **kwargs
+        )[::-1],
+        "outer": libjoin.full_outer_join,
+    }[how]
+
+    # error: Cannot call function of unknown type
+    return join_func(lkey, rkey, count, **kwargs)  # type: ignore[operator]
+[/REPLACE]

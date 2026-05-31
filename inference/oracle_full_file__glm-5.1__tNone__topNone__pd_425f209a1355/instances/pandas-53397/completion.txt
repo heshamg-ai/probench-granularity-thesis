@@ -1,0 +1,40 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    @doc(Index.__iter__)
+    def __iter__(self) -> Iterator[int]:
+        yield from self._range
+[/SEARCH]
+[REPLACE]
+    @doc(Index.__iter__)
+    def __iter__(self) -> Iterator[int]:
+        yield from self._range
+
+    def take(
+        self,
+        indices,
+        axis=0,
+        allow_fill: bool = True,
+        fill_value=None,
+        **kwargs,
+    ):
+        if kwargs:
+            nv.validate_take((), kwargs)
+        if is_scalar(indices):
+            raise TypeError("Expected indices to be array-like")
+
+        indices = ensure_platform_int(indices)
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+
+        if allow_fill:
+            # We cannot hold NAs, so use the base class implementation
+            # which returns a base Index with appropriate dtype
+            return super().take(
+                indices, axis=axis, allow_fill=allow_fill, fill_value=fill_value
+            )
+
+        # Compute result directly without materializing the full range
+        start = self.start
+        step = self.step
+        result = start + step * indices
+        return self._constructor._simple_new(result, name=self.name)
+[/REPLACE]

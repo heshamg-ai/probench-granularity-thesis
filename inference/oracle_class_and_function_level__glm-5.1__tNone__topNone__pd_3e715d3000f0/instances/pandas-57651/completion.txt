@@ -1,0 +1,191 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    # --------------------------------------------------------------------
+    # Set Operations
+
+    def _intersection(self, other: Index, sort: bool = False):
+[/SEARCH]
+[REPLACE]
+    # --------------------------------------------------------------------
+    # Join Methods
+
+    def join(
+        self,
+        other: Index,
+        *,
+        how: JoinHow = "left",
+        level: Level | None = None,
+        return_indexers: bool = False,
+        sort: bool = False,
+    ) -> Index | tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        if level is not None:
+            return super().join(
+                other, how=how, level=level, return_indexers=return_indexers, sort=sort
+            )
+
+        other = ensure_index(other)
+        sort = sort or how == "outer"
+
+        if not isinstance(other, RangeIndex):
+            # Fall back to Index.join for non-RangeIndex
+            return super().join(
+                other, how=how, level=level, return_indexers=return_indexers, sort=sort
+            )
+
+        if self.equals(other):
+            ret_index = other if how == "right" else self
+            if return_indexers:
+                return ret_index, None, None
+            return ret_index
+
+        if len(self) == 0 or len(other) == 0:
+            if return_indexers:
+                return super().join(
+                    other,
+                    how=how,
+                    level=level,
+                    return_indexers=True,
+                    sort=sort,
+                )
+            return super().join(
+                other,
+                how=how,
+                level=level,
+                return_indexers=False,
+                sort=sort,
+            )
+
+        # Normalize both ranges to positive step for join logic
+        first = self._range[::-1] if self.step < 0 else self._range
+        second = other._range[::-1] if other.step < 0 else other._range
+
+        lstart, lstop, lstep = first.start, first.stop, first.step
+        rstart, rstop, rstep = second.start, second.stop, second.step
+
+        # Compute left/right boundaries for the join
+        join_start = max(lstart, rstart) if how != "left" else lstart
+        if how == "left":
+            join_start = lstart
+        elif how == "right":
+            join_start = rstart
+        elif how in ("inner", "outer"):
+            join_start = max(lstart, rstart)
+
+        if how == "left":
+            join_stop = lstop
+        elif how == "right":
+            join_stop = rstop
+        elif how == "inner":
+            join_stop = min(lstop, rstop)
+        else:  # outer
+            join_stop = max(lstop, rstop)
+
+        # Check if the RangeIndex ranges are aligned (same step and phase)
+        same_step = lstep == rstep
+        same_phase = (lstart - rstart) % lstep == 0 if same_step and lstep != 0 else False
+
+        # Find the actual join start for inner/outer when steps differ
+        if how == "inner" and not (same_step and same_phase):
+            # Need to find the actual first common element >= join_start
+            gcd_val = _math_gcd(lstep, rstep)
+            if (lstart - rstart) % gcd_val != 0:
+                # No intersection at all
+                res_name = ops.get_op_result_name(self, other)
+                empty_ri = self[:0].rename(res_name)
+                if return_indexers:
+                    return empty_ri, np.array([], dtype=np.intp), np.array([], dtype=np.intp)
+                return empty_ri
+            # Find first common element using modular arithmetic
+            lcm_val = lstep // gcd_val * rstep
+            # Find first element >= join_start that satisfies both modular constraints
+            diff = rstart - lstart
+            _, s_val, _ = self._extended_gcd(lstep, rstep)
+            first_common = lstart + diff // gcd_val * s_val % (rstep // gcd_val) * lstep
+            # Adjust to >= join_start
+            if first_common < join_start:
+                n_steps = -(-(join_start - first_common) // lcm_val)
+                first_common += n_steps * lcm_val
+            elif first_common > join_start:
+                n_steps = (first_common - join_start) // lcm_val
+                first_common -= n_steps * lcm_val
+                if first_common < join_start:
+                    first_common += lcm_val
+            join_start = first_common
+            join_stop = min(lstop, rstop)
+            lstep = lcm_val
+
+        elif how == "outer" and not (same_step and same_phase):
+            # Can't represent outer join as RangeIndex, fall back
+            if return_indexers:
+                return super().join(
+                    other,
+                    how=how,
+                    level=level,
+                    return_indexers=True,
+                    sort=sort,
+                )
+            return super().join(
+                other,
+                how=how,
+                level=level,
+                return_indexers=False,
+                sort=sort,
+            )
+
+        if how == "left":
+            join_step = lstep
+        elif how == "right":
+            join_step = rstep
+        else:
+            join_step = lstep
+
+        # Check if the resulting join range is valid
+        if join_start >= join_stop:
+            res_name = ops.get_op_result_name(self, other)
+            empty_ri = self[:0].rename(res_name)
+            if return_indexers:
+                return empty_ri, np.array([], dtype=np.intp), np.array([], dtype=np.intp)
+            return empty_ri
+
+        # Build the join RangeIndex
+        join_range = range(join_start, join_stop, join_step)
+
+        # Determine if we need to flip the result
+        if (self.step < 0 and other.step < 0):
+            join_range = range(
+                join_range.start + join_range.step * (len(join_range) - 1),
+                join_range.start - join_range.step,
+                -join_range.step,
+            )
+
+        # Determine the result name based on `how`
+        res_name = other.name if how == "right" else self.name
+        join_index = self._simple_new(join_range)
+        if join_index.name != res_name:
+            join_index = join_index.rename(res_name)
+
+        if not return_indexers:
+            return join_index
+
+        # Compute indexers using RangeIndex.get_indexer (efficient, no materialization)
+        lindexer = self.get_indexer(join_index)
+        rindexer = other.get_indexer(join_index)
+
+        # Convert -1 filled arrays to None when possible (matches base class behavior)
+        if len(lindexer) > 0 and np.all(lindexer == np.arange(len(lindexer))):
+            lindexer = None
+        else:
+            lindexer = ensure_platform_int(lindexer)
+
+        if len(rindexer) > 0 and np.all(rindexer == np.arange(len(rindexer))):
+            rindexer = None
+        else:
+            rindexer = ensure_platform_int(rindexer)
+
+        return join_index, lindexer, rindexer
+
+    # --------------------------------------------------------------------
+    # Set Operations
+
+    def _intersection(self, other: Index, sort: bool = False):
+[/REPLACE]

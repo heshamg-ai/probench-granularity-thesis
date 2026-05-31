@@ -1,0 +1,64 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        if not self._should_compare(other):
+            # Nothing matches -> difference is everything
+            result = self.rename(result_name)
+            if sort is True:
+                return result.sort_values()
+            return result
+
+        result = self._difference(other, sort=sort)
+        return self._wrap_difference_result(other, result)
+[/SEARCH]
+[REPLACE]
+        if not self._should_compare(other):
+            # Nothing matches -> difference is everything
+            result = self.rename(result_name)
+            if sort is True:
+                return result.sort_values()
+            return result
+
+        # Fastpath for DatetimeIndex with disjoint, monotonic increasing ranges
+        if (
+            isinstance(self, ABCDatetimeIndex)
+            and isinstance(other, ABCDatetimeIndex)
+            and self.dtype == other.dtype
+            and self.is_monotonic_increasing
+            and other.is_monotonic_increasing
+        ):
+            # Quick disjointness check using boundary values and handling NaT
+            self_na = self._isnan if self._can_hold_na else np.zeros(len(self), dtype=bool)
+            other_na = other._isnan if other._can_hold_na else np.zeros(len(other), dtype=bool)
+
+            # If both contain NaT they are not disjoint
+            if not (self_na.any() and other_na.any()):
+                self_non_na = (~self_na).nonzero()[0]
+                other_non_na = (~other_na).nonzero()[0]
+
+                disjoint_non_na = False
+                if self_non_na.size and other_non_na.size:
+                    s_min = self[self_non_na[0]]
+                    s_max = self[self_non_na[-1]]
+                    o_min = other[other_non_na[0]]
+                    o_max = other[other_non_na[-1]]
+                    try:
+                        disjoint_non_na = (s_max < o_min) or (s_min > o_max)
+                    except TypeError:
+                        disjoint_non_na = False
+                elif self_non_na.size == 0 and other_non_na.size > 0:
+                    # self has only NaT; disjoint if other has no NaT (checked above)
+                    disjoint_non_na = True
+                elif other_non_na.size == 0 and self_non_na.size > 0:
+                    # other has only NaT; disjoint if self has no NaT (checked above)
+                    disjoint_non_na = True
+
+                if disjoint_non_na:
+                    res = self.unique().rename(result_name)
+                    if sort is True:
+                        return res.sort_values()
+                    # For sort=None, result is already sorted (monotonic); for sort=False keep order
+                    return res
+
+        result = self._difference(other, sort=sort)
+        return self._wrap_difference_result(other, result)
+[/REPLACE]

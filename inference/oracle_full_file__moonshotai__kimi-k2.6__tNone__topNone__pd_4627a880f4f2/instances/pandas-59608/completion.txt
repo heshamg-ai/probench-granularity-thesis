@@ -1,0 +1,87 @@
+ pandas/io/formats/csvs.py [SEARCH]    @cache_readonly
+    def data_index(self) -> Index:
+        data_index = self.obj.index
+        if (
+            isinstance(data_index, (ABCDatetimeIndex, ABCPeriodIndex))
+            and self.date_format is not None
+        ):
+            data_index = Index(
+                [x.strftime(self.date_format) if notna(x) else "" for x in data_index]
+            )
+        elif isinstance(data_index, ABCMultiIndex):
+            data_index = data_index.remove_unused_levels()
+        return data_index
+[/SEARCH] [REPLACE]    @cache_readonly
+    def data_index(self) -> Index:
+        data_index = self.obj.index
+        if (
+            isinstance(data_index, (ABCDatetimeIndex, ABCPeriodIndex))
+            and self.date_format is not None
+        ):
+            data_index = Index(
+                [x.strftime(self.date_format) if notna(x) else "" for x in data_index]
+            )
+        elif isinstance(data_index, ABCMultiIndex) and self.index:
+            data_index = data_index.remove_unused_levels()
+        return data_index
+[/REPLACE]
+
+pandas/io/formats/csvs.py [SEARCH]    @property
+    def nlevels(self) -> int:
+        if self.index:
+            return getattr(self.data_index, "nlevels", 1)
+        else:
+            return 0
+[/SEARCH] [REPLACE]    @property
+    def nlevels(self) -> int:
+        if self.index:
+            return getattr(self.data_index, "nlevels", 1)
+        else:
+            return 0
+
+    @cache_readonly
+    def _index_levels_to_drop(self) -> list[int]:
+        # When index=False with MultiIndex columns, we need to drop
+        # the index levels from the column values returned by _get_values_for_csv
+        if self.has_mi_columns and not self.index:
+            return list(range(len(self.obj.index) if hasattr(self.obj.index, '__len__') else 1))
+        return []
+[/REPLACE]
+
+pandas/io/formats/csvs.py [SEARCH]    def _save_chunk(self, start_i: int, end_i: int) -> None:
+        # create the data for a chunk
+        slicer = slice(start_i, end_i)
+        df = self.obj.iloc[slicer]
+        res = df._get_values_for_csv(**self._number_format)
+        data = list(res._iter_column_arrays())
+        ix = self.data_index[slicer]._get_values_for_csv(**self._number_format)
+
+        libwriters.write_csv_rows(
+            data,
+            ix,
+            self.nlevels,
+            self.cols,
+            self.writer,
+        )
+[/SEARCH] [REPLACE]    def _save_chunk(self, start_i: int, end_i: int) -> None:
+        # create the data for a chunk
+        slicer = slice(start_i, end_i)
+        df = self.obj.iloc[slicer]
+        res = df._get_values_for_csv(**self._number_format)
+        data = list(res._iter_column_arrays())
+        ix = self.data_index[slicer]._get_values_for_csv(**self._number_format)
+
+        if self.has_mi_columns and not self.index:
+            # Drop index levels from data when index=False with MultiIndex columns
+            # Each column array has shape (n_index_levels + n_columns,)
+            n_index_levels = self.obj.index.nlevels
+            data = [arr[n_index_levels:] for arr in data]
+
+        libwriters.write_csv_rows(
+            data,
+            ix,
+            self.nlevels,
+            self.cols,
+            self.writer,
+        )
+[/REPLACE]

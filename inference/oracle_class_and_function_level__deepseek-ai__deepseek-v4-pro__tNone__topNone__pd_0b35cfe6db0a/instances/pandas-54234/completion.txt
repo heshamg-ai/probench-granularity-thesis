@@ -1,0 +1,319 @@
+pandas/core/groupby/groupby.py
+[SEARCH]
+    def _idxmax_idxmin(
+        self,
+        how: Literal["idxmax", "idxmin"],
+        ignore_unobserved: bool = False,
+        axis: Axis | None | lib.NoDefault = lib.no_default,
+        skipna: bool = True,
+        numeric_only: bool = False,
+    ):
+        """Compute idxmax/idxmin.
+
+        Parameters
+        ----------
+        how: {"idxmin", "idxmax"}
+            Whether to compute idxmin or idxmax.
+        axis : {{0 or 'index', 1 or 'columns'}}, default None
+            The axis to use. 0 or 'index' for row-wise, 1 or 'columns' for column-wise.
+            If axis is not provided, grouper's axis is used.
+        numeric_only : bool, default False
+            Include only float, int, boolean columns.
+        skipna : bool, default True
+            Exclude NA/null values. If an entire row/column is NA, the result
+            will be NA.
+        ignore_unobserved : bool, default False
+            When True and an unobserved group is encountered, do not raise. This used
+            for transform where unobserved groups do not play an impact on the result.
+
+        Returns
+        -------
+        Series or DataFrame
+            idxmax or idxmin for the groupby operation.
+        """
+        if axis is not lib.no_default:
+            if axis is None:
+                axis = self.axis
+            axis = self.obj._get_axis_number(axis)
+            self._deprecate_axis(axis, how)
+        else:
+            axis = self.axis
+
+        if not self.observed and any(
+            ping._passed_categorical for ping in self.grouper.groupings
+        ):
+            expected_len = np.prod(
+                [len(ping.group_index) for ping in self.grouper.groupings]
+            )
+            if len(self.grouper.groupings) == 1:
+                result_len = len(self.grouper.groupings[0].grouping_vector.unique())
+            else:
+                # result_index only contains observed groups in this case
+                result_len = len(self.grouper.result_index)
+            assert result_len <= expected_len
+            has_unobserved = result_len < expected_len
+
+            raise_err: bool | np.bool_ = not ignore_unobserved and has_unobserved
+            # Only raise an error if there are columns to compute; otherwise we return
+            # an empty DataFrame with an index (possibly including unobserved) but no
+            # columns
+            data = self._obj_with_exclusions
+            if raise_err and isinstance(data, DataFrame):
+                if numeric_only:
+                    data = data._get_numeric_data()
+                raise_err = len(data.columns) > 0
+        else:
+            raise_err = False
+        if raise_err:
+            raise ValueError(
+                f"Can't get {how} of an empty group due to unobserved categories. "
+                "Specify observed=True in groupby instead."
+            )
+
+        try:
+            if self.obj.ndim == 1:
+                result = self._op_via_apply(how, skipna=skipna)
+            else:
+
+                def func(df):
+                    method = getattr(df, how)
+                    return method(axis=axis, skipna=skipna, numeric_only=numeric_only)
+
+                func.__name__ = how
+                result = self._python_apply_general(
+                    func, self._obj_with_exclusions, not_indexed_same=True
+                )
+        except ValueError as err:
+            name = "argmax" if how == "idxmax" else "argmin"
+            if f"attempt to get {name} of an empty sequence" in str(err):
+                raise ValueError(
+                    f"Can't get {how} of an empty group due to unobserved categories. "
+                    "Specify observed=True in groupby instead."
+                ) from None
+            raise
+
+        result = result.astype(self.obj.index.dtype) if result.empty else result
+
+        if not skipna:
+            has_na_value = result.isnull().any(axis=None)
+            if has_na_value:
+                warnings.warn(
+                    f"The behavior of {type(self).__name__}.{how} with all-NA "
+                    "values, or any-NA and skipna=False, is deprecated. In a future "
+                    "version this will raise ValueError",
+                    FutureWarning,
+                    stacklevel=find_stack_level(),
+                )
+
+        return result
+[/SEARCH]
+[REPLACE]
+    def _idxmax_idxmin(
+        self,
+        how: Literal["idxmax", "idxmin"],
+        ignore_unobserved: bool = False,
+        axis: Axis | None | lib.NoDefault = lib.no_default,
+        skipna: bool = True,
+        numeric_only: bool = False,
+    ):
+        """Compute idxmax/idxmin.
+
+        Parameters
+        ----------
+        how: {"idxmin", "idxmax"}
+            Whether to compute idxmin or idxmax.
+        axis : {{0 or 'index', 1 or 'columns'}}, default None
+            The axis to use. 0 or 'index' for row-wise, 1 or 'columns' for column-wise.
+            If axis is not provided, grouper's axis is used.
+        numeric_only : bool, default False
+            Include only float, int, boolean columns.
+        skipna : bool, default True
+            Exclude NA/null values. If an entire row/column is NA, the result
+            will be NA.
+        ignore_unobserved : bool, default False
+            When True and an unobserved group is encountered, do not raise. This used
+            for transform where unobserved groups do not play an impact on the result.
+
+        Returns
+        -------
+        Series or DataFrame
+            idxmax or idxmin for the groupby operation.
+        """
+        if axis is not lib.no_default:
+            if axis is None:
+                axis = self.axis
+            axis = self.obj._get_axis_number(axis)
+            self._deprecate_axis(axis, how)
+        else:
+            axis = self.axis
+
+        if not self.observed and any(
+            ping._passed_categorical for ping in self.grouper.groupings
+        ):
+            expected_len = np.prod(
+                [len(ping.group_index) for ping in self.grouper.groupings]
+            )
+            if len(self.grouper.groupings) == 1:
+                result_len = len(self.grouper.groupings[0].grouping_vector.unique())
+            else:
+                # result_index only contains observed groups in this case
+                result_len = len(self.grouper.result_index)
+            assert result_len <= expected_len
+            has_unobserved = result_len < expected_len
+
+            raise_err: bool | np.bool_ = not ignore_unobserved and has_unobserved
+            # Only raise an error if there are columns to compute; otherwise we return
+            # an empty DataFrame with an index (possibly including unobserved) but no
+            # columns
+            data = self._obj_with_exclusions
+            if raise_err and isinstance(data, DataFrame):
+                if numeric_only:
+                    data = data._get_numeric_data()
+                raise_err = len(data.columns) > 0
+        else:
+            raise_err = False
+        if raise_err:
+            raise ValueError(
+                f"Can't get {how} of an empty group due to unobserved categories. "
+                "Specify observed=True in groupby instead."
+            )
+
+        # Optimization: fast path for single-column DataFrameGroupBy.
+        # When the result of DataFrameGroupBy.idxmax/idxmin is a Series
+        # (i.e. a single column is selected), we can avoid the expensive
+        # per-group apply and compute the result via cython.
+        is_df = self.obj.ndim != 1
+        if is_df and self._obj_with_exclusions.shape[1] == 1:
+            # Single column: compute via cython for speed.
+            obj = self._obj_with_exclusions
+            col = obj.iloc[:, 0]
+            # Create a SeriesGroupBy for this column, preserving sort/dropna.
+            sgb = SeriesGroupBy(
+                col,
+                keys=self.keys,
+                axis=self.axis,
+                level=self.level,
+                grouper=self.grouper,
+                exclusions=self.exclusions,
+                selection=None,
+                as_index=self.as_index,
+                sort=self.sort,
+                group_keys=self.group_keys,
+                observed=self.observed,
+                dropna=self.dropna,
+            )
+            result = sgb._idxmax_idxmin(
+                how=how,
+                ignore_unobserved=ignore_unobserved,
+                axis=axis,
+                skipna=skipna,
+                numeric_only=numeric_only,
+            )
+            # The SeriesGroupBy result is a Series indexed by group labels.
+            # We need to ensure the dtype matches the obj index. The existing
+            # path does this at the end.
+            # Wrap in a DataFrame to match the expected output type.
+            if not self.as_index:
+                # When as_index=False the result should be a DataFrame.
+                result = result.to_frame()
+            else:
+                result = result.to_frame(name=result.name or 0)
+            # Ensure the result column dtype matches the input index.
+            result.iloc[:, 0] = result.iloc[:, 0].astype(self.obj.index.dtype)
+            if not skipna:
+                has_na_value = result.isnull().any(axis=None)
+                if has_na_value:
+                    warnings.warn(
+                        f"The behavior of {type(self).__name__}.{how} with all-NA "
+                        "values, or any-NA and skipna=False, is deprecated. In a future "
+                        "version this will raise ValueError",
+                        FutureWarning,
+                        stacklevel=find_stack_level(),
+                    )
+            return result
+
+        try:
+            if self.obj.ndim == 1:
+                result = self._op_via_apply(how, skipna=skipna)
+            else:
+                # Use the cython aggregation for DataFrameGroupBy with
+                # multiple columns to compute idxmax/idxmin efficiently.
+                data = self._get_data_to_aggregate(
+                    numeric_only=numeric_only, name=how
+                )
+                # Determine the corresponding arg operation.
+                cython_how = "argmax" if how == "idxmax" else "argmin"
+                try:
+                    ids = self.grouper.group_info[0]
+                    ngroups = self.grouper.ngroups
+                    res = data._mgr.grouped_reduce(
+                        lambda values: self.grouper._cython_operation(
+                            "aggregate",
+                            values,
+                            cython_how,
+                            axis=data.ndim - 1,
+                            min_count=-1,
+                        )
+                    )
+                    new_obj = self._wrap_agged_manager(res)
+                    indices = new_obj._values
+                    # Replace sentinel -1 with np.nan to denote groups with no
+                    # valid entry, consistent with the per-group apply path.
+                    if not skipna:
+                        # When skipna=False, sentinel -1 means all-NA, which
+                        # maps to NaN output.
+                        indices = np.where(indices == -1, np.nan, indices)
+                    # Build the result by taking from the index of the data.
+                    index = data._get_axis(self.axis)
+                    result_array = algorithms.take(
+                        index._values, indices, allow_fill=True,
+                        fill_value=index._na_value,
+                    )
+                    # Construct output with the group result index.
+                    if self.as_index:
+                        result_index = self.grouper.result_index
+                    else:
+                        result_index = RangeIndex(len(ngroups))
+                    result = data._constructor_sliced(
+                        result_array, index=self._get_agg_axis(axis)
+                    )
+                    # Wrap so that _wrap_aggregated_output applies properly.
+                    result_mgr = result._mgr
+                    new_obj = self._wrap_aggregated_output(result)
+                    result = new_obj
+                except NotImplementedError:
+                    # Fallback to per-group apply for non-numeric dtypes.
+                    def func(df):
+                        method = getattr(df, how)
+                        return method(
+                            axis=axis, skipna=skipna, numeric_only=numeric_only
+                        )
+
+                    func.__name__ = how
+                    result = self._python_apply_general(
+                        func, self._obj_with_exclusions, not_indexed_same=True
+                    )
+        except ValueError as err:
+            name = "argmax" if how == "idxmax" else "argmin"
+            if f"attempt to get {name} of an empty sequence" in str(err):
+                raise ValueError(
+                    f"Can't get {how} of an empty group due to unobserved categories. "
+                    "Specify observed=True in groupby instead."
+                ) from None
+            raise
+
+        result = result.astype(self.obj.index.dtype) if result.empty else result
+
+        if not skipna:
+            has_na_value = result.isnull().any(axis=None)
+            if has_na_value:
+                warnings.warn(
+                    f"The behavior of {type(self).__name__}.{how} with all-NA "
+                    "values, or any-NA and skipna=False, is deprecated. In a future "
+                    "version this will raise ValueError",
+                    FutureWarning,
+                    stacklevel=find_stack_level(),
+                )
+
+        return result
+[/REPLACE]

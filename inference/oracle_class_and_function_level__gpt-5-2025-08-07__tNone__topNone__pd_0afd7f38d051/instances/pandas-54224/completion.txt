@@ -1,0 +1,39 @@
+pandas/core/frame.py
+[SEARCH]
+                # We have other EAs with the same dtype. We preserve dtype in transpose.
+                dtyp = dtypes[0]
+                arr_typ = dtyp.construct_array_type()
+                values = self.values
+                new_values = [arr_typ._from_sequence(row, dtype=dtyp) for row in values]
+[/SEARCH]
+[REPLACE]
+                # We have other EAs with the same dtype. We preserve dtype in transpose.
+                dtyp = dtypes[0]
+                # Special-case for Arrow-backed dtype to avoid materializing to numpy
+                try:
+                    from pandas.core.arrays.arrow.dtype import ArrowDtype as _ArrowDtype  # type: ignore
+                except Exception:
+                    _ArrowDtype = None  # type: ignore[assignment]
+                if _ArrowDtype is not None and isinstance(dtyp, _ArrowDtype):
+                    # gather the column arrays directly (they are ArrowExtensionArray)
+                    if isinstance(self._mgr, ArrayManager):
+                        _arrays = self._mgr.arrays
+                    else:
+                        _arrays = list(self._iter_column_arrays())
+                    try:
+                        from pandas.core.arrays.arrow.array import (
+                            transpose_homogeneous_pyarrow,
+                        )
+                        new_values = transpose_homogeneous_pyarrow(_arrays)  # type: ignore[arg-type]
+                    except Exception:
+                        # Fallback to generic construction if pyarrow path unavailable
+                        arr_typ = dtyp.construct_array_type()
+                        values = self.values
+                        new_values = [
+                            arr_typ._from_sequence(row, dtype=dtyp) for row in values
+                        ]
+                else:
+                    arr_typ = dtyp.construct_array_type()
+                    values = self.values
+                    new_values = [arr_typ._from_sequence(row, dtype=dtyp) for row in values]
+[/REPLACE]

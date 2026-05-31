@@ -1,0 +1,118 @@
+
+
+Looking at the code, I need to optimize `Index._join_monotonic` to return the input index directly when the result matches an input, preserving cached attributes.
+
+Let me find the exact location:
+</think>
+
+pandas/core/indexes/base.py
+[SEARCH]
+    @final
+    def _join_monotonic(
+        self, other: Index, how: JoinHow = "left"
+    ) -> tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        # We only get here with (caller is responsible for ensuring):
+        #  1) matching dtypes
+        #  2) both monotonic increasing
+        #  3) other.is_unique or self.is_unique
+        assert other.dtype == self.dtype
+        assert self._can_use_libjoin and other._can_use_libjoin
+
+        if self.equals(other):
+            # This is a convenient place for this check, but its correctness
+            #  does not depend on monotonicity, so it could go earlier
+            #  in the calling method.
+            ret_index = other if how == "right" else self
+            return ret_index, None, None
+
+        ridx: npt.NDArray[np.intp] | None
+        lidx: npt.NDArray[np.intp] | None
+
+        if how == "left":
+            if other.is_unique:
+                # We can perform much better than the general case
+                join_index = self
+                lidx = None
+                ridx = self._left_indexer_unique(other)
+            else:
+                join_array, lidx, ridx = self._left_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx, how)
+        elif how == "right":
+            if self.is_unique:
+                # We can perform much better than the general case
+                join_index = other
+                lidx = other._left_indexer_unique(self)
+                ridx = None
+            else:
+                join_array, ridx, lidx = other._left_indexer(self)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx, how)
+        elif how == "inner":
+            join_array, lidx, ridx = self._inner_indexer(other)
+            join_index = self._wrap_joined_index(join_array, other, lidx, ridx, how)
+        elif how == "outer":
+            join_array, lidx, ridx = self._outer_indexer(other)
+            join_index = self._wrap_joined_index(join_array, other, lidx, ridx, how)
+
+        lidx = None if lidx is None else ensure_platform_int(lidx)
+        ridx = None if ridx is None else ensure_platform_int(ridx)
+        return join_index, lidx, ridx
+[/SEARCH]
+[REPLACE]
+    @final
+    def _join_monotonic(
+        self, other: Index, how: JoinHow = "left"
+    ) -> tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        # We only get here with (caller is responsible for ensuring):
+        #  1) matching dtypes
+        #  2) both monotonic increasing
+        #  3) other.is_unique or self.is_unique
+        assert other.dtype == self.dtype
+        assert self._can_use_libjoin and other._can_use_libjoin
+
+        if self.equals(other):
+            # This is a convenient place for this check, but its correctness
+            #  does not depend on monotonicity, so it could go earlier
+            #  in the calling method.
+            ret_index = other if how == "right" else self
+            return ret_index, None, None
+
+        ridx: npt.NDArray[np.intp] | None
+        lidx: npt.NDArray[np.intp] | None
+
+        if how == "left":
+            if other.is_unique:
+                # We can perform much better than the general case
+                join_index = self
+                lidx = None
+                ridx = self._left_indexer_unique(other)
+            else:
+                join_array, lidx, ridx = self._left_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx, how)
+        elif how == "right":
+            if self.is_unique:
+                # We can perform much better than the general case
+                join_index = other
+                lidx = other._left_indexer_unique(self)
+                ridx = None
+            else:
+                join_array, ridx, lidx = other._left_indexer(self)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx, how)
+        elif how == "inner":
+            join_array, lidx, ridx = self._inner_indexer(other)
+            join_index = self._wrap_joined_index(join_array, other, lidx, ridx, how)
+        elif how == "outer":
+            join_array, lidx, ridx = self._outer_indexer(other)
+            join_index = self._wrap_joined_index(join_array, other, lidx, ridx, how)
+
+        lidx = None if lidx is None else ensure_platform_int(lidx)
+        ridx = None if ridx is None else ensure_platform_int(ridx)
+
+        # Optimization: if join_index matches an input, return the input directly
+        # to preserve cached attributes (like _engine cache)
+        if lidx is None:
+            return join_index, None, ridx
+        elif ridx is None:
+            return join_index, lidx, None
+        else:
+            return join_index, lidx, ridx
+[/REPLACE]

@@ -1,0 +1,40 @@
+
+
+Looking at the code, the main optimization opportunity for datetime-like columns is in the `_factorize_keys` and `_convert_arrays_and_get_rizer_klass` functions. Currently, datetime-like columns fall through to `ObjectFactorizer` which is slow because it uses object comparison. However, datetime columns internally use int64 representation, so we can leverage the existing fast int64 factorizers.
+
+Let me implement the optimization:
+
+pandas/core/reshape/merge.py
+[SEARCH]
+    if isinstance(lk.dtype, DatetimeTZDtype) and isinstance(rk.dtype, DatetimeTZDtype):
+        # Extract the ndarray (UTC-localized) values
+        # Note: we dont need the dtypes to match, as these can still be compared
+        lk, rk = cast("DatetimeArray", lk)._ensure_matching_resos(rk)
+        lk = cast("DatetimeArray", lk)._ndarray
+        rk = cast("DatetimeArray", rk)._ndarray
+
+    elif (
+        isinstance(lk.dtype, CategoricalDtype)
+        and isinstance(rk.dtype, CategoricalDtype)
+        and lk.dtype == rk.dtype
+    ):
+[/SEARCH]
+[REPLACE]
+    if isinstance(lk.dtype, DatetimeTZDtype) and isinstance(rk.dtype, DatetimeTZDtype):
+        # Extract the ndarray (UTC-localized) values
+        # Note: we dont need the dtypes to match, as these can still be compared
+        lk, rk = cast("DatetimeArray", lk)._ensure_matching_resos(rk)
+        lk = cast("DatetimeArray", lk)._ndarray
+        rk = cast("DatetimeArray", rk)._ndarray
+
+    elif lk.dtype.kind == "M" and rk.dtype.kind == "M":
+        # datetime-like: use int64 representation for faster factorization
+        lk = np.asarray(lk, dtype="i8")
+        rk = np.asarray(rk, dtype="i8")
+
+    elif (
+        isinstance(lk.dtype, CategoricalDtype)
+        and isinstance(rk.dtype, CategoricalDtype)
+        and lk.dtype == rk.dtype
+    ):
+[/REPLACE]

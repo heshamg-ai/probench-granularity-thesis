@@ -1,0 +1,31 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+    __invert__ = make_invalid_op("__invert__")
+[/SEARCH]
+[REPLACE]
+    __invert__ = make_invalid_op("__invert__")
+
+    def memory_usage(self, deep: bool = False) -> int:
+        # Optimized specialized implementation for MultiIndex to avoid generic overhead
+        objsize = 24  # Fallback for implementations with no useful getsizeof (e.g., PyPy)
+        # Sum memory usage of levels (includes each level's engine hashtable)
+        level_nbytes = 0
+        if deep:
+            for lev in self.levels:
+                level_nbytes += lev.memory_usage(deep=True)
+        else:
+            for lev in self.levels:
+                level_nbytes += lev.memory_usage(deep=False)
+        # Sum memory usage of codes (integer ndarrays)
+        label_nbytes = 0
+        for arr in self.codes:
+            label_nbytes += arr.nbytes
+        # Account for names objects
+        names_nbytes = 0
+        for name in self.names:
+            names_nbytes += getsizeof(name, objsize)
+        result = level_nbytes + label_nbytes + names_nbytes
+        # Include our engine hashtable
+        result += self._engine.sizeof(deep=deep)
+        return result
+[/REPLACE]

@@ -1,0 +1,45 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        result_data = []
+        for lst in split.to_pylist():
+            if lst is None:
+                result_data.append([False] * len(uniques_sorted))
+            else:
+                res = pc.is_in(uniques_sorted, pa.array(set(lst)))
+                result_data.append(res.to_pylist())
+        result = type(self)(pa.array(result_data))
+        return result, uniques_sorted.to_pylist()
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        
+        # Convert unique values to a dictionary for fast hash lookup
+        # and avoid repeated python object conversions
+        uniques_pylist = uniques_sorted.to_pylist()
+        unique_indices = {val: i for i, val in enumerate(uniques_pylist)}
+        n_uniques = len(uniques_pylist)
+        
+        # Build boolean matrix as a list of lists, then create pyarrow array
+        # This avoids repeated pyarrow scalar operations in the loop
+        result_data = []
+        for lst in split.to_pylist():
+            if lst is None:
+                result_data.append([False] * n_uniques)
+            else:
+                row = [False] * n_uniques
+                for val in lst:
+                    idx = unique_indices.get(val)
+                    if idx is not None:
+                        row[idx] = True
+                result_data.append(row)
+        
+        result = type(self)(pa.array(result_data))
+        return result, uniques_pylist
+[/REPLACE]

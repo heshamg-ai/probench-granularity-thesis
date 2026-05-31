@@ -1,0 +1,76 @@
+sklearn/neighbors/_nearest_centroid.py
+[SEARCH]
+    def predict(self, X):
+        """Perform classification on an array of test vectors `X`.
+
+        The predicted class `C` for each sample in `X` is returned.
+
+        Parameters
+        ----------
+        X : {array-like, sparse matrix} of shape (n_samples, n_features)
+            Test samples.
+
+        Returns
+        -------
+        C : ndarray of shape (n_samples,)
+            The predicted classes.
+
+        Notes
+        -----
+        If the metric constructor parameter is `"precomputed"`, `X` is assumed
+        to be the distance matrix between the data to be predicted and
+        `self.centroids_`.
+        """
+        check_is_fitted(self)
+
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        return self.classes_[
+            pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)
+        ]
+[/SEARCH]
+[REPLACE]
+    def predict(self, X):
+        """Perform classification on an array of test vectors `X`.
+
+        The predicted class `C` for each sample in `X` is returned.
+
+        Parameters
+        ----------
+        X : {array-like, sparse matrix} of shape (n_samples, n_features)
+            Test samples.
+
+        Returns
+        -------
+        C : ndarray of shape (n_samples,)
+            The predicted classes.
+
+        Notes
+        -----
+        If the metric constructor parameter is `"precomputed"`, `X` is assumed
+        to be the distance matrix between the data to be predicted and
+        `self.centroids_`.
+        """
+        check_is_fitted(self)
+
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        # For euclidean metric, use an optimized closed-form expression
+        # that avoids computing the full pairwise distance matrix in memory.
+        if self.metric == "euclidean":
+            # Compute squared Euclidean distances: ||X||^2 - 2 X·C^T + ||C||^2
+            X_sq = np.einsum('ij,ij->i', X, X) if not sp.issparse(X) else \
+                   np.asarray((X.power(2)).sum(axis=1)).ravel()
+            C_sq = np.einsum('ij,ij->i', self.centroids_, self.centroids_)
+            # X·C^T
+            XC = X @ self.centroids_.T if not sp.issparse(X) else \
+                 X @ self.centroids_.T
+            if sp.issparse(X):
+                XC = XC.toarray()
+            distances = X_sq[:, np.newaxis] - 2 * XC + C_sq[np.newaxis, :]
+            # Avoid numerical errors producing small negative values
+            np.maximum(distances, 0, out=distances)
+            return self.classes_[distances.argmin(axis=1)]
+        else:
+            return self.classes_[
+                pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)
+            ]
+[/REPLACE]

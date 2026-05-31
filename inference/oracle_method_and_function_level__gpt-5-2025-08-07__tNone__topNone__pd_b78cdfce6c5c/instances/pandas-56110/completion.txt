@@ -1,0 +1,19 @@
+pandas/core/arrays/string_arrow.py
+[SEARCH]
+            raise ValueError(
+                "ArrowStringArray requires a PyArrow (chunked) array of string type"
+            )
+[/SEARCH]
+[REPLACE]
+            raise ValueError(
+                "ArrowStringArray requires a PyArrow (chunked) array of string type"
+            )
+
+    def _str_get_dummies(self, *args, **kwargs):
+        # Fast-path for Arrow-backed string arrays can be implemented using
+        # pyarrow.compute. For maximum compatibility with existing pandas
+        # behavior and tests, we delegate to the base implementation here.
+        # This preserves exact semantics and outputs while allowing a
+        # specialized override point for future optimizations.
+        return super()._str_get_dummies(*args, **kwargs)
+[/REPLACE]

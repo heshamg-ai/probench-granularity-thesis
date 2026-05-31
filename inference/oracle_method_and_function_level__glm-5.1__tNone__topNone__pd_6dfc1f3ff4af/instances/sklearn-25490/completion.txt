@@ -1,0 +1,60 @@
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+    def _minibatch_step(self, X, dictionary, random_state, step):
+        """Perform the update on the dictionary for one minibatch."""
+        batch_size = X.shape[0]
+
+        # Compute code for this batch
+        code = sparse_encode(
+            X,
+            dictionary,
+            algorithm=self._fit_algorithm,
+            alpha=self.alpha,
+            n_jobs=self.n_jobs,
+            check_input=False,
+            positive=self.positive_code,
+            max_iter=self.transform_max_iter,
+            verbose=self.verbose,
+        )
+
+        batch_cost = (
+            0.5 * ((X - code @ dictionary) ** 2).sum()
+            + self.alpha * np.sum(np.abs(code))
+        ) / batch_size
+[/SEARCH]
+[REPLACE]
+    def _minibatch_step(self, X, dictionary, random_state, step):
+        """Perform the update on the dictionary for one minibatch."""
+        batch_size = X.shape[0]
+
+        # Precompute Gram matrix and covariance for the batch
+        gram = np.dot(dictionary, dictionary.T)
+        cov = np.dot(dictionary, X.T)
+
+        # Compute code for this batch
+        code = sparse_encode(
+            X,
+            dictionary,
+            gram=gram,
+            cov=cov,
+            algorithm=self._fit_algorithm,
+            alpha=self.alpha,
+            n_jobs=self.n_jobs,
+            check_input=False,
+            positive=self.positive_code,
+            max_iter=self.transform_max_iter,
+            verbose=self.verbose,
+        )
+
+        # Compute cost efficiently using precomputed cov and Gram matrix
+        # ||X - code @ dict||^2 = tr(X.T @ X) - 2 * tr(code @ cov.T) + tr(code @ Gram @ code.T)
+        # and alpha * ||code||_1
+        batch_cost = (
+            0.5 * (
+                np.sum(X ** 2)
+                - 2.0 * np.sum(code * cov.T)
+                + np.sum((code @ gram) * code)
+            )
+            + self.alpha * np.sum(np.abs(code))
+        ) / batch_size
+[/REPLACE]

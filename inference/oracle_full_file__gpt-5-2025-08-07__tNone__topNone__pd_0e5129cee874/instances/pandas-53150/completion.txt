@@ -1,0 +1,54 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        if (pa.types.is_string(pa_type) or pa.types.is_binary(pa_type)) and op in [
+            operator.add,
+            roperator.radd,
+        ]:
+            length = self._pa_array.length()
+
+            seps: list[str] | list[bytes]
+            if pa.types.is_string(pa_type):
+                seps = [""] * length
+            else:
+                seps = [b""] * length
+
+            if is_scalar(other):
+                other = [other] * length
+            elif isinstance(other, type(self)):
+                other = other._pa_array
+            if op is operator.add:
+                result = pc.binary_join_element_wise(self._pa_array, other, seps)
+            else:
+                result = pc.binary_join_element_wise(other, self._pa_array, seps)
+            return type(self)(result)
+[/SEARCH]
+[REPLACE]
+        if (pa.types.is_string(pa_type) or pa.types.is_binary(pa_type)) and op in [
+            operator.add,
+            roperator.radd,
+        ]:
+            # Use scalar separator and Arrow scalars/arrays to avoid large Python lists
+            sep = pa.scalar("" if pa.types.is_string(pa_type) else b"", type=pa_type)
+
+            if isinstance(other, type(self)):
+                other_pa = other._pa_array
+            elif isinstance(other, (np.ndarray, list)):
+                other_pa = pa.array(other, from_pandas=True)
+            elif isinstance(other, BaseMaskedArray):
+                other_pa = other.__arrow_array__()
+            elif is_scalar(other):
+                if isna(other):
+                    other_pa = pa.scalar(None, type=pa_type)
+                else:
+                    other_pa = pa.scalar(other)
+            else:
+                raise NotImplementedError(
+                    f"{op.__name__} not implemented for {type(other)}"
+                )
+
+            if op is operator.add:
+                result = pc.binary_join_element_wise(self._pa_array, other_pa, sep)
+            else:
+                result = pc.binary_join_element_wise(other_pa, self._pa_array, sep)
+            return type(self)(result)
+[/REPLACE]

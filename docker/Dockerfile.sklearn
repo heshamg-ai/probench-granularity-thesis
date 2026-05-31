@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2025, Siemens AG
+
+FROM python:3.10.8
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential git && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --upgrade \
+      scipy==1.15.3 \
+      psutil==7.2.2 \
+      codecarbon==3.2.2 \
+      pytest-json-report==1.5.0 \
+      PyYAML==6.0.3 \
+      pytest-cov==7.0.0 \
+      coverage==7.13.4
+
+ARG REPO_URL
+ARG SHA
+ARG PR_NUMBER
+ARG VARIANT
+ENV LIB_NAME=sklearn
+ENV REPO_DIR=/repos/${LIB_NAME}
+
+RUN git clone --filter=blob:none ${REPO_URL} ${REPO_DIR}
+
+WORKDIR ${REPO_DIR}
+
+RUN git fetch origin pull/${PR_NUMBER}/head:refs/remotes/origin/pr/${PR_NUMBER} && \
+    git checkout ${SHA}
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    COMMIT_DATE=$(git show -s --format=%ci ${SHA} | cut -d' ' -f1) && \
+    echo "[INFO] Commit date: $COMMIT_DATE" && \
+    echo "[INFO] Commit SHA: ${SHA}" && \
+    if [ "$COMMIT_DATE" \< "2024-01-31" ]; then \
+        echo "[INFO] Installing OLD deps (cython==0.29.33, numpy<2.0)" && \
+        pip install "numpy<2.0" "cython==0.29.33"; \
+    else \
+        echo "[INFO] Installing NEW deps (cython>=3.0.10, numpy>=1.25, meson)" && \
+        pip install "numpy>=1.25,<3.0" "cython>=3.0.10" meson-python ninja; \
+    fi
+
+RUN python -m pip uninstall -y ${LIB_NAME} || true
+
+RUN COMMIT_DATE=$(git show -s --format=%ci ${SHA} | cut -d' ' -f1) && \
+    if [ "$COMMIT_DATE" \< "2024-01-31" ]; then \
+        echo "[INFO] Using setuptools install with --no-build-isolation" && \
+        python -m pip install -e . --no-build-isolation; \
+    else \
+        echo "[INFO] Using meson-python install with --no-build-isolation" && \
+        python -m pip install -ve . --no-build-isolation --config-settings editable-verbose=true; \
+    fi
+
+WORKDIR /app
+
+LABEL repo_url=${REPO_URL} \
+      library=${LIB_NAME} \
+      pr_number=${PR_NUMBER} \
+      variant=${VARIANT} \
+      sha=${SHA}
+
+CMD ["bash"]

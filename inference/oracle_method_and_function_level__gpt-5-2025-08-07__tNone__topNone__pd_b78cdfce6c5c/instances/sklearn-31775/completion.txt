@@ -1,0 +1,98 @@
+sklearn/utils/stats.py
+[SEARCH]
+def _averaged_weighted_percentile(array, sample_weight, percentile_rank=50, xp=None):
+    return (
+        _weighted_percentile(array, sample_weight, percentile_rank, xp=xp)
+        - _weighted_percentile(-array, sample_weight, 100 - percentile_rank, xp=xp)
+    ) / 2
+[/SEARCH]
+[REPLACE]
+def _averaged_weighted_percentile(array, sample_weight, percentile_rank=50, xp=None):
+    xp, _, device = get_namespace_and_device(array)
+    # `sample_weight` should follow `array` for dtypes
+    floating_dtype = _find_matching_floating_dtype(array, xp=xp)
+    array = xp.asarray(array, dtype=floating_dtype, device=device)
+    sample_weight = xp.asarray(sample_weight, dtype=floating_dtype, device=device)
+
+    n_dim = array.ndim
+    if n_dim == 0:
+        return array
+    if array.ndim == 1:
+        array = xp.reshape(array, (-1, 1))
+    # When sample_weight 1D, repeat for each array.shape[1]
+    if array.shape != sample_weight.shape and array.shape[0] == sample_weight.shape[0]:
+        sample_weight = xp.tile(sample_weight, (array.shape[1], 1)).T
+
+    # Sort `array` and `sample_weight` along axis=0:
+    sorted_idx = xp.argsort(array, axis=0)
+    sorted_weights = xp.take_along_axis(sample_weight, sorted_idx, axis=0)
+
+    # Set NaN values in `sample_weight` to 0. Only perform this operation if NaN
+    # values present to avoid temporary allocations of size `(n_samples, n_features)`.
+    n_features = array.shape[1]
+    largest_value_per_column = array[
+        sorted_idx[-1, ...], xp.arange(n_features, device=device)
+    ]
+    # NaN values get sorted to end (largest value)
+    if xp.any(xp.isnan(largest_value_per_column)):
+        sorted_nan_mask = xp.take_along_axis(xp.isnan(array), sorted_idx, axis=0)
+        sorted_weights[sorted_nan_mask] = 0
+
+    # Compute the weighted cumulative distribution function (CDF) based on weights.
+    # Transpose so that rows are features for contiguous memory in searchsorted calls.
+    weight_cdf = xp.cumulative_sum(sorted_weights.T, axis=1)
+    totals = weight_cdf[..., -1]
+    q = percentile_rank / 100
+
+    # Left threshold for inverted CDF on x
+    left_threshold = q * totals
+    # Ignore leading `sample_weight=0` observations when `percentile_rank=0` (#20528)
+    mask_left_zero = left_threshold == 0
+    left_threshold[mask_left_zero] = xp.nextafter(
+        left_threshold[mask_left_zero], left_threshold[mask_left_zero] + 1
+    )
+
+    # Right counterpart threshold derived from -array with percentile 100 - p.
+    # When p == 100, emulate nextafter(0, +1) on the complementary domain by
+    # taking the previous float below totals to avoid trailing zero-weight plateaus.
+    if percentile_rank == 100:
+        right_threshold = xp.nextafter(totals, totals - 1)
+    else:
+        right_threshold = q * totals
+
+    # For each feature with index j, find indices:
+    # left_indices[j]  = min i s.t. weight_cdf[j, i] >= left_threshold[j]
+    # right_indices[j] = max i s.t. weight_cdf[j, i] <= right_threshold[j]
+    left_indices = xp.stack(
+        [
+            xp.searchsorted(weight_cdf[feature_idx, ...], left_threshold[feature_idx])
+            for feature_idx in range(weight_cdf.shape[0])
+        ],
+    )
+    right_indices = xp.stack(
+        [
+            xp.searchsorted(
+                weight_cdf[feature_idx, ...],
+                right_threshold[feature_idx],
+                side="right",
+            )
+            for feature_idx in range(weight_cdf.shape[0])
+        ],
+    ) - 1
+
+    # Clip indices to valid range
+    max_idx = sorted_idx.shape[0] - 1
+    left_indices = xp.clip(left_indices, 0, max_idx)
+    right_indices = xp.clip(right_indices, 0, max_idx)
+
+    col_indices = xp.arange(array.shape[1], device=device)
+    left_in_sorted = sorted_idx[left_indices, col_indices]
+    right_in_sorted = sorted_idx[right_indices, col_indices]
+
+    left_values = array[left_in_sorted, col_indices]
+    right_values = array[right_in_sorted, col_indices]
+
+    result = (left_values + right_values) / 2
+
+    return result[0] if n_dim == 1 else result
+[/REPLACE]

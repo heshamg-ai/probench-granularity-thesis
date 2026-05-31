@@ -1,0 +1,83 @@
+ sklearn/metrics/_classification.py
+[SEARCH]
+    n_labels = labels.size
+    label_to_ind = {y: x for x, y in enumerate(labels)}
+    # convert yt, yp into index
+    y_pred = np.array([label_to_ind.get(x, n_labels + 1) for x in y_pred])
+    y_true = np.array([label_to_ind.get(x, n_labels + 1) for x in y_true])
+    # intersect y_pred, y_true with labels, eliminate items not in labels
+    ind = np.logical_and(y_pred < n_labels, y_true < n_labels)
+    y_pred = y_pred[ind]
+    y_true = y_true[ind]
+    # also eliminate weights of eliminated items
+    sample_weight = sample_weight[ind]
+    # Choose the accumulator dtype to always have high precision
+    if sample_weight.dtype.kind in {'i', 'u', 'b'}:
+        dtype = np.int64
+    else:
+        dtype = np.float64
+    cm = coo_matrix((sample_weight, (y_true, y_pred)), shape=(n_labels, n_labels),
+                    dtype=dtype,
+                    ).toarray()
+[/SEARCH]
+[REPLACE]
+    n_labels = labels.size
+    # Choose the accumulator dtype to always have high precision
+    if sample_weight.dtype.kind in {'i', 'u', 'b'}:
+        dtype = np.int64
+    else:
+        dtype = np.float64
+    # Fast path for integral labels: use np.searchsorted for O(n log n) mapping
+    # instead of Python dict comprehension and list comprehension which are O(n)
+    # but have significant Python overhead
+    if labels.dtype.kind in {'i', 'u'}:
+        # For integral types, we can use searchsorted on sorted labels
+        # This avoids Python dict and list overhead
+        labels_sorted = np.sort(labels)
+        # Check if labels are already contiguous and start near 0 for even faster path
+        if (labels_sorted.size > 0 and
+                labels_sorted[-1] - labels_sorted[0] == n_labels - 1 and
+                np.all(np.diff(labels_sorted) == 1)):
+            # Labels are contiguous integers, use direct offset
+            offset = labels_sorted[0]
+            y_pred_mapped = y_pred - offset
+            y_true_mapped = y_true - offset
+            ind = np.logical_and(y_pred_mapped >= 0, y_pred_mapped < n_labels)
+            ind &= np.logical_and(y_true_mapped >= 0, y_true_mapped < n_labels)
+            y_pred = y_pred_mapped[ind]
+            y_true = y_true_mapped[ind]
+            sample_weight = sample_weight[ind]
+        else:
+            # Use searchsorted for non-contiguous integral labels
+            y_pred_mapped = np.searchsorted(labels_sorted, y_pred)
+            y_true_mapped = np.searchsorted(labels_sorted, y_true)
+            # Verify matches (searchsorted gives insertion point, not exact match)
+            # Clamp to valid range first
+            y_pred_mapped = np.clip(y_pred_mapped, 0, n_labels - 1)
+            y_true_mapped = np.clip(y_true_mapped, 0, n_labels - 1)
+            pred_match = labels_sorted[y_pred_mapped] == y_pred
+            true_match = labels_sorted[y_true_mapped] == y_true
+            ind = pred_match & true_match
+            y_pred = y_pred_mapped[ind]
+            y_true = y_true_mapped[ind]
+            sample_weight = sample_weight[ind]
+        # Count directly with np.add.at for dense arrays
+        # This avoids sparse matrix overhead for typically dense confusion matrices
+        cm = np.zeros((n_labels, n_labels), dtype=dtype)
+        if sample_weight.size > 0:
+            np.add.at(cm, (y_true, y_pred), sample_weight)
+    else:
+        label_to_ind = {y: x for x, y in enumerate(labels)}
+        # convert yt, yp into index
+        y_pred = np.array([label_to_ind.get(x, n_labels + 1) for x in y_pred])
+        y_true = np.array([label_to_ind.get(x, n_labels + 1) for x in y_true])
+        # intersect y_pred, y_true with labels, eliminate items not in labels
+        ind = np.logical_and(y_pred < n_labels, y_true < n_labels)
+        y_pred = y_pred[ind]
+        y_true = y_true[ind]
+        # also eliminate weights of eliminated items
+        sample_weight = sample_weight[ind]
+        cm = coo_matrix((sample_weight, (y_true, y_pred)), shape=(n_labels, n_labels),
+                        dtype=dtype,
+                        ).toarray()
+[/REPLACE]

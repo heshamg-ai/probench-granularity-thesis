@@ -1,0 +1,43 @@
+
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        fill_value = convert_fill_value(value, self._pa_array.type, self.dtype)
+
+        try:
+            if method is None:
+                return type(self)(pc.fill_null(self._pa_array, fill_value=fill_value))
+            elif method == "pad":
+                return type(self)(pc.fill_null_forward(self._pa_array))
+            elif method == "backfill":
+                return type(self)(pc.fill_null_backward(self._pa_array))
+        except pa.ArrowNotImplementedError:
+            # ArrowNotImplementedError: Function 'coalesce' has no kernel
+            #   matching input types (duration[ns], duration[ns])
+            # TODO: remove try/except wrapper if/when pyarrow implements
+            #   a kernel for duration types.
+            pass
+
+        return super().fillna(value=value, method=method, limit=limit)
+[/SEARCH]
+[REPLACE]
+        fill_value = convert_fill_value(value, self._pa_array.type, self.dtype)
+
+        try:
+            if method is None:
+                if self._pa_array.null_count == 0:
+                    return self
+                return type(self)(pc.fill_null(self._pa_array, fill_value=fill_value))
+            elif method == "pad":
+                return type(self)(pc.fill_null_forward(self._pa_array))
+            elif method == "backfill":
+                return type(self)(pc.fill_null_backward(self._pa_array))
+        except pa.ArrowNotImplementedError:
+            # ArrowNotImplementedError: Function 'coalesce' has no kernel
+            #   matching input types (duration[ns], duration[ns])
+            # TODO: remove try/except wrapper if/when pyarrow implements
+            #   a kernel for duration types.
+            pass
+
+        return super().fillna(value=value, method=method, limit=limit)
+[/REPLACE]

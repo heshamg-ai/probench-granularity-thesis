@@ -1,0 +1,122 @@
+ pandas/core/indexes/range.py
+[SEARCH]
+    @doc(Index._shallow_copy)
+    def _shallow_copy(self, values, name: Hashable = no_default):
+        name = self._name if name is no_default else name
+        if values.dtype.kind == "f":
+            return Index(values, name=name, dtype=np.float64)
+
+        # GH 46675 & 43885: If values is equally spaced, return a
+        # more memory-compact RangeIndex instead of Index with 64-bit dtype
+        unique_diffs = unique_deltas(values)
+        if len(unique_diffs) == 1 and unique_diffs[0] != 0:
+            diff = unique_diffs[0]
+            new_range = range(values[0], values[-1] + diff, diff)
+            return type(self)._simple_new(new_range, name=name)
+        else:
+            return self._constructor._simple_new(values, name=name)
+[/SEARCH]
+[REPLACE]
+    @doc(Index._shallow_copy)
+    def _shallow_copy(self, values, name: Hashable = no_default):
+        name = self._name if name is no_default else name
+        if values.dtype.kind == "f":
+            return Index(values, name=name, dtype=np.float64)
+
+        # GH 46675 & 43885: If values is equally spaced, return a
+        # more memory-compact RangeIndex instead of Index with 64-bit dtype
+        unique_diffs = unique_deltas(values)
+        if len(unique_diffs) == 1 and unique_diffs[0] != 0:
+            diff = unique_diffs[0]
+            new_range = range(values[0], values[-1] + diff, diff)
+            return type(self)._simple_new(new_range, name=name)
+        else:
+            return self._constructor._simple_new(values, name=name)
+
+    def take(
+        self,
+        indices,
+        axis: Axis = 0,
+        allow_fill: bool = True,
+        fill_value=None,
+        **kwargs,
+    ):
+        """
+        Return a new RangeIndex of the values selected by the indices.
+
+        For internal compatibility with numpy arrays.
+
+        Parameters
+        ----------
+        indices : array-like
+            Indices to be taken.
+        axis : int, optional
+            The axis over which to select values, always 0.
+        allow_fill : bool, default True
+        fill_value : scalar, default None
+            If allow_fill=True and fill_value is not None, indices specified by -1
+            are regarded as NA. If Index doesn't hold NA, raise ValueError.
+
+        Returns
+        -------
+        Index
+            An index formed of elements at the given indices. Will be the same
+            type as self, except for RangeIndex.
+
+        See Also
+        --------
+        numpy.ndarray.take: Return an array formed from the elements of a at
+            the given indices.
+
+        Examples
+        --------
+        >>> idx = pd.RangeIndex(5)
+        >>> idx.take([2, 2, 1, 2])
+        Index([2, 2, 1, 2], dtype='int64')
+        """
+        if kwargs:
+            nv.validate_take((), kwargs)
+
+        if is_scalar(indices):
+            raise TypeError("Expected indices to be array-like")
+
+        indices = ensure_platform_int(indices)
+
+        # Fast path: if indices are evenly spaced with consistent step, return RangeIndex
+        if len(indices) > 1 and allow_fill and fill_value is None:
+            indices_arr = np.asarray(indices)
+            # Check if indices are monotonic (either increasing or decreasing)
+            if len(indices_arr) > 1:
+                diffs = np.diff(indices_arr)
+                if len(set(diffs)) == 1:
+                    diff = diffs[0]
+                    if diff != 0:
+                        # Check if the selected values would form a valid range
+                        start_idx = indices_arr[0]
+                        stop_idx = indices_arr[-1] + diff
+                        
+                        # Verify indices are within bounds and valid
+                        if diff > 0:
+                            valid = (indices_arr >= 0) & (indices_arr < len(self))
+                        else:
+                            valid = (indices_arr >= 0) & (indices_arr < len(self))
+                        
+                        if valid.all():
+                            # Compute the actual values
+                            start_val = self[start_idx]
+                            step_val = self.step * diff
+                            stop_val = start_val + len(indices_arr) * step_val
+                            
+                            # Only return RangeIndex if step is consistent and values are valid
+                            if step_val != 0:
+                                new_range = range(start_val, stop_val, step_val)
+                                return type(self)._simple_new(new_range, name=self.name)
+
+        # Fall back to parent implementation
+        return super().take(
+            indices,
+            axis=axis,
+            allow_fill=allow_fill,
+            fill_value=fill_value,
+        )
+[/REPLACE]

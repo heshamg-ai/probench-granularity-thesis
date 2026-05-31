@@ -1,0 +1,97 @@
+ pandas/core/arrays/arrow/array.py
+[SEARCH]
+    @doc(ExtensionArray.to_numpy)
+    def to_numpy(
+        self,
+        dtype: npt.DTypeLike | None = None,
+        copy: bool = False,
+        na_value: object = lib.no_default,
+    ) -> np.ndarray:
+        if dtype is None and self._hasna:
+            dtype = object
+        if na_value is lib.no_default:
+            na_value = self.dtype.na_value
+        pa_type = self._data.type
+        if (
+            is_object_dtype(dtype)
+            or pa.types.is_timestamp(pa_type)
+            or pa.types.is_duration(pa_type)
+        ):
+            result = np.array(list(self), dtype=dtype)
+        else:
+            result = np.asarray(self._data, dtype=dtype)
+        if copy or self._hasna:
+            result = result.copy()
+        if self._hasna:
+            result[self.isna()] = na_value
+        return result
+[/SEARCH]
+[REPLACE]
+    @doc(ExtensionArray.to_numpy)
+    def to_numpy(
+        self,
+        dtype: npt.DTypeLike | None = None,
+        copy: bool = False,
+        na_value: object = lib.no_default,
+    ) -> np.ndarray:
+        if dtype is None and self._hasna:
+            dtype = object
+        if na_value is lib.no_default:
+            na_value = self.dtype.na_value
+        pa_type = self._data.type
+        if (
+            is_object_dtype(dtype)
+            or pa.types.is_timestamp(pa_type)
+            or pa.types.is_duration(pa_type)
+        ):
+            result = self._to_numpy_object(dtype, na_value)
+        else:
+            result = np.asarray(self._data, dtype=dtype)
+            if copy or self._hasna:
+                result = result.copy()
+            if self._hasna:
+                result[self.isna()] = na_value
+        return result
+
+    def _to_numpy_object(
+        self, dtype: npt.DTypeLike, na_value: object
+    ) -> np.ndarray:
+        """
+        Convert to object dtype numpy array, replacing nulls with na_value.
+        This avoids the overhead of iterating Python scalars through __iter__.
+        """
+        # Compute total size and create flat result array
+        total_len = len(self._data)
+        result = np.empty(total_len, dtype=dtype)
+        if total_len == 0:
+            return result
+
+        na = self._dtype.na_value
+        pos = 0
+
+        for chunk in self._data.iterchunks():
+            chunk_len = len(chunk)
+            # Convert chunk to numpy - for most types this gives object array
+            # with None for nulls when using zero_copy_only=False
+            chunk_np = chunk.to_numpy(zero_copy_only=False)
+
+            # Chunk may be object array with None, or may be a primitive array
+            # if there were no nulls in this chunk. Handle both cases.
+            if chunk_np.dtype != object:
+                # Primitive array - convert to object
+                chunk_np = chunk_np.astype(object, copy=False)
+
+            # chunk_np is object dtype with None for nulls
+            # We need to replace None with na_value, and for non-None values
+            # we need to call as_py() to get proper Python scalars
+            for i in range(chunk_len):
+                val = chunk_np[i]
+                if val is None:
+                    result[pos + i] = na_value
+                else:
+                    result[pos + i] = val.as_py() if hasattr(val, 'as_py') else val
+
+            pos += chunk_len
+
+        return result
+[/REPLACE]

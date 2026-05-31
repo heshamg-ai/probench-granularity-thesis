@@ -1,0 +1,131 @@
+
+
+Looking at this optimization task, I need to optimize `DataFrame.join` for sorted joins (left join many:1 with right unique, and right join 1:many with left unique).
+
+Let me analyze the code to find where to make the optimization in the monotonic join path.
+
+pandas/core/indexes/base.py
+[SEARCH]
+        if (
+            self.is_monotonic_increasing
+            and other.is_monotonic_increasing
+            and self._can_use_libjoin
+            and other._can_use_libjoin
+            and (self.is_unique or other.is_unique)
+        ):
+            try:
+                return self._join_monotonic(other, how=how)
+            except TypeError:
+                # object dtype; non-comparable objects
+                pass
+        elif not self.is_unique or not other.is_unique:
+            return self._join_non_unique(other, how=how, sort=sort)
+
+        return self._join_via_get_indexer(other, how, sort)
+[/SEARCH]
+[REPLACE]
+        if (
+            self.is_monotonic_increasing
+            and other.is_monotonic_increasing
+            and self._can_use_libjoin
+            and other._can_use_libjoin
+            and (self.is_unique or other.is_unique)
+        ):
+            try:
+                return self._join_monotonic(other, how=how)
+            except TypeError:
+                # object dtype; non-comparable objects
+                pass
+        elif not self.is_unique or not other.is_unique:
+            return self._join_non_unique(other, how=how, sort=sort)
+
+        return self._join_via_get_indexer(other, how, sort)
+
+    @final
+    def _join_monotonic(
+        self, other: Index, how: JoinHow = "left"
+    ) -> tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        # We only get here with (caller is responsible for ensuring):
+        #  1) matching dtypes
+        #  2) both monotonic increasing
+        #  3) other.is_unique or self.is_unique
+        assert other.dtype == self.dtype
+        assert self._can_use_libjoin and other._can_use_libjoin
+
+        if self.equals(other):
+            # This is a convenient place for this check, but its correctness
+            #  does not depend on monotonicity, so it could go earlier
+            #  in the calling method.
+            ret_index = other if how == "right" else self
+            return ret_index, None, None
+
+        ridx: npt.NDArray[np.intp] | None
+        lidx: npt.NDArray[np.intp] | None
+
+        if self.is_unique and other.is_unique:
+            # We can perform much better than the general case
+            if how == "left":
+                join_index = self
+                lidx = None
+                ridx = self._left_indexer_unique(other)
+            elif how == "right":
+                join_index = other
+                lidx = other._left_indexer_unique(self)
+                ridx = None
+            elif how == "inner":
+                join_array, lidx, ridx = self._inner_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+            elif how == "outer":
+                join_array, lidx, ridx = self._outer_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+        elif other.is_unique:
+            # Right index is unique: left join benefits from this
+            # For left join with unique right, we only need to find
+            # the matching index for each left element
+            if how == "left":
+                join_index = self
+                lidx = None
+                ridx = self._left_indexer_unique(other)
+            elif how == "right":
+                join_array, ridx, lidx = other._left_indexer(self)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+            elif how == "inner":
+                join_array, lidx, ridx = self._inner_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+            elif how == "outer":
+                join_array, lidx, ridx = self._outer_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+        elif self.is_unique:
+            # Left index is unique: right join benefits from this
+            if how == "right":
+                join_index = other
+                lidx = other._left_indexer_unique(self)
+                ridx = None
+            elif how == "left":
+                join_array, lidx, ridx = self._left_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+            elif how == "inner":
+                join_array, lidx, ridx = self._inner_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+            elif how == "outer":
+                join_array, lidx, ridx = self._outer_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+        else:
+            if how == "left":
+                join_array, lidx, ridx = self._left_indexer(other)
+            elif how == "right":
+                join_array, ridx, lidx = other._left_indexer(self)
+            elif how == "inner":
+                join_array, lidx, ridx = self._inner_indexer(other)
+            elif how == "outer":
+                join_array, lidx, ridx = self._outer_indexer(other)
+
+            assert lidx is not None
+            assert ridx is not None
+
+            join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+
+        lidx = None if lidx is None else ensure_platform_int(lidx)
+        ridx = None if ridx is None else ensure_platform_int(ridx)
+        return join_index, lidx, ridx
+[/REPLACE]

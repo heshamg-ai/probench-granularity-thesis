@@ -1,0 +1,52 @@
+ pandas/core/arrays/masked.py
+[SEARCH]
+    _HANDLED_TYPES: tuple[type, ...]
+    _logical_method = _arith_method
+[/SEARCH]
+[REPLACE]
+    _HANDLED_TYPES: tuple[type, ...]
+    _logical_method = _arith_method
+
+    def _hash_pandas_object(
+        self,
+        *,
+        encoding: str,
+        hash_key: str,
+        categorize: bool,
+    ) -> npt.NDArray[np.uint64]:
+        """
+        Hash the masked array for use in pandas operations.
+
+        This hashes both the underlying data and the mask, combining them
+        to produce distinct hashes for NA and non-NA values.
+
+        Parameters
+        ----------
+        encoding : str
+            Encoding for data & key when strings.
+        hash_key : str
+            Hash_key for string key to encode.
+        categorize : bool
+            Whether to first categorize object arrays before hashing.
+
+        Returns
+        -------
+        np.ndarray[uint64]
+        """
+        from pandas.core.util.hashing import hash_array, hash_tuples
+
+        if self.isna().any():
+            return hash_tuples(
+                self,
+                encoding=encoding,
+                hash_key=hash_key,
+            )
+
+        result = hash_array(
+            self._data,
+            encoding=encoding,
+            hash_key=hash_key,
+            categorize=categorize,
+        )
+        return result
+[/REPLACE]

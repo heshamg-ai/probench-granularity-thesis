@@ -1,0 +1,225 @@
+pandas/core/frame.py
+[SEARCH]
+        def _dict_round(df: DataFrame, decimals):
+            for col, vals in df.items():
+                try:
+                    yield _series_round(vals, decimals[col])
+                except KeyError:
+                    yield vals
+
+        def _series_round(ser: Series, decimals: int) -> Series:
+            if is_integer_dtype(ser.dtype) or is_float_dtype(ser.dtype):
+                return ser.round(decimals)
+            return ser
+
+        nv.validate_round(args, kwargs)
+
+        if isinstance(decimals, (dict, Series)):
+            if isinstance(decimals, Series) and not decimals.index.is_unique:
+                raise ValueError("Index of decimals must be unique")
+            if is_dict_like(decimals) and not all(
+                is_integer(value) for _, value in decimals.items()
+            ):
+                raise TypeError("Values in decimals must be integers")
+            new_cols = list(_dict_round(self, decimals))
+        elif is_integer(decimals):
+            # Dispatch to Series.round
+            new_cols = [_series_round(v, decimals) for _, v in self.items()]
+        else:
+            raise TypeError("decimals must be an integer, a dict-like or a Series")
+
+        if len(new_cols) > 0:
+            return self._constructor(
+                concat(new_cols, axis=1), index=self.index, columns=self.columns
+            ).__finalize__(self, method="round")
+        else:
+            return self.copy(deep=False)
+[/SEARCH]
+[REPLACE]
+        nv.validate_round(args, kwargs)
+
+        if isinstance(decimals, (dict, Series)):
+            if isinstance(decimals, Series):
+                if not decimals.index.is_unique:
+                    raise ValueError("Index of decimals must be unique")
+                decimals = decimals.to_dict()
+            elif is_dict_like(decimals) and not all(
+                is_integer(value) for value in decimals.values()
+            ):
+                raise TypeError("Values in decimals must be integers")
+
+            # Fast path: delegate to block-level round with column-specific
+            # decimals via the per-block round method.
+            mgr = self._mgr
+            new_mgr = mgr.round(decimals)
+            return self._constructor_from_mgr(new_mgr, axes=new_mgr.axes).__finalize__(
+                self, method="round"
+            )
+
+        elif is_integer(decimals):
+            # Dispatch to block-level round for the uniform integer case.
+            mgr = self._mgr
+            new_mgr = mgr.round(decimals)
+            return self._constructor_from_mgr(new_mgr, axes=new_mgr.axes).__finalize__(
+                self, method="round"
+            )
+        else:
+            raise TypeError("decimals must be an integer, a dict-like or a Series")
+[/REPLACE]
+
+pandas/core/internals/managers.py
+[SEARCH]
+    __slots__ = ()
+    _blknos: npt.NDArray[np.intp]
+    _blklocs: npt.NDArray[np.intp]
+    blocks: tuple[Block, ...]
+    axes: list[Index]
+    _known_consolidated: bool
+    _is_consolidated: bool
+    __bool__ = __nonzero__
+[/SEARCH]
+[REPLACE]
+    __slots__ = ()
+    _blknos: npt.NDArray[np.intp]
+    _blklocs: npt.NDArray[np.intp]
+    blocks: tuple[Block, ...]
+    axes: list[Index]
+    _known_consolidated: bool
+    _is_consolidated: bool
+    __bool__ = __nonzero__
+
+    def round(self, decimals: int | dict) -> BaseBlockManager:
+        """Round numeric blocks in-place-like, returning a new manager."""
+        from pandas.core.internals.blocks import Block
+
+        if isinstance(decimals, int):
+            new_blocks = tuple(
+                blk.round(decimals) if blk.is_numeric else blk for blk in self.blocks
+            )
+        else:
+            # decimals is a dict mapping column labels -> int
+            # Group blocks, slice them per-column when decimals differ.
+            new_blocks: list[Block] = []
+            for blk in self.blocks:
+                if not blk.is_numeric:
+                    new_blocks.append(blk)
+                    continue
+                blk_cols = blk.mgr_locs.as_array
+                blk_decimals = {
+                    self.axes[0][col]: decimals.get(self.axes[0][col], None)
+                    for col in blk_cols
+                    if self.axes[0][col] in decimals
+                }
+                if not blk_decimals:
+                    new_blocks.append(blk)
+                    continue
+                # Check if all decimals in this block are the same
+                distinct = set(blk_decimals.values())
+                if len(distinct) == 1:
+                    dec = distinct.pop()
+                    if dec is not None:
+                        new_blocks.append(blk.round(dec))
+                    else:
+                        new_blocks.append(blk)
+                else:
+                    # Split block per unique decimal value to avoid
+                    # column-by-column dispatch.
+                    for dec in distinct:
+                        cols_for_dec = [
+                            c for c, d in blk_decimals.items() if d == dec
+                        ]
+                        if dec is None:
+                            sub_blk, _ = blk.slice_block_columns(
+                                slice(
+                                    self.axes[0].get_loc(cols_for_dec[0]),
+                                    self.axes[0].get_loc(cols_for_dec[-1]) + 1,
+                                )
+                            )
+                            new_blocks.append(sub_blk)
+                        else:
+                            sub_blk, _ = blk.slice_block_columns(
+                                slice(
+                                    self.axes[0].get_loc(cols_for_dec[0]),
+                                    self.axes[0].get_loc(cols_for_dec[-1]) + 1,
+                                )
+                            )
+                            new_blocks.append(sub_blk.round(dec))
+                    # Keep columns not mentioned in decimals unchanged
+                    unaffected_cols = [
+                        self.axes[0][col]
+                        for col in blk_cols
+                        if self.axes[0][col] not in decimals
+                    ]
+                    if unaffected_cols:
+                        sub_blk, _ = blk.slice_block_columns(
+                            slice(
+                                self.axes[0].get_loc(unaffected_cols[0]),
+                                self.axes[0].get_loc(unaffected_cols[-1]) + 1,
+                            )
+                        )
+                        new_blocks.append(sub_blk)
+        return self._simple_new(tuple(new_blocks), self.axes.copy())
+[/REPLACE]
+
+pandas/core/internals/blocks.py
+[SEARCH]
+    __slots__ = ()
+    is_numeric = False
+    is_object = False
+    is_extension = False
+    _can_consolidate = True
+    _validate_ndim = True
+[/SEARCH]
+[REPLACE]
+    __slots__ = ()
+    is_numeric = False
+    is_object = False
+    is_extension = False
+    _can_consolidate = True
+    _validate_ndim = True
+
+    def round(self, decimals: int) -> Block:
+        """Return a Block with values rounded to `decimals` places."""
+        if self.is_extension:
+            return self
+        new_values = self.values.round(decimals)
+        return self.make_block_same_class(new_values, refs=self.refs)
+[/REPLACE]
+
+pandas/core/internals/array_manager.py
+[SEARCH]
+    __slots__ = [
+        "_axes",  # private attribute, because 'axes' has different order, see below
+        "arrays",
+    ]
+    arrays: list[np.ndarray | ExtensionArray]
+    _axes: list[Index]
+[/SEARCH]
+[REPLACE]
+    __slots__ = [
+        "_axes",  # private attribute, because 'axes' has different order, see below
+        "arrays",
+    ]
+    arrays: list[np.ndarray | ExtensionArray]
+    _axes: list[Index]
+
+    def round(self, decimals: int | dict) -> BaseArrayManager:
+        """Round numeric columns; return a new manager."""
+        import numpy as np
+
+        if isinstance(decimals, int):
+            new_arrays = [
+                arr.round(decimals) if isinstance(arr, np.ndarray) and np.issubdtype(arr.dtype, np.number) else arr
+                for arr in self.arrays
+            ]
+        else:
+            # decimals is a dict mapping column label -> int
+            new_arrays = []
+            for i, arr in enumerate(self.arrays):
+                col = self._axes[1][i] if len(self._axes) > 1 else self._axes[0][i]
+                if col in decimals:
+                    new_arrays.append(arr.round(decimals[col]) if isinstance(arr, np.ndarray) and np.issubdtype(arr.dtype, np.number) else arr)
+                else:
+                    new_arrays.append(arr)
+        return type(self)(new_arrays, self._axes.copy(), verify_integrity=False)
+[/REPLACE]

@@ -1,0 +1,19 @@
+
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        elif pa.types.is_boolean(pa_type):
+            from pandas.core.arrays import BooleanArray
+
+            scalars = BooleanArray._from_sequence_of_strings(strings).to_numpy()
+[/SEARCH]
+[REPLACE]
+        elif pa.types.is_boolean(pa_type):
+            if not isinstance(strings, (pa.Array, pa.ChunkedArray)):
+                strings = pa.array(strings, type=pa.string(), from_pandas=True)
+            scalars = pc.to_boolean(
+                strings,
+                string_true_values=["true", "1", "t", "T", "yes", "Y", "YES", "Yes"],
+                string_false_values=["false", "0", "f", "F", "no", "N", "NO", "No"],
+            )
+[/REPLACE]

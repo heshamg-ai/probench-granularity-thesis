@@ -1,0 +1,20 @@
+pandas/core/generic.py
+[SEARCH]
+        cond = -cond if inplace else cond
+        cond = cond.reindex(self._info_axis, axis=self._info_axis_number, copy=False)
+[/SEARCH]
+[REPLACE]
+        cond = -cond if inplace else cond
+        cond = cond.reindex(self._info_axis, axis=self._info_axis_number, copy=False)
+        # Fastpath: if the condition is an ExtensionArray-backed boolean DataFrame,
+        # convert to a NumPy boolean ndarray for faster mask application.
+        if isinstance(cond, ABCDataFrame) and getattr(cond._mgr, "any_extension_types", False):
+            all_bool = True
+            for _dt in cond.dtypes:
+                if not is_bool_dtype(_dt):
+                    all_bool = False
+                    break
+            if all_bool:
+                # cond has been aligned and NA-filled above; ensure a dense bool ndarray
+                cond = cond.to_numpy(dtype=bool, na_value=False)
+[/REPLACE]

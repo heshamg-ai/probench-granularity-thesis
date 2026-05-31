@@ -1,0 +1,63 @@
+{
+  "id": 76,
+  "scenario_id": "pandas-60121",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 60121,
+  "baseline_sha": "e3a3a4a5fbc6451006822e08d1d54d991f6d2c3f",
+  "reference_sha": "c2fa929cc0bab2f57f5a3b6274ed62f45dc06385",
+  "task": "Optimize DataFrame.astype performance when converting to extension floating dtypes",
+  "entry_point": "pandas.DataFrame.astype",
+  "whats_new": "Performance improvement in DataFrame.astype when converting to extension floating dtypes, e.g. \"Float64\"",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-60121:baseline",
+      "digest": "sha256:adb7c0e88f03b3389d75cf930fc4188ae1735faf22d287d5b9c2c0cf5cd01f0e"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-60121:reference",
+      "digest": "sha256:8255242b468251c5cb0471a50dfcc73676314cae160d081f8d74aecfeb775dc0"
+    }
+  },
+  "params": [
+    {
+      "name": "Num Rows",
+      "short_indicator": "R",
+      "explanation": "Number of rows in the DataFrame.",
+      "values": [
+        "1000",
+        "10000",
+        "100000"
+      ]
+    },
+    {
+      "name": "Num Cols",
+      "short_indicator": "C",
+      "explanation": "Number of columns in the DataFrame.",
+      "values": [
+        "10",
+        "100"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/arrays/floating/test_construction.py::test_to_array",
+    "pandas/tests/arrays/floating/test_construction.py::test_to_array_none_is_nan",
+    "pandas/tests/arrays/floating/test_construction.py::test_to_array_mixed_integer_float",
+    "pandas/tests/arrays/floating/test_construction.py::test_to_array_inferred_dtype",
+    "pandas/tests/arrays/floating/test_construction.py::test_to_array_dtype_keyword",
+    "pandas/tests/arrays/floating/test_construction.py::test_series_from_float",
+    "pandas/tests/arrays/floating/test_astype.py::test_astype",
+    "pandas/tests/frame/methods/test_astype.py::TestAstype::test_astype_extension_dtypes",
+    "pandas/tests/frame/methods/test_astype.py::TestAstype::test_astype_extension_dtypes_1d",
+    "pandas/tests/frame/methods/test_astype.py::TestAstype::test_astype_extension_dtypes_duplicate_col",
+    "pandas/tests/frame/methods/test_astype.py::TestAstype::test_astype_duplicate_col_series_arg",
+    "pandas/tests/arrays/integer/test_construction.py::test_from_dtype_from_float",
+    "pandas/tests/arrays/integer/test_construction.py::test_to_integer_array_float",
+    "pandas/tests/arrays/integer/test_construction.py::test_to_integer_array",
+    "pandas/tests/arrays/floating/test_construction.py::test_to_array_bool",
+    "pandas/tests/arrays/integer/test_construction.py::test_to_integer_array_bool",
+    "pandas/tests/arrays/integer/test_construction.py::test_integer_array_from_boolean"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.DataFrame.astype for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n- Only change what directly improves the optimization target.\n\nOPTIMIZATION REQUEST:\nOptimize DataFrame.astype performance when converting to extension floating dtypes\nOptimization function: pandas.DataFrame.astype\n\n\n[start of pandas/core/arrays/numeric.py]\n### Relevant context\n#### Function `pandas.core.arrays.numeric._coerce_to_data_and_mask`\n```python\ndef _coerce_to_data_and_mask(\n    values, dtype, copy: bool, dtype_cls: type[NumericDtype], default_dtype: np.dtype\n):\n    checker = dtype_cls._checker\n\n    mask = None\n    inferred_type = None\n\n    if dtype is None and hasattr(values, \"dtype\"):\n        if checker(values.dtype):\n            dtype = values.dtype\n\n    if dtype is not None:\n        dtype = dtype_cls._standardize_dtype(dtype)\n\n    cls = dtype_cls.construct_array_type()\n    if isinstance(values, cls):\n        values, mask = values._data, values._mask\n        if dtype is not None:\n            values = values.astype(dtype.numpy_dtype, copy=False)\n\n        if copy:\n            values = values.copy()\n            mask = mask.copy()\n        return values, mask, dtype, inferred_type\n\n    original = values\n    if not copy:\n        values = np.asarray(values)\n    else:\n        values = np.array(values, copy=copy)\n    inferred_type = None\n    if values.dtype == object or is_string_dtype(values.dtype):\n        inferred_type = lib.infer_dtype(values, skipna=True)\n        if inferred_type == \"boolean\" and dtype is None:\n            name = dtype_cls.__name__.strip(\"_\")\n            raise TypeError(f\"{values.dtype} cannot be converted to {name}\")\n\n    elif values.dtype.kind == \"b\" and checker(dtype):\n        if not copy:\n            values = np.asarray(values, dtype=default_dtype)\n        else:\n            values = np.array(values, dtype=default_dtype, copy=copy)\n\n    elif values.dtype.kind not in \"iuf\":\n        name = dtype_cls.__name__.strip(\"_\")\n        raise TypeError(f\"{values.dtype} cannot be converted to {name}\")\n\n    if values.ndim != 1:\n        raise TypeError(\"values must be a 1D list-like\")\n\n    if mask is None:\n        if values.dtype.kind in \"iu\":\n            # fastpath\n            mask = np.zeros(len(values), dtype=np.bool_)\n        else:\n            mask = libmissing.is_numeric_na(values)\n    else:\n        assert len(mask) == len(values)\n\n    if mask.ndim != 1:\n        raise TypeError(\"mask must be a 1D list-like\")\n\n    # infer dtype if needed\n    if dtype is None:\n        dtype = default_dtype\n    else:\n        dtype = dtype.numpy_dtype\n\n    if is_integer_dtype(dtype) and values.dtype.kind == \"f\" and len(values) > 0:\n        if mask.all():\n            values = np.ones(values.shape, dtype=dtype)\n        else:\n            idx = np.nanargmax(values)\n            if int(values[idx]) != original[idx]:\n                # We have ints that lost precision during the cast.\n                inferred_type = lib.infer_dtype(original, skipna=True)\n                if (\n                    inferred_type not in [\"floating\", \"mixed-integer-float\"]\n                    and not mask.any()\n                ):\n                    values = np.asarray(original, dtype=dtype)\n                else:\n                    values = np.asarray(original, dtype=\"object\")\n\n    # we copy as need to coerce here\n    if mask.any():\n        values = values.copy()\n        values[mask] = dtype_cls._internal_fill_value\n    if inferred_type in (\"string\", \"unicode\"):\n        # casts from str are always safe since they raise\n        # a ValueError if the str cannot be parsed into a float\n        values = values.astype(dtype, copy=copy)\n    else:\n        values = dtype_cls._safe_cast(values, dtype, copy=False)\n\n    return values, mask, dtype, inferred_type\n```\n[end of pandas/core/arrays/numeric.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

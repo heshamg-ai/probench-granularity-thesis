@@ -1,0 +1,27 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        if is_array_like(value):
+            value = cast(ArrayLike, value)
+            if len(value) != len(self):
+                raise ValueError(
+                    f"Length of 'value' does not match. Got ({len(value)}) "
+                    f" expected {len(self)}"
+                )
+
+        def convert_fill_value(value, pa_type, dtype):
+[/SEARCH]
+[REPLACE]
+        if is_array_like(value):
+            value = cast(ArrayLike, value)
+            if len(value) != len(self):
+                raise ValueError(
+                    f"Length of 'value' does not match. Got ({len(value)}) "
+                    f" expected {len(self)}"
+                )
+
+        # Fastpath: no nulls, nothing to fill. Avoid conversions/allocations.
+        if self._pa_array.null_count == 0:
+            return self.copy()
+
+        def convert_fill_value(value, pa_type, dtype):
+[/REPLACE]

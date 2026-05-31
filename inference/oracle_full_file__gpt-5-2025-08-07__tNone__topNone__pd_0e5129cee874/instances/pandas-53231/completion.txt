@@ -1,0 +1,16 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+    klass: type[libhashtable.Factorizer]
+    if is_numeric_dtype(lk.dtype):
+[/SEARCH]
+[REPLACE]
+    klass: type[libhashtable.Factorizer]
+    # Fastpath for numpy datetime64/timedelta64 with identical units: factorize on int64 view
+    if getattr(lk.dtype, "kind", None) in ("m", "M") and lk.dtype == rk.dtype and not isinstance(lk, ExtensionArray) and not isinstance(rk, ExtensionArray):
+        # View as int64 to avoid expensive object coercion
+        lk = lk.view("i8")
+        rk = rk.view("i8")
+        klass = libhashtable.Int64Factorizer
+        return klass, lk, rk
+    if is_numeric_dtype(lk.dtype):
+[/REPLACE]

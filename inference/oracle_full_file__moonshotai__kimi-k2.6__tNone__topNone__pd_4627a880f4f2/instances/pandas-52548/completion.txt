@@ -1,0 +1,57 @@
+pandas/io/parsers/base_parser.py
+[SEARCH]
+def _try_convert_dates(
+    parser: Callable, colspec, data_dict, columns, target_name: str | None = None
+):
+    colset = set(columns)
+    colnames = []
+
+    for c in colspec:
+        if c in colset:
+            colnames.append(c)
+        elif isinstance(c, int) and c not in columns:
+            colnames.append(columns[c])
+        else:
+            colnames.append(c)
+
+    new_name: tuple | str
+    if all(isinstance(x, tuple) for x in colnames):
+        new_name = tuple(map("_".join, zip(*colnames)))
+    else:
+        new_name = "_".join([str(x) for x in colnames])
+    to_parse = [np.asarray(data_dict[c]) for c in colnames if c in data_dict]
+
+    new_col = parser(*to_parse, col=new_name if target_name is None else target_name)
+    return new_name, new_col, colnames
+[/SEARCH]
+[REPLACE]
+def _try_convert_dates(
+    parser: Callable, colspec, data_dict, columns, target_name: str | None = None
+):
+    colset = set(columns)
+    colnames = []
+
+    for c in colspec:
+        if c in colset:
+            colnames.append(c)
+        elif isinstance(c, int) and c not in columns:
+            colnames.append(columns[c])
+        else:
+            colnames.append(c)
+
+    new_name: tuple | str
+    if all(isinstance(x, tuple) for x in colnames):
+        new_name = tuple(map("_".join, zip(*colnames)))
+    else:
+        new_name = "_".join([str(x) for x in colnames])
+    to_parse = []
+    for c in colnames:
+        if c in data_dict:
+            val = data_dict[c]
+            # Pyarrow engine returns Series which we need to convert to
+            # numpy array before converter, its a no-op for other parsers
+            to_parse.append(np.asarray(val))
+
+    new_col = parser(*to_parse, col=new_name if target_name is None else target_name)
+    return new_name, new_col, colnames
+[/REPLACE]

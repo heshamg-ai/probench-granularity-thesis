@@ -1,0 +1,62 @@
+sklearn/linear_model/_base.py
+[SEARCH]
+        elif sp.issparse(X):
+            X_offset_scale = X_offset / X_scale
+
+            def matvec(b):
+                return X.dot(b) - sample_weight_sqrt * b.dot(X_offset_scale)
+
+            def rmatvec(b):
+                return X.T.dot(b) - X_offset_scale * b.dot(sample_weight_sqrt)
+
+            X_centered = sparse.linalg.LinearOperator(
+                shape=X.shape, matvec=matvec, rmatvec=rmatvec
+            )
+
+            if y.ndim < 2:
+                self.coef_ = lsqr(X_centered, y)[0]
+            else:
+                # sparse_lstsq cannot handle y with shape (M, K)
+                outs = Parallel(n_jobs=n_jobs_)(
+                    delayed(lsqr)(X_centered, y[:, j].ravel())
+                    for j in range(y.shape[1])
+                )
+                self.coef_ = np.vstack([out[0] for out in outs])
+[/SEARCH]
+[REPLACE]
+        elif sp.issparse(X):
+            X_offset_scale = X_offset / X_scale
+
+            if self.fit_intercept:
+                def matvec(b):
+                    return X.dot(b) - sample_weight_sqrt * b.dot(X_offset_scale)
+
+                def rmatvec(b):
+                    return X.T.dot(b) - X_offset_scale * b.dot(sample_weight_sqrt)
+
+                X_centered = sparse.linalg.LinearOperator(
+                    shape=X.shape, matvec=matvec, rmatvec=rmatvec
+                )
+            else:
+                X_centered = X
+
+            if y.ndim < 2:
+                self.coef_ = lsqr(X_centered, y)[0]
+            else:
+                # For multi-output, use lsqr with 2D y which is more efficient
+                # than parallel single-target solves when n_targets is small.
+                # Fallback to parallel for large n_targets.
+                if y.shape[1] == 1:
+                    self.coef_ = lsqr(X_centered, y[:, 0])[0][np.newaxis, :]
+                elif y.shape[1] <= max(1, X.shape[0] // 4):
+                    coefs = []
+                    for j in range(y.shape[1]):
+                        coefs.append(lsqr(X_centered, y[:, j])[0])
+                    self.coef_ = np.vstack(coefs)
+                else:
+                    outs = Parallel(n_jobs=n_jobs_)(
+                        delayed(lsqr)(X_centered, y[:, j].ravel())
+                        for j in range(y.shape[1])
+                    )
+                    self.coef_ = np.vstack([out[0] for out in outs])
+[/REPLACE]

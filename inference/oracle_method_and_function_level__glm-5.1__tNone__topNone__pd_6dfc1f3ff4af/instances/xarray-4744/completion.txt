@@ -1,0 +1,14 @@
+xarray/core/dataset.py
+[SEARCH]
+        coords: Dict[Hashable, Variable] = {}
+        for k in self.coords:
+            if set(self.variables[k].dims) <= needed_dims:
+                coords[k] = self.variables[k]
+[/SEARCH]
+[REPLACE]
+        coords: Dict[Hashable, Variable] = {}
+        for k in self._coord_names:
+            var = self._variables[k]
+            if not set(var.dims) - needed_dims:
+                coords[k] = var
+[/REPLACE]

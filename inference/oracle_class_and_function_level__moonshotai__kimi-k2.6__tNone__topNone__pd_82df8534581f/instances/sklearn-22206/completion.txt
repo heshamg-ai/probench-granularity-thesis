@@ -1,0 +1,144 @@
+sklearn/linear_model/_quantile.py
+[SEARCH]
+        # After rescaling alpha, the minimization problem is
+        #     min sum(pinball loss) + alpha * L1
+        # Use linear programming formulation of quantile regression
+        #     min_x c x
+        #           A_eq x = b_eq
+        #                0 <= x
+        # x = (s0, s, t0, t, u, v) = slack variables
+        # intercept = s0 - t0
+        # coef = s - t
+        # c = (alpha * 1_p, alpha * 1_p, quantile * 1_n, (1-quantile) * 1_n)
+        # residual = y - X@coef - intercept = u - v
+        # A_eq = (1_n, X, -1_n, -X, diag(1_n), -diag(1_n))
+        # b_eq = y
+        # p = n_features + fit_intercept
+        # n = n_samples
+        # 1_n = vector of length n with entries equal one
+        # see https://stats.stackexchange.com/questions/384909/
+        #
+        # Filtering out zero sample weights from the beginning makes life
+        # easier for the linprog solver.
+        indices = np.nonzero(sample_weight)[0]
+        n_indices = len(indices)  # use n_mask instead of n_samples
+        if n_indices < len(sample_weight):
+            sample_weight = sample_weight[indices]
+            X = _safe_indexing(X, indices)
+            y = _safe_indexing(y, indices)
+        c = np.concatenate(
+            [
+                np.full(2 * n_params, fill_value=alpha),
+                sample_weight * self.quantile,
+                sample_weight * (1 - self.quantile),
+            ]
+        )
+        if self.fit_intercept:
+            # do not penalize the intercept
+            c[0] = 0
+            c[n_params] = 0
+
+        if sparse.issparse(X):
+            if self.solver not in ["highs-ds", "highs-ipm", "highs"]:
+                raise ValueError(
+                    f"Solver {self.solver} does not support sparse X. "
+                    "Use solver 'highs' for example."
+                )
+            # Note that highs methods do convert to csc.
+            # Therefore, we work with csc matrices as much as possible.
+            eye = sparse.eye(n_indices, dtype=X.dtype, format="csc")
+            if self.fit_intercept:
+                ones = sparse.csc_matrix(np.ones(shape=(n_indices, 1), dtype=X.dtype))
+                A_eq = sparse.hstack([ones, X, -ones, -X, eye, -eye], format="csc")
+            else:
+                A_eq = sparse.hstack([X, -X, eye, -eye], format="csc")
+        else:
+            eye = np.eye(n_indices)
+            if self.fit_intercept:
+                ones = np.ones((n_indices, 1))
+                A_eq = np.concatenate([ones, X, -ones, -X, eye, -eye], axis=1)
+            else:
+                A_eq = np.concatenate([X, -X, eye, -eye], axis=1)
+
+        b_eq = y
+
+        result = linprog(
+            c=c,
+            A_eq=A_eq,
+            b_eq=b_eq,
+            method=self.solver,
+            options=solver_options,
+        )
+[/SEARCH]
+[REPLACE]
+        # After rescaling alpha, the minimization problem is
+        #     min sum(pinball loss) + alpha * L1
+        # Use linear programming formulation of quantile regression
+        #     min_x c x
+        #           A_eq x = b_eq
+        #                0 <= x
+        # x = (s0, s, t0, t, u, v) = slack variables
+        # intercept = s0 - t0
+        # coef = s - t
+        # c = (alpha * 1_p, alpha * 1_p, quantile * 1_n, (1-quantile) * 1_n)
+        # residual = y - X@coef - intercept = u - v
+        # A_eq = (1_n, X, -1_n, -X, diag(1_n), -diag(1_n))
+        # b_eq = y
+        # p = n_features + fit_intercept
+        # n = n_samples
+        # 1_n = vector of length n with entries equal one
+        # see https://stats.stackexchange.com/questions/384909/
+        #
+        # Filtering out zero sample weights from the beginning makes life
+        # easier for the linprog solver.
+        indices = np.nonzero(sample_weight)[0]
+        n_indices = len(indices)  # use n_mask instead of n_samples
+        if n_indices < len(sample_weight):
+            sample_weight = sample_weight[indices]
+            X = _safe_indexing(X, indices)
+            y = _safe_indexing(y, indices)
+        c = np.concatenate(
+            [
+                np.full(2 * n_params, fill_value=alpha),
+                sample_weight * self.quantile,
+                sample_weight * (1 - self.quantile),
+            ]
+        )
+        if self.fit_intercept:
+            # do not penalize the intercept
+            c[0] = 0
+            c[n_params] = 0
+
+        if sparse.issparse(X):
+            if self.solver not in ["highs-ds", "highs-ipm", "highs"]:
+                raise ValueError(
+                    f"Solver {self.solver} does not support sparse X. "
+                    "Use solver 'highs' for example."
+                )
+            # Note that highs methods do convert to csc.
+            # Therefore, we work with csc matrices as much as possible.
+            eye = sparse.eye(n_indices, dtype=X.dtype, format="csc")
+            if self.fit_intercept:
+                ones = sparse.csc_matrix(np.ones(shape=(n_indices, 1), dtype=X.dtype))
+                A_eq = sparse.hstack([ones, X, -ones, -X, eye, -eye], format="csc")
+            else:
+                A_eq = sparse.hstack([X, -X, eye, -eye], format="csc")
+        else:
+            eye = np.eye(n_indices)
+            if self.fit_intercept:
+                ones = np.ones((n_indices, 1))
+                A_eq = np.concatenate([ones, X, -ones, -X, eye, -eye], axis=1)
+            else:
+                A_eq = np.concatenate([X, -X, eye, -eye], axis=1)
+
+        b_eq = y
+
+        result = linprog(
+            c=c,
+            A_eq=A_eq,
+            b_eq=b_eq,
+            method=self.solver,
+            options=solver_options,
+            bounds=[(0, None)] * (2 * n_params + 2 * n_indices),
+        )
+[/REPLACE]

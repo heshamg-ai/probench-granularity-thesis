@@ -1,0 +1,51 @@
+{
+  "id": 84,
+  "scenario_id": "sklearn-24645",
+  "repo": "scikit-learn/scikit-learn",
+  "pr_number": 24645,
+  "baseline_sha": "e41753ebd57c44ae91b389f190c43ddc0b384a75",
+  "reference_sha": "21ce8eecd5de59a8f203d2450f522439424689df",
+  "task": "Optimize NearestCentroid.predict for large sample sizes and many classes",
+  "entry_point": "sklearn.neighbors.NearestCentroid.predict",
+  "whats_new": ":class:`neighbors.NearestCentroid` is faster and requires less memory as it better leverages CPUs' caches to compute predictions.",
+  "optimization_target": "Runtime, Memory",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/sklearn-24645:baseline",
+      "digest": "sha256:a344f4b666da2c852aaf90f6aafeaba52bb7f55eab3994c82287dd741e65fe7a"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/sklearn-24645:reference",
+      "digest": "sha256:db953c4ee87b1ff318700a15ad4587c36db2905ad27515526953a3a5f0b17909"
+    }
+  },
+  "params": [
+    {
+      "name": "n_samples_predict",
+      "short_indicator": "npr",
+      "explanation": "Number of samples to predict",
+      "values": [
+        "10000",
+        "100000"
+      ]
+    },
+    {
+      "name": "n_classes",
+      "short_indicator": "c",
+      "explanation": "Number of classes",
+      "values": [
+        "50",
+        "100",
+        "200"
+      ]
+    }
+  ],
+  "core_tests": [
+    "sklearn/neighbors/tests/test_nearest_centroid.py::test_classification_toy",
+    "sklearn/neighbors/tests/test_nearest_centroid.py::test_iris",
+    "sklearn/neighbors/tests/test_nearest_centroid.py::test_iris_shrinkage",
+    "sklearn/neighbors/tests/test_nearest_centroid.py::test_pickle",
+    "sklearn/neighbors/tests/test_nearest_centroid.py::test_predict_translated_data"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize sklearn.neighbors.NearestCentroid.predict for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize NearestCentroid.predict for large sample sizes and many classes\nOptimization function: sklearn.neighbors.NearestCentroid.predict\n\n\n[start of sklearn/neighbors/_nearest_centroid.py]\n### Relevant context\n#### Class `sklearn.neighbors._nearest_centroid.NearestCentroid`\n**Class Signature**\n```python\nclass NearestCentroid(ClassifierMixin, BaseEstimator):\n```\n**Class Attributes**\n```python\n    _parameter_constraints: dict = {\n        \"metric\": [\n            StrOptions(\n                set(_VALID_METRICS) - {\"mahalanobis\", \"seuclidean\", \"wminkowski\"}\n            ),\n            callable,\n        ],\n        \"shrink_threshold\": [Interval(Real, 0, None, closed=\"neither\"), None],\n    }\n```\n**Class __init__ method**\n```python\n    def __init__(self, metric=\"euclidean\", *, shrink_threshold=None):\n        self.metric = metric\n        self.shrink_threshold = shrink_threshold\n```\n##### Method `sklearn.neighbors._nearest_centroid.NearestCentroid.predict`\n```python\ndef predict(self, X):\n        \"\"\"Perform classification on an array of test vectors `X`.\n\n        The predicted class `C` for each sample in `X` is returned.\n\n        Parameters\n        ----------\n        X : {array-like, sparse matrix} of shape (n_samples, n_features)\n            Test samples.\n\n        Returns\n        -------\n        C : ndarray of shape (n_samples,)\n            The predicted classes.\n\n        Notes\n        -----\n        If the metric constructor parameter is `\"precomputed\"`, `X` is assumed\n        to be the distance matrix between the data to be predicted and\n        `self.centroids_`.\n        \"\"\"\n        check_is_fitted(self)\n\n        X = self._validate_data(X, accept_sparse=\"csr\", reset=False)\n        return self.classes_[\n            pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)\n        ]\n```\n[end of sklearn/neighbors/_nearest_centroid.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

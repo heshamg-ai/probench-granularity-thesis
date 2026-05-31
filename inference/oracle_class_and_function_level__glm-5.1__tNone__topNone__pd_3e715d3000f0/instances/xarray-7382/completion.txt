@@ -1,0 +1,22 @@
+xarray/core/alignment.py
+[SEARCH]
+        else:
+            if len(matching_indexes) > 1:
+                need_reindex = self._need_reindex(
+                    dims,
+                    list(zip(matching_indexes, matching_index_vars)),
+                )
+            else:
+                need_reindex = False
+[/SEARCH]
+[REPLACE]
+        else:
+            if len(matching_indexes) > 1:
+                need_reindex = self._need_reindex(
+                    dims,
+                    list(zip(matching_indexes, matching_index_vars)),
+                )
+            else:
+                has_unindexed_dims = any(dim in self.unindexed_dim_sizes for dim in dims)
+                need_reindex = has_unindexed_dims
+[/REPLACE]

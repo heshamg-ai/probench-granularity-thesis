@@ -1,0 +1,22 @@
+
+
+sklearn/utils/stats.py
+[SEARCH]
+    # For each feature with index j, find sample index i of the scalar value
+    # `adjusted_percentile_rank[j]` in 1D array `weight_cdf[j]`, such that:
+    # weight_cdf[j, i-1] < adjusted_percentile_rank[j] <= weight_cdf[j, i].
+    percentile_indices = xp.stack(
+        [
+            xp.searchsorted(
+                weight_cdf[feature_idx, ...], adjusted_percentile_rank[feature_idx]
+            )
+            for feature_idx in range(weight_cdf.shape[0])
+        ],
+    )
+[/SEARCH]
+[REPLACE]
+    # Find the index in each column where the percentile rank would be inserted.
+    # Vectorized: xp.searchsorted broadcasts when values is 1D and sorted is 2D,
+    # processing each column independently. This replaces the explicit loop.
+    percentile_indices = xp.searchsorted(weight_cdf, adjusted_percentile_rank)
+[/REPLACE]

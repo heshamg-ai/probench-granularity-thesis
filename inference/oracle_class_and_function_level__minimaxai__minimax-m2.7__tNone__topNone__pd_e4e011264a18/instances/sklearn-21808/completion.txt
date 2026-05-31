@@ -1,0 +1,98 @@
+
+
+Looking at the code, I can see several optimization opportunities for the multiclass lbfgs path:
+
+1. In `_multinomial_loss_grad`, `sample_weight` is reshaped to `(n_samples, 1)` after calling `_multinomial_loss`, but `_multinomial_loss` also reshapes it internally. This is redundant.
+
+2. The `logsumexp` function is called with `[:, np.newaxis]` pattern which creates an intermediate array; using `keepdims=True` is more efficient.
+
+Let me implement these optimizations:
+
+sklearn/linear_model/_logistic.py
+[SEARCH]
+def _multinomial_loss(w, X, Y, alpha, sample_weight):
+    """Computes multinomial loss and class probabilities.
+    ...
+    """
+    n_classes = Y.shape[1]
+    n_features = X.shape[1]
+    fit_intercept = w.size == (n_classes * (n_features + 1))
+    w = w.reshape(n_classes, -1)
+    sample_weight = sample_weight[:, np.newaxis]
+    if fit_intercept:
+        intercept = w[:, -1]
+        w = w[:, :-1]
+    else:
+        intercept = 0
+    p = safe_sparse_dot(X, w.T)
+    p += intercept
+    p -= logsumexp(p, axis=1)[:, np.newaxis]
+    loss = -(sample_weight * Y * p).sum()
+    loss += 0.5 * alpha * squared_norm(w)
+    p = np.exp(p, p)
+    return loss, p, w
+[/SEARCH]
+[REPLACE]
+def _multinomial_loss(w, X, Y, alpha, sample_weight):
+    """Computes multinomial loss and class probabilities.
+    ...
+    """
+    n_classes = Y.shape[1]
+    n_features = X.shape[1]
+    fit_intercept = w.size == (n_classes * (n_features + 1))
+    w = w.reshape(n_classes, -1)
+    # Avoid redundant reshape if sample_weight is already (n_samples, 1)
+    if sample_weight.ndim == 1:
+        sample_weight = sample_weight[:, np.newaxis]
+    if fit_intercept:
+        intercept = w[:, -1]
+        w = w[:, :-1]
+    else:
+        intercept = 0
+    p = safe_sparse_dot(X, w.T)
+    p += intercept
+    p -= logsumexp(p, axis=1, keepdims=True)
+    loss = -(sample_weight * Y * p).sum()
+    loss += 0.5 * alpha * squared_norm(w)
+    p = np.exp(p, p)
+    return loss, p, w
+[/REPLACE]
+
+sklearn/linear_model/_logistic.py
+[SEARCH]
+def _multinomial_loss_grad(w, X, Y, alpha, sample_weight):
+    """Computes the multinomial loss, gradient and class probabilities.
+    ...
+    """
+    n_classes = Y.shape[1]
+    n_features = X.shape[1]
+    fit_intercept = w.size == n_classes * (n_features + 1)
+    grad = np.zeros((n_classes, n_features + bool(fit_intercept)), dtype=X.dtype)
+    loss, p, w = _multinomial_loss(w, X, Y, alpha, sample_weight)
+    sample_weight = sample_weight[:, np.newaxis]
+    diff = sample_weight * (p - Y)
+    grad[:, :n_features] = safe_sparse_dot(diff.T, X)
+    grad[:, :n_features] += alpha * w
+    if fit_intercept:
+        grad[:, -1] = diff.sum(axis=0)
+    return loss, grad.ravel(), p
+[/SEARCH]
+[REPLACE]
+def _multinomial_loss_grad(w, X, Y, alpha, sample_weight):
+    """Computes the multinomial loss, gradient and class probabilities.
+    ...
+    """
+    n_classes = Y.shape[1]
+    n_features = X.shape[1]
+    fit_intercept = w.size == n_classes * (n_features + 1)
+    grad = np.zeros((n_classes, n_features + bool(fit_intercept)), dtype=X.dtype)
+    # Reshape sample_weight once upfront to avoid redundant reshape in _multinomial_loss
+    sample_weight = sample_weight[:, np.newaxis]
+    loss, p, w = _multinomial_loss(w, X, Y, alpha, sample_weight)
+    diff = sample_weight * (p - Y)
+    grad[:, :n_features] = safe_sparse_dot(diff.T, X)
+    grad[:, :n_features] += alpha * w
+    if fit_intercept:
+        grad[:, -1] = diff.sum(axis=0)
+    return loss, grad.ravel(), p
+[/REPLACE]

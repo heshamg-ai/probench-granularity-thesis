@@ -1,0 +1,15 @@
+pandas/core/reshape/encoding.py
+[SEARCH]
+    codes, levels = factorize_from_iterable(Series(data, copy=False))
+[/SEARCH]
+[REPLACE]
+    if isinstance(data, Categorical):
+        codes = data.codes.copy()
+        levels = data.categories
+        # factorize_from_iterable returns -1 for NaN/unseen. Categorical.codes
+        # uses -1 for NaN, so it is already consistent.
+        # But we must ensure that dummy_na handling is preserved: codes==-1 is NaN.
+        # No further factorization needed.
+    else:
+        codes, levels = factorize_from_iterable(Series(data, copy=False))
+[/REPLACE]

@@ -1,0 +1,48 @@
+{
+  "id": 50,
+  "scenario_id": "pandas-56062",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 56062,
+  "baseline_sha": "8f0c4d2ca6856cc345917d62c3f989ada00617c0",
+  "reference_sha": "d9acc2206402503337299dfc17ce2ce8992f59a9",
+  "task": "Optimize DataFrame.loc and Series.loc for MultiIndex key lookups",
+  "entry_point": "pandas.DataFrame.loc",
+  "whats_new": "Performance improvement in DataFrame.loc and Series.loc by adding a fast path for MultiIndex key lookups, providing approximately 1.85x speedup",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-56062:baseline",
+      "digest": "sha256:3f34836f707da32e0606da2c9b3497b3f910f45ad2fe39a10598318178249c94"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-56062:reference",
+      "digest": "sha256:50f2ef65fc5f0fe697d28ba591068240d9ed410462ce8df7640c420a334110ce"
+    }
+  },
+  "params": [
+    {
+      "name": "First Level Size",
+      "short_indicator": "N",
+      "explanation": "Number of unique values in the first MultiIndex level",
+      "values": [
+        "300000",
+        "500000",
+        "1000000"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/indexing/multiindex/test_loc.py::test_loc_with_mi_indexer",
+    "pandas/tests/indexing/multiindex/test_getitem.py::test_loc_empty_multiindex",
+    "pandas/tests/indexing/multiindex/test_setitem.py::TestMultiIndexSetItem::test_nonunique_assignment_1750",
+    "pandas/tests/test_multilevel.py::TestMultiLevel::test_reindex",
+    "pandas/tests/test_multilevel.py::TestMultiLevel::test_reindex_preserve_levels",
+    "pandas/tests/frame/test_stack_unstack.py::TestDataFrameReshape::test_unstack_fill",
+    "pandas/tests/test_common.py::TestIsBoolIndexer::test_non_bool_array_with_na",
+    "pandas/tests/test_common.py::TestIsBoolIndexer::test_list_subclass",
+    "pandas/tests/test_common.py::TestIsBoolIndexer::test_frozenlist",
+    "pandas/tests/arrays/categorical/test_indexing.py::test_mask_with_boolean",
+    "pandas/tests/extension/test_arrow.py::test_is_bool_dtype"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.DataFrame.loc for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize DataFrame.loc and Series.loc for MultiIndex key lookups\nOptimization function: pandas.DataFrame.loc\n\n\n[start of pandas/core/common.py]\n### Relevant context\n#### Function `pandas.core.common.is_bool_indexer`\n```python\ndef is_bool_indexer(key: Any) -> bool:\n    \"\"\"\n    Check whether `key` is a valid boolean indexer.\n\n    Parameters\n    ----------\n    key : Any\n        Only list-likes may be considered boolean indexers.\n        All other types are not considered a boolean indexer.\n        For array-like input, boolean ndarrays or ExtensionArrays\n        with ``_is_boolean`` set are considered boolean indexers.\n\n    Returns\n    -------\n    bool\n        Whether `key` is a valid boolean indexer.\n\n    Raises\n    ------\n    ValueError\n        When the array is an object-dtype ndarray or ExtensionArray\n        and contains missing values.\n\n    See Also\n    --------\n    check_array_indexer : Check that `key` is a valid array to index,\n        and convert to an ndarray.\n    \"\"\"\n    if isinstance(key, (ABCSeries, np.ndarray, ABCIndex, ABCExtensionArray)):\n        if key.dtype == np.object_:\n            key_array = np.asarray(key)\n\n            if not lib.is_bool_array(key_array):\n                na_msg = \"Cannot mask with non-boolean array containing NA / NaN values\"\n                if lib.is_bool_array(key_array, skipna=True):\n                    # Don't raise on e.g. [\"A\", \"B\", np.nan], see\n                    #  test_loc_getitem_list_of_labels_categoricalindex_with_na\n                    raise ValueError(na_msg)\n                return False\n            return True\n        elif is_bool_dtype(key.dtype):\n            return True\n    elif isinstance(key, list):\n        # check if np.array(key).dtype would be bool\n        if len(key) > 0:\n            if type(key) is not list:  # noqa: E721\n                # GH#42461 cython will raise TypeError if we pass a subclass\n                key = list(key)\n            return lib.is_bool_list(key)\n\n    return False\n```\n[end of pandas/core/common.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

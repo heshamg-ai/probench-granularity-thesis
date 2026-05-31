@@ -1,0 +1,10 @@
+{
+  "scenario_id": "xarray-7824",
+  "repo": "pydata/xarray",
+  "seconds": 472.2160098552704,
+  "provider": "nvidia_nim",
+  "model": "deepseek-ai/deepseek-v4-pro",
+  "temperature": null,
+  "top_p": null,
+  "prompt_dataset_path": "LLMs thesis/dataset/dataset__gran=full_file__tok=deepseekv4pro__max=1000000__imports=False__globals=False__sigs=False__changes=False.json"
+}

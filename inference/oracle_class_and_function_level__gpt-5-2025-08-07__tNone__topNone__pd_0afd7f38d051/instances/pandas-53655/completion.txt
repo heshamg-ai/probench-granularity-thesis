@@ -1,0 +1,50 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        result_data = []
+        for lst in split.to_pylist():
+            if lst is None:
+                result_data.append([False] * len(uniques_sorted))
+            else:
+                res = pc.is_in(uniques_sorted, pa.array(set(lst)))
+                result_data.append(res.to_pylist())
+        result = type(self)(pa.array(result_data))
+        return result, uniques_sorted.to_pylist()
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        flattened = split.flatten()
+        uniques = flattened.unique()
+        uniques_sorted = uniques.take(pc.array_sort_indices(uniques))
+
+        n = len(self)
+        k = len(uniques_sorted)
+
+        if k == 0:
+            offsets = pa.array(np.zeros(n + 1, dtype=np.int32), type=pa.int32())
+            values = pa.array([], type=pa.bool_())
+            list_array = pa.ListArray.from_arrays(offsets, values)
+            result = type(self)(list_array)
+            return result, []
+
+        bool_cols = []
+        for i in range(k):
+            token = uniques_sorted[i].as_py()
+            col = pc.list_contains(split, token).fill_null(False)
+            bool_cols.append(col.to_numpy(zero_copy_only=False))
+
+        if k == 1:
+            matrix = bool_cols[0].reshape(n, 1)
+        else:
+            matrix = np.vstack(bool_cols).T
+
+        values = pa.array(matrix.ravel(order="C"), type=pa.bool_())
+        offsets = pa.array(np.arange(0, n * k + 1, k, dtype=np.int32), type=pa.int32())
+        list_array = pa.ListArray.from_arrays(offsets, values)
+        result = type(self)(list_array)
+        return result, uniques_sorted.to_pylist()
+[/REPLACE]

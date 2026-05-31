@@ -1,0 +1,29 @@
+
+
+I'll search for the pandas DataFrame.join method to understand the code flow and then optimize the join logic.
+
+pandas/core/frame/ops.py
+[SEARCH]
+    def join(
+        self,
+        other: DataFrame | Series,
+        *,
+        how: JoinHow = "left",
+        lsuffix: str = "",
+        rsuffix: str = "",
+        sort: bool = False,
+    ) -> DataFrame:
+        ...
+[/SEARCH]
+[REPLACE]
+    def join(
+        self,
+        other: DataFrame | Series,
+        *,
+        how: JoinHow = "left",
+        lsuffix: str = "",
+        rsuffix: str = "",
+        sort: bool = False,
+    ) -> DataFrame:
+        ...
+[/REPLACE]

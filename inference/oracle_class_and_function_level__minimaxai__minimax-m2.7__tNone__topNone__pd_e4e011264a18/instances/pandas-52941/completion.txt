@@ -1,0 +1,25 @@
+
+
+pandas/core/generic.py
+[SEARCH]
+        if items is not None:
+            name = self._get_axis_name(axis)
+            # error: Keywords must be strings
+            return self.reindex(  # type: ignore[misc]
+                **{name: [r for r in items if r in labels]}  # type: ignore[arg-type]
+            )
+[/SEARCH]
+[REPLACE]
+        if items is not None:
+            name = self._get_axis_name(axis)
+            # Convert labels to set for O(1) lookup instead of O(n) per item
+            labels_set = set(labels)
+            # Filter items to only those present in labels, preserving order
+            res = [r for r in items if r in labels_set]
+            # Only reindex if we have items to filter; avoid unnecessary copy otherwise
+            if res:
+                # error: Keywords must be strings
+                return self.reindex(**{name: res})  # type: ignore[misc]
+            else:
+                return self.reindex(**{name: []})  # type: ignore[misc]
+[/REPLACE]

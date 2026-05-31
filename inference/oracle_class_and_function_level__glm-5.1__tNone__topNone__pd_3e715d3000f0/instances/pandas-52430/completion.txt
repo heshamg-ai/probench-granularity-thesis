@@ -1,0 +1,40 @@
+pandas/core/base.py
+[SEARCH]
+        if na_value is not lib.no_default:
+            values = self._values
+            if not can_hold_element(values, na_value):
+                # if we can't hold the na_value asarray either makes a copy or we
+                # error before modifying values. The asarray later on thus won't make
+                # another copy
+                values = np.asarray(values, dtype=dtype)
+            else:
+                values = values.copy()
+
+            values[np.asanyarray(self.isna())] = na_value
+        else:
+            values = self._values
+[/SEARCH]
+[REPLACE]
+        if na_value is not lib.no_default:
+            values = self._values
+            if not can_hold_element(values, na_value):
+                # if we can't hold the na_value asarray either makes a copy or we
+                # error before modifying values. The asarray later on thus won't make
+                # another copy
+                values = np.asarray(values, dtype=dtype)
+            else:
+                values = values.copy()
+
+            # Fast path: when filling NA with np.nan into a float dtype,
+            # np.nan is already the native NA representation and values are
+            # already correctly set by asarray/copy.
+            if not (
+                isinstance(values, np.ndarray)
+                and isinstance(na_value, float)
+                and math.isnan(na_value)
+                and is_float_dtype(values.dtype)
+            ):
+                values[np.asanyarray(self.isna())] = na_value
+        else:
+            values = self._values
+[/REPLACE]

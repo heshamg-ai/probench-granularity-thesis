@@ -1,0 +1,90 @@
+pandas/core/frame.py
+[SEARCH]
+        if isinstance(values, dict):
+            from pandas.core.reshape.concat import concat
+
+            values = collections.defaultdict(list, values)
+            result = concat(
+                (
+                    self.iloc[:, [i]].isin(values[col])
+                    for i, col in enumerate(self.columns)
+                ),
+                axis=1,
+            )
+        elif isinstance(values, Series):
+            if not values.index.is_unique:
+                raise ValueError("cannot compute isin with a duplicate axis.")
+            result = self.eq(values.reindex_like(self), axis="index")
+        elif isinstance(values, DataFrame):
+            if not (values.columns.is_unique and values.index.is_unique):
+                raise ValueError("cannot compute isin with a duplicate axis.")
+            result = self.eq(values.reindex_like(self))
+        else:
+            if not is_list_like(values):
+                raise TypeError(
+                    "only list-like or dict-like objects are allowed "
+                    "to be passed to DataFrame.isin(), "
+                    f"you passed a '{type(values).__name__}'"
+                )
+            # error: Argument 2 to "isin" has incompatible type "Union[Sequence[Any],
+            # Mapping[Any, Any]]"; expected "Union[Union[ExtensionArray,
+            # ndarray[Any, Any]], Index, Series]"
+            res_values = algorithms.isin(
+                self.values.ravel(),
+                values,  # type: ignore[arg-type]
+            )
+            result = self._constructor(
+                res_values.reshape(self.shape),
+                self.index,
+                self.columns,
+                copy=False,
+            )
+        return result.__finalize__(self, method="isin")
+[/SEARCH]
+[REPLACE]
+        if isinstance(values, dict):
+            from pandas.core.reshape.concat import concat
+
+            values = collections.defaultdict(list, values)
+            result = concat(
+                (
+                    self.iloc[:, [i]].isin(values[col])
+                    for i, col in enumerate(self.columns)
+                ),
+                axis=1,
+            )
+        elif isinstance(values, Series):
+            if not values.index.is_unique:
+                raise ValueError("cannot compute isin with a duplicate axis.")
+            result = self.eq(values.reindex_like(self), axis="index")
+        elif isinstance(values, DataFrame):
+            if not (values.columns.is_unique and values.index.is_unique):
+                raise ValueError("cannot compute isin with a duplicate axis.")
+            result = self.eq(values.reindex_like(self))
+        else:
+            if not is_list_like(values):
+                raise TypeError(
+                    "only list-like or dict-like objects are allowed "
+                    "to be passed to DataFrame.isin(), "
+                    f"you passed a '{type(values).__name__}'"
+                )
+            # error: Argument 2 to "isin" has incompatible type "Union[Sequence[Any],
+            # Mapping[Any, Any]]"; expected "Union[Union[ExtensionArray,
+            # ndarray[Any, Any]], Index, Series]"
+            res_values = algorithms.isin(
+                self.values.ravel(),
+                values,  # type: ignore[arg-type]
+            )
+            result = self._constructor(
+                res_values.reshape(self.shape),
+                self.index,
+                self.columns,
+                copy=False,
+            )
+            # For PyArrow-backed dtypes, cast the numpy bool result back
+            # to the original nullable boolean type to avoid conversion to
+            # object dtype when combined with extension arrays.
+            if result._is_mixed_type:
+                result = result.astype({col: "boolean" for col in result.columns})
+        return result.__finalize__(self, method="isin")
+[/REPLACE]

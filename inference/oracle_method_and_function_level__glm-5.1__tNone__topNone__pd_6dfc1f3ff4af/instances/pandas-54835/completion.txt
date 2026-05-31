@@ -1,0 +1,37 @@
+pandas/core/sorting.py
+[SEARCH]
+    elif isinstance(target, ABCMultiIndex):
+        indexer = lexsort_indexer(
+            target.codes, orders=ascending, na_position=na_position, codes_given=True
+        )
+    else:
+[/SEARCH]
+[REPLACE]
+    elif isinstance(target, ABCMultiIndex):
+        from pandas.core.arrays import Categorical
+
+        if (
+            not isinstance(ascending, bool)
+            or ascending
+            or na_position != "last"
+        ):
+            indexer = lexsort_indexer(
+                target.codes, orders=ascending, na_position=na_position, codes_given=True
+            )
+        else:
+            labels = []
+            shape = []
+            for k in target.codes:
+                codes = k.copy()
+                mask = k == -1
+                if mask.any():
+                    n = len(Categorical(k, ordered=True).categories)
+                    mask_n = n + 1
+                    codes[mask] = n
+                else:
+                    mask_n = len(Categorical(k, ordered=True).categories)
+                shape.append(mask_n)
+                labels.append(codes)
+            indexer = indexer_from_factorized(labels, tuple(shape))
+    else:
+[/REPLACE]

@@ -1,0 +1,141 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+            # get tuple representation of values if more than one
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+                if needs_i8_conversion(lbv.dtype):
+                    lbv = lbv.view("i8")
+                if needs_i8_conversion(rbv.dtype):
+                    rbv = rbv.view("i8")
+            else:
+                # We get here with non-ndarrays in test_merge_by_col_tz_aware
+                #  and test_merge_groupby_multiple_column_with_categorical_column
+                mapped = [
+                    _factorize_keys(
+                        left_by_values[n],
+                        right_by_values[n],
+                        sort=False,
+                        how="left",
+                    )
+                    for n in range(len(left_by_values))
+                ]
+                arrs = [np.concatenate(m[:2]) for m in mapped]
+                shape = tuple(m[2] for m in mapped)
+                group_index = get_group_index(
+                    arrs, shape=shape, sort=False, xnull=False
+                )
+                left_len = len(left_by_values[0])
+                lbv = group_index[:left_len]
+                rbv = group_index[left_len:]
+[/SEARCH]
+[REPLACE]
+            # get tuple representation of values if more than one
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # Fast path: if dtypes are already the same, only convert once
+                if (
+                    isinstance(lbv, np.ndarray)
+                    and isinstance(rbv, np.ndarray)
+                    and lbv.dtype == rbv.dtype
+                    and not needs_i8_conversion(lbv.dtype)
+                ):
+                    pass
+                else:
+                    lbv, rbv = _convert_by_keys_to_common_dtype(lbv, rbv)
+            else:
+                # We get here with non-ndarrays in test_merge_by_col_tz_aware
+                #  and test_merge_groupby_multiple_column_with_categorical_column
+                mapped = _factorize_by_keys(
+                    left_by_values, right_by_values
+                )
+                arrs = [np.concatenate(m[:2]) for m in mapped]
+                shape = tuple(m[2] for m in mapped)
+                group_index = get_group_index(
+                    arrs, shape=shape, sort=False, xnull=False
+                )
+                left_len = len(left_by_values[0])
+                lbv = group_index[:left_len]
+                rbv = group_index[left_len:]
+[/REPLACE]
+
+pandas/core/reshape/merge.py
+[SEARCH]
+    def _convert_values_for_libjoin(
+[/SEARCH]
+[REPLACE]
+def _convert_by_keys_to_common_dtype(
+    lbv: np.ndarray, rbv: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Convert left and right 'by' keys to a common dtype when they differ,
+    avoiding unnecessary copies when dtypes already match.
+    """
+    # Already handled the fully-matching case in the single-key fast path;
+    # this function is called when they differ or when we can't determine.
+    if not isinstance(lbv, np.ndarray):
+        lbv = np.asarray(lbv)
+    if not isinstance(rbv, np.ndarray):
+        rbv = np.asarray(rbv)
+
+    if lbv.dtype == rbv.dtype:
+        if needs_i8_conversion(lbv.dtype):
+            lbv = lbv.view("i8")
+            rbv = rbv.view("i8")
+        return lbv, rbv
+
+    # Determine a common dtype that is safe and compatible
+    if needs_i8_conversion(lbv.dtype) and needs_i8_conversion(rbv.dtype):
+        # Both are datetime-like; convert to their i8 views
+        lbv = lbv.view("i8")
+        rbv = rbv.view("i8")
+        return lbv, rbv
+
+    # Fallback: find common NumPy dtype via result_type
+    common_dtype = np.result_type(lbv, rbv)
+    if lbv.dtype != common_dtype:
+        lbv = lbv.astype(common_dtype, copy=False)
+    if rbv.dtype != common_dtype:
+        rbv = rbv.astype(common_dtype, copy=False)
+    return lbv, rbv
+
+
+def _factorize_by_keys(
+    left_by_values: list[ArrayLike],
+    right_by_values: list[ArrayLike],
+) -> list[tuple[np.ndarray, np.ndarray, int]]:
+    """
+    Factorize multiple 'by' key columns, converting to common dtypes
+    where possible to avoid repeated work in _factorize_keys.
+    """
+    results: list[tuple[np.ndarray, np.ndarray, int]] = []
+    for n in range(len(left_by_values)):
+        lv = left_by_values[n]
+        rv = right_by_values[n]
+        if not isinstance(lv, np.ndarray):
+            lv = np.asarray(lv)
+        if not isinstance(rv, np.ndarray):
+            rv = np.asarray(rv)
+
+        # If dtypes differ, convert to common dtype once to save
+        # _factorize_keys from performing this internally
+        if lv.dtype != rv.dtype:
+            lv, rv = _convert_by_keys_to_common_dtype(lv, rv)
+
+        mapped = _factorize_keys(
+            lv,
+            rv,
+            sort=False,
+            how="left",
+        )
+        results.append(mapped)
+    return results
+
+    def _convert_values_for_libjoin(
+[/REPLACE]

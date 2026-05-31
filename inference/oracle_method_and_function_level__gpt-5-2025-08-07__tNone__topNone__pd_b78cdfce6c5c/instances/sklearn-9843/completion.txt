@@ -1,0 +1,80 @@
+sklearn/metrics/_classification.py
+[SEARCH]
+    n_labels = labels.size
+    label_to_ind = {y: x for x, y in enumerate(labels)}
+    # convert yt, yp into index
+    y_pred = np.array([label_to_ind.get(x, n_labels + 1) for x in y_pred])
+    y_true = np.array([label_to_ind.get(x, n_labels + 1) for x in y_true])
+
+    # intersect y_pred, y_true with labels, eliminate items not in labels
+    ind = np.logical_and(y_pred < n_labels, y_true < n_labels)
+    y_pred = y_pred[ind]
+    y_true = y_true[ind]
+    # also eliminate weights of eliminated items
+    sample_weight = sample_weight[ind]
+[/SEARCH]
+[REPLACE]
+    n_labels = labels.size
+    # Optimize mapping when labels are integer/boolean and y arrays are numeric
+    y_true_arr = np.asarray(y_true)
+    y_pred_arr = np.asarray(y_pred)
+    if (labels.dtype.kind in {'i', 'u', 'b'} and
+            y_true_arr.dtype.kind in {'i', 'u', 'b', 'f'} and
+            y_pred_arr.dtype.kind in {'i', 'u', 'b', 'f'}):
+        if n_labels == 0:
+            ind = np.zeros(y_true_arr.shape, dtype=bool)
+            y_true = np.array([], dtype=np.intp)
+            y_pred = np.array([], dtype=np.intp)
+        else:
+            order = np.argsort(labels)
+            sorted_labels = labels[order]
+            pos_true = np.searchsorted(sorted_labels, y_true_arr, side='right') - 1
+            pos_pred = np.searchsorted(sorted_labels, y_pred_arr, side='right') - 1
+            valid_true = (pos_true >= 0) & (pos_true < n_labels)
+            valid_pred = (pos_pred >= 0) & (pos_pred < n_labels)
+            match_true = np.zeros(y_true_arr.shape, dtype=bool)
+            match_pred = np.zeros(y_pred_arr.shape, dtype=bool)
+            if valid_true.any():
+                match_true[valid_true] = (sorted_labels[pos_true[valid_true]] == y_true_arr[valid_true])
+            if valid_pred.any():
+                match_pred[valid_pred] = (sorted_labels[pos_pred[valid_pred]] == y_pred_arr[valid_pred])
+            ind = match_true & match_pred
+            y_true = order[pos_true[ind]]
+            y_pred = order[pos_pred[ind]]
+        sample_weight = sample_weight[ind]
+    else:
+        label_to_ind = {y: x for x, y in enumerate(labels)}
+        # convert yt, yp into index
+        y_pred = np.array([label_to_ind.get(x, n_labels + 1) for x in y_pred])
+        y_true = np.array([label_to_ind.get(x, n_labels + 1) for x in y_true])
+
+        # intersect y_pred, y_true with labels, eliminate items not in labels
+        ind = np.logical_and(y_pred < n_labels, y_true < n_labels)
+        y_pred = y_pred[ind]
+        y_true = y_true[ind]
+        # also eliminate weights of eliminated items
+        sample_weight = sample_weight[ind]
+[/REPLACE]
+
+sklearn/metrics/_classification.py
+[SEARCH]
+    cm = coo_matrix((sample_weight, (y_true, y_pred)),
+                    shape=(n_labels, n_labels), dtype=dtype,
+                    ).toarray()
+[/SEARCH]
+[REPLACE]
+    # Efficient accumulation without constructing a sparse matrix
+    if y_true.size == 0:
+        cm = np.zeros((n_labels, n_labels), dtype=dtype)
+    else:
+        n = int(n_labels)
+        # Flatten 2D indices to 1D
+        flat_idx = (y_true.astype(np.int64) * np.int64(n)) + y_pred.astype(np.int64)
+        if dtype == np.int64:
+            counts = np.zeros(n * n, dtype=dtype)
+            np.add.at(counts, flat_idx, sample_weight.astype(dtype))
+            cm = counts.reshape(n, n)
+        else:
+            cm = np.bincount(flat_idx, weights=sample_weight.astype(np.float64),
+                             minlength=n * n).reshape(n, n).astype(dtype, copy=False)
+[/REPLACE]

@@ -1,0 +1,115 @@
+
+
+Looking at the code, I need to find where `get_dummies` is implemented and add an optimized version for Arrow strings. Let me first search for the base implementation.
+
+The `ArrowStringArray` class inherits from `ObjectStringArrayMixin` which likely has the base `get_dummies`. I'll need to add an optimized `_str_get_dummies` method to both `ArrowStringArray` and `ArrowStringArrayNumpySemantics` classes.
+
+Let me create optimized implementations:
+
+pandas/core/arrays/string_arrow.py
+[SEARCH]
+    def _str_isalnum(self):
+        result = pc.utf8_is_alnum(self._pa_array)
+        return self._result_converter(result)
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies(self, sep: str = "|"):
+        from pandas import DataFrame
+
+        # Split strings using PyArrow for better performance
+        if sep == " ":
+            split_arrays = pc.split_whitespace(self._pa_array)
+        else:
+            split_arrays = pc.split_pattern(self._pa_array, pattern=sep)
+
+        # Collect all unique values from all rows
+        seen_values = set()
+        for row in split_arrays:
+            if row is not None and len(row) > 0:
+                for val in row.as_py():
+                    seen_values.add(val)
+
+        if not seen_values:
+            return DataFrame()
+
+        # Sort values for consistent ordering
+        sorted_values = sorted(seen_values)
+
+        # Build columns dictionary using vectorized operations
+        n = len(self)
+        columns = {}
+        for value in sorted_values:
+            # Check if value exists in each row's split result
+            col_data = np.zeros(n, dtype=np.int8)
+            for i, row in enumerate(split_arrays):
+                if row is not None and len(row) > 0:
+                    if value in row.as_py():
+                        col_data[i] = 1
+            columns[value] = col_data
+
+        return DataFrame(columns, dtype=np.int8)
+
+    def _str_isalnum(self):
+        result = pc.utf8_is_alnum(self._pa_array)
+        return self._result_converter(result)
+[/REPLACE]
+
+Now let me add an optimized version for `ArrowStringArrayNumpySemantics` which uses numpy semantics:
+
+pandas/core/arrays/string_arrow.py
+[SEARCH]
+    def _convert_int_dtype(self, result):
+        if isinstance(result, pa.Array):
+            result = result.to_numpy(zero_copy_only=False)
+        else:
+            result = result.to_numpy()
+        if result.dtype == np.int32:
+            result = result.astype(np.int64)
+        return result
+[/SEARCH]
+[REPLACE]
+    def _convert_int_dtype(self, result):
+        if isinstance(result, pa.Array):
+            result = result.to_numpy(zero_copy_only=False)
+        else:
+            result = result.to_numpy()
+        if result.dtype == np.int32:
+            result = result.astype(np.int64)
+        return result
+
+    def _str_get_dummies(self, sep: str = "|"):
+        from pandas import DataFrame
+
+        # Split strings using PyArrow for better performance
+        if sep == " ":
+            split_arrays = pc.split_whitespace(self._pa_array)
+        else:
+            split_arrays = pc.split_pattern(self._pa_array, pattern=sep)
+
+        # Collect all unique values from all rows
+        seen_values = set()
+        for row in split_arrays:
+            if row is not None and len(row) > 0:
+                for val in row.as_py():
+                    seen_values.add(val)
+
+        if not seen_values:
+            return DataFrame()
+
+        # Sort values for consistent ordering
+        sorted_values = sorted(seen_values)
+
+        # Build columns dictionary using vectorized operations
+        n = len(self)
+        columns = {}
+        for value in sorted_values:
+            # Check if value exists in each row's split result
+            col_data = np.zeros(n, dtype=np.int8)
+            for i, row in enumerate(split_arrays):
+                if row is not None and len(row) > 0:
+                    if value in row.as_py():
+                        col_data[i] = 1
+            columns[value] = col_data
+
+        return DataFrame(columns, dtype=np.int8)
+[/REPLACE]

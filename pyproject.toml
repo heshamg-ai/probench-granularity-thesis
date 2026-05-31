@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "probench-granularity-thesis"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    # core data
+    "pandas",
+    "numpy",
+    "pyarrow",
+    "scipy",
+    "scikit-learn",
+    "xarray",
+    "cftime",
+    "dask",
+    "datasets",
+    # tokenizers
+    "tiktoken",
+    "transformers",
+    # inference clients
+    "openai",
+    "requests",
+    "python-dotenv",
+    "zai-sdk",
+    # utils
+    "PyYAML",
+    "gitpython",
+    # testing
+    "pytest",
+]
+
+[tool.setuptools.packages.find]
+include = ["probench*"]

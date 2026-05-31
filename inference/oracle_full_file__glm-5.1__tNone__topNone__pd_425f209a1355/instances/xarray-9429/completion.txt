@@ -1,0 +1,29 @@
+xarray/groupers.py
+[SEARCH]
+    @property
+    def group_as_index(self) -> pd.Index:
+        """Caches the group DataArray as a pandas Index."""
+        if self._group_as_index is None:
+            if self.group.ndim == 1:
+                self._group_as_index = self.group.to_index()
+            else:
+                self._group_as_index = pd.Index(np.array(self.group).ravel())
+        return self._group_as_index
+[/SEARCH]
+[REPLACE]
+    @property
+    def group_as_index(self) -> pd.Index:
+        """Caches the group DataArray as a pandas Index."""
+        if self._group_as_index is None:
+            from xarray.coding.cftimeindex import CFTimeIndex
+
+            if self.group.ndim == 1:
+                self._group_as_index = self.group.to_index()
+            else:
+                data = np.array(self.group).ravel()
+                if isinstance(self.group.to_index(), CFTimeIndex):
+                    self._group_as_index = CFTimeIndex(data)
+                else:
+                    self._group_as_index = pd.Index(data)
+        return self._group_as_index
+[/REPLACE]

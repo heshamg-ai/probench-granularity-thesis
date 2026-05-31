@@ -1,0 +1,146 @@
+pandas/core/groupby/generic.py
+[SEARCH]
+        ids, _, _ = self.grouper.group_info
+
+        val = self.obj._values
+
+        codes, _ = algorithms.factorize(val, sort=False)
+        sorter = np.lexsort((codes, ids))
+        codes = codes[sorter]
+        ids = ids[sorter]
+
+        # group boundaries are where group ids change
+        # unique observations are where sorted values change
+        idx = np.r_[0, 1 + np.nonzero(ids[1:] != ids[:-1])[0]]
+        inc = np.r_[1, codes[1:] != codes[:-1]]
+
+        # 1st item of each group is a new unique observation
+        mask = codes == -1
+        if dropna:
+            inc[idx] = 1
+            inc[mask] = 0
+        else:
+            inc[mask & np.r_[False, mask[:-1]]] = 0
+            inc[idx] = 1
+
+        out = np.add.reduceat(inc, idx).astype("int64", copy=False)
+        if len(ids):
+            # NaN/NaT group exists if the head of ids is -1,
+            # so remove it from res and exclude its index from idx
+            if ids[0] == -1:
+                res = out[1:]
+                idx = idx[np.flatnonzero(idx)]
+            else:
+                res = out
+        else:
+            res = out[1:]
+        ri = self.grouper.result_index
+
+        # we might have duplications among the bins
+        if len(res) != len(ri):
+            res, out = np.zeros(len(ri), dtype=out.dtype), res
+            if len(ids) > 0:
+                # GH#21334s
+                res[ids[idx]] = out
+
+        result: Series | DataFrame = self.obj._constructor(
+            res, index=ri, name=self.obj.name
+        )
+        if not self.as_index:
+            result = self._insert_inaxis_grouper(result)
+            result.index = default_index(len(result))
+        return self._reindex_output(result, fill_value=0)
+[/SEARCH]
+[REPLACE]
+        ids, _, _ = self.grouper.group_info
+
+        val = self.obj._values
+        ri = self.grouper.result_index
+
+        codes, _ = algorithms.factorize(val, sort=False)
+
+        # mask valid group rows; exclude null group ids and (optionally) NA values
+        mask = ids != -1
+        if dropna:
+            mask = mask & (codes != -1)
+
+        if mask.any():
+            # Use hashing-based factorization of combined (group-id, value-code)
+            # to count uniques per group in expected O(n) time.
+            code_plus = codes.astype("int64", copy=False) + 1  # NA -> 0
+            ids64 = ids.astype("int64", copy=False)
+            idsm = ids64[mask]
+            codem = code_plus[mask]
+
+            max_code_plus = int(codem.max())
+            width = max_code_plus + 1  # strictly greater than any code_plus
+
+            # Overflow-safe bound check for combination into int64
+            max_id = int(idsm.max()) if idsm.size else -1
+            max_comb = (max_id * width) + (width - 1) if max_id >= 0 else 0
+
+            if max_comb <= np.iinfo(np.int64).max:
+                combined = idsm * np.int64(width) + codem
+                # Factorize unique combined keys
+                _, uniques = algorithms.factorize(combined, sort=False)
+
+                if uniques.size:
+                    gid_unique = (uniques // np.int64(width)).astype(np.intp, copy=False)
+                    # Allocate full result sized to result_index and fill via bincount
+                    res_arr = np.zeros(len(ri), dtype="int64")
+                    bc = np.bincount(gid_unique, minlength=len(ri))
+                    res_arr[: len(bc)] = bc.astype("int64", copy=False)
+                else:
+                    res_arr = np.zeros(len(ri), dtype="int64")
+            else:
+                # Fallback to original lexsort-based implementation on overflow risk
+                sorter = np.lexsort((codes, ids))
+                codes2 = codes[sorter]
+                ids2 = ids[sorter]
+
+                # group boundaries are where group ids change
+                # unique observations are where sorted values change
+                idx = np.r_[0, 1 + np.nonzero(ids2[1:] != ids2[:-1])[0]]
+                inc = np.r_[1, codes2[1:] != codes2[:-1]]
+
+                # 1st item of each group is a new unique observation
+                mask_codes = codes2 == -1
+                if dropna:
+                    inc[idx] = 1
+                    inc[mask_codes] = 0
+                else:
+                    inc[mask_codes & np.r_[False, mask_codes[:-1]]] = 0
+                    inc[idx] = 1
+
+                out = np.add.reduceat(inc, idx).astype("int64", copy=False)
+                if len(ids2):
+                    # NaN/NaT group exists if the head of ids is -1,
+                    # so remove it from res and exclude its index from idx
+                    if ids2[0] == -1:
+                        res = out[1:]
+                        idx = idx[np.flatnonzero(idx)]
+                    else:
+                        res = out
+                else:
+                    res = out[1:]
+
+                # we might have duplications among the bins
+                if len(res) != len(ri):
+                    res_arr = np.zeros(len(ri), dtype=out.dtype)
+                    if len(ids2) > 0:
+                        # GH#21334s
+                        res_arr[ids2[idx]] = res
+                else:
+                    res_arr = res.astype("int64", copy=False)
+        else:
+            # No valid observations (all filtered). Return zeros aligned to result index.
+            res_arr = np.zeros(len(ri), dtype="int64")
+
+        result: Series | DataFrame = self.obj._constructor(
+            res_arr, index=ri, name=self.obj.name
+        )
+        if not self.as_index:
+            result = self._insert_inaxis_grouper(result)
+            result.index = default_index(len(result))
+        return self._reindex_output(result, fill_value=0)
+[/REPLACE]

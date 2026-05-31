@@ -1,0 +1,18 @@
+pandas/core/groupby/groupby.py
+[SEARCH]
+        # Put '-1' (NaN) labels as the last group so it does not interfere
+        # with the calculations. Note: length check avoids failure on empty
+        # labels. In that case, the value doesn't matter
+        na_label_for_sorting = ids.max() + 1 if len(ids) > 0 else 0
+        labels_for_lexsort = np.where(ids == -1, na_label_for_sorting, ids)
+[/SEARCH]
+[REPLACE]
+        # Put '-1' (NaN) labels as the last group so it does not interfere
+        # with the calculations. Note: length check avoids failure on empty
+        # labels. In that case, the value doesn't matter
+        if self.grouper.has_dropped_na:
+            na_label_for_sorting = ngroups if len(ids) > 0 else 0
+            labels_for_lexsort = np.where(ids == -1, na_label_for_sorting, ids)
+        else:
+            labels_for_lexsort = ids
+[/REPLACE]

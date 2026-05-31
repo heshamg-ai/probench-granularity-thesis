@@ -1,0 +1,26 @@
+pandas/core/generic.py
+[SEARCH]
+            else:
+                for _dt in cond.dtypes:
+                    if not is_bool_dtype(_dt):
+                        raise TypeError(msg.format(dtype=_dt))
+                if cond._mgr.any_extension_types:
+                    # GH51574: avoid object ndarray conversion later on
+                    cond = cond._constructor(
+                        cond.to_numpy(dtype=bool, na_value=fill_value),
+                        **cond._construct_axes_dict(),
+                    )
+[/SEARCH]
+[REPLACE]
+            else:
+                dtypes = cond.dtypes
+                for i in range(len(dtypes)):
+                    if not is_bool_dtype(dtypes[i]):
+                        raise TypeError(msg.format(dtype=dtypes[i]))
+                if cond._mgr.any_extension_types:
+                    # GH51574: avoid object ndarray conversion later on
+                    cond = cond._constructor(
+                        cond.to_numpy(dtype=bool, na_value=fill_value),
+                        **cond._construct_axes_dict(),
+                    )
+[/REPLACE]

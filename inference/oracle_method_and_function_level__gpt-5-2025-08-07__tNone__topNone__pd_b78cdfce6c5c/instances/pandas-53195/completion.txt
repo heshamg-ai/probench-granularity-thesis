@@ -1,0 +1,70 @@
+pandas/core/reshape/concat.py
+[SEARCH]
+    if not all_indexes_same(indexes) or not all(level.is_unique for level in levels):
+        codes_list = []
+
+        # things are potentially different sizes, so compute the exact codes
+        # for each level and pass those to MultiIndex.from_arrays
+
+        for hlevel, level in zip(zipped, levels):
+            to_concat = []
+            for key, index in zip(hlevel, indexes):
+                # Find matching codes, include matching nan values as equal.
+                mask = (isna(level) & isna(key)) | (level == key)
+                if not mask.any():
+                    raise ValueError(f"Key {key} not in level {level}")
+                i = np.nonzero(mask)[0][0]
+
+                to_concat.append(np.repeat(i, len(index)))
+            codes_list.append(np.concatenate(to_concat))
+[/SEARCH]
+[REPLACE]
+    if not all_indexes_same(indexes) or not all(level.is_unique for level in levels):
+        codes_list = []
+
+        # things are potentially different sizes, so compute the exact codes
+        # for each level and pass those to MultiIndex.from_arrays
+
+        # Precompute segment lengths and total length for efficient filling
+        seg_lengths = [len(idx) for idx in indexes]
+        total_len = sum(seg_lengths)
+
+        for hlevel, level in zip(zipped, levels):
+            # Vectorized mapping from keys to level codes, treating NaN as equal.
+            mapped = level.get_indexer(hlevel)
+
+            if (mapped == -1).any():
+                lvl_isna = isna(level)
+                if lvl_isna.any():
+                    nan_pos = np.nonzero(lvl_isna)[0][0]
+                    h_isna = isna(hlevel)
+                    fill_mask = (mapped == -1) & h_isna
+                    if fill_mask.any():
+                        mapped[fill_mask] = nan_pos
+
+                if (mapped == -1).any():
+                    first_bad = int(np.nonzero(mapped == -1)[0][0])
+                    bad_key = hlevel[first_bad]
+                    raise ValueError(f"Key {bad_key} not in level {level}")
+
+            # Build codes array by filling segments directly to avoid many small arrays
+            codes = np.empty(total_len, dtype=mapped.dtype)
+            pos = 0
+            for code, seg_len in zip(mapped, seg_lengths):
+                codes[pos:pos + seg_len] = code
+                pos += seg_len
+            codes_list.append(codes)
+[/REPLACE]
+
+pandas/core/reshape/concat.py
+[SEARCH]
+        new_levels.append(new_index.unique())
+        single_codes = new_index.unique().get_indexer(new_index)
+        new_codes.append(np.tile(single_codes, kpieces))
+[/SEARCH]
+[REPLACE]
+        _unique_new_index = new_index.unique()
+        new_levels.append(_unique_new_index)
+        single_codes = _unique_new_index.get_indexer(new_index)
+        new_codes.append(np.tile(single_codes, kpieces))
+[/REPLACE]

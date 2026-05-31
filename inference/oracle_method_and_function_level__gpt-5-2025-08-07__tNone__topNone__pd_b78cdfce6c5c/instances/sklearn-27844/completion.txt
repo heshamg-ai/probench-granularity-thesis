@@ -1,0 +1,18 @@
+sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py
+[SEARCH]
+        # TODO: This could be done in parallel
+        encoded_classes = np.argmax(self.predict_proba(X), axis=1)
+        return self.classes_[encoded_classes]
+[/SEARCH]
+[REPLACE]
+        # TODO: This could be done in parallel
+        if getattr(self, "n_classes_", None) == 2:
+            # For binary classification, use the decision function to avoid
+            # building the full probability matrix. Choose class 1 iff
+            # proba[:, 1] > proba[:, 0], i.e., decision_function > 0.
+            scores = self.decision_function(X)
+            encoded_classes = (scores > 0).astype(np.intp, copy=False)
+        else:
+            encoded_classes = np.argmax(self.predict_proba(X), axis=1)
+        return self.classes_[encoded_classes]
+[/REPLACE]

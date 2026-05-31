@@ -1,0 +1,169 @@
+pandas/core/groupby/generic.py
+[SEARCH]
+    def nunique(self, dropna: bool = True) -> DataFrame:
+        """
+        Return DataFrame with counts of unique elements in each position.
+
+        Parameters
+        ----------
+        dropna : bool, default True
+            Don't include NaN in the counts.
+
+        Returns
+        -------
+        nunique: DataFrame
+
+        Examples
+        --------
+        >>> df = pd.DataFrame({'id': ['spam', 'egg', 'egg', 'spam',
+        ...                           'ham', 'ham'],
+        ...                    'value1': [1, 5, 5, 2, 5, 5],
+        ...                    'value2': list('abbaxy')})
+        >>> df
+             id  value1 value2
+        0  spam       1      a
+        1   egg       5      b
+        2   egg       5      b
+        3  spam       2      a
+        4  ham       5      x
+        5  ham       5      y
+
+        >>> df.groupby('id').nunique()
+              value1  value2
+        id
+        egg        1       1
+        ham        1       2
+        spam       2       1
+
+        Check for rows with the same id but conflicting values:
+
+        >>> df.groupby('id').filter(lambda g: (g.nunique() > 1).any())
+             id  value1 value2
+        0  spam       1      a
+        3  spam       2      a
+        4  ham       5      x
+        5  ham       5      y
+        """
+
+        if self.axis != 0:
+            # see test_groupby_crash_on_nunique
+            return self._python_apply_general(
+                lambda sgb: sgb.nunique(dropna), self._obj_with_exclusions, is_agg=True
+            )
+
+        return self._apply_to_column_groupbys(lambda sgb: sgb.nunique(dropna))
+[/SEARCH]
+[REPLACE]
+    def nunique(self, dropna: bool = True) -> DataFrame:
+        """
+        Return DataFrame with counts of unique elements in each position.
+
+        Parameters
+        ----------
+        dropna : bool, default True
+            Don't include NaN in the counts.
+
+        Returns
+        -------
+        nunique: DataFrame
+
+        Examples
+        --------
+        >>> df = pd.DataFrame({'id': ['spam', 'egg', 'egg', 'spam',
+        ...                           'ham', 'ham'],
+        ...                    'value1': [1, 5, 5, 2, 5, 5],
+        ...                    'value2': list('abbaxy')})
+        >>> df
+             id  value1 value2
+        0  spam       1      a
+        1   egg       5      b
+        2   egg       5      b
+        3  spam       2      a
+        4  ham       5      x
+        5  ham       5      y
+
+        >>> df.groupby('id').nunique()
+              value1  value2
+        id
+        egg        1       1
+        ham        1       2
+        spam       2       1
+
+        Check for rows with the same id but conflicting values:
+
+        >>> df.groupby('id').filter(lambda g: (g.nunique() > 1).any())
+             id  value1 value2
+        0  spam       1      a
+        3  spam       2      a
+        4  ham       5      x
+        5  ham       5      y
+        """
+
+        if self.axis != 0:
+            # see test_groupby_crash_on_nunique
+            return self._python_apply_general(
+                lambda sgb: sgb.nunique(dropna), self._obj_with_exclusions, is_agg=True
+            )
+
+        ids, _, _ = self.grouper.group_info
+        ngroups = self.grouper.ngroups
+
+        obj = self._obj_with_exclusions
+        columns = obj.columns
+        ncols = len(columns)
+
+        result_values = np.empty((ngroups, ncols), dtype=np.int64)
+
+        for i in range(ncols):
+            val = obj.iloc[:, i]._values
+
+            codes, _ = algorithms.factorize(val, sort=False)
+            sorter = np.lexsort((codes, ids))
+            codes = codes[sorter]
+            ids_sorted = ids[sorter]
+
+            # group boundaries are where group ids change
+            # unique observations are where sorted values change
+            idx = np.r_[0, 1 + np.nonzero(ids_sorted[1:] != ids_sorted[:-1])[0]]
+            inc = np.r_[1, codes[1:] != codes[:-1]]
+
+            # 1st item of each group is a new unique observation
+            mask = codes == -1
+            if dropna:
+                inc[idx] = 1
+                inc[mask] = 0
+            else:
+                inc[mask & np.r_[False, mask[:-1]]] = 0
+                inc[idx] = 1
+
+            out = np.add.reduceat(inc, idx).astype("int64", copy=False)
+            if len(ids_sorted):
+                # NaN/NaT group exists if the head of ids_sorted is -1,
+                # so remove it from res and exclude its index from idx
+                if ids_sorted[0] == -1:
+                    res = out[1:]
+                    idx = idx[np.flatnonzero(idx)]
+                else:
+                    res = out
+            else:
+                res = out[1:]
+
+            # we might have duplications among the bins
+            if len(res) != ngroups:
+                col_result = np.zeros(ngroups, dtype=out.dtype)
+                if len(ids_sorted) > 0:
+                    # GH#21334s
+                    col_result[ids_sorted[idx]] = res
+            else:
+                col_result = res
+
+            result_values[:, i] = col_result
+
+        ri = self.grouper.result_index
+        result = DataFrame(result_values, index=ri, columns=columns)
+
+        if not self.as_index:
+            result = self._insert_inaxis_grouper(result)
+            result.index = default_index(len(result))
+        return self._reindex_output(result, fill_value=0)
+[/REPLACE]

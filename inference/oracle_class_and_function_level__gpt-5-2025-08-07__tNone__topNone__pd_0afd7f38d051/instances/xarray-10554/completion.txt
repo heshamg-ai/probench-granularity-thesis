@@ -1,0 +1,24 @@
+xarray/core/dataset.py
+[SEARCH]
+            reindexed = alignment.reindex(
+                obj[reindex_vars],
+                indexers=reindex_indexers,
+                method=method_non_numeric,
+                exclude_vars=variables.keys(),
+            )
+            indexes = dict(reindexed._indexes)
+            variables.update(reindexed.variables)
+[/SEARCH]
+[REPLACE]
+            subset_ds = type(obj)._construct_direct(
+                {k: obj._variables[k] for k in reindex_vars},
+                set(),
+            )
+            reindexed = alignment.reindex(
+                subset_ds,
+                indexers=reindex_indexers,
+                method=method_non_numeric,
+            )
+            indexes = dict(reindexed._indexes)
+            variables.update(reindexed.variables)
+[/REPLACE]

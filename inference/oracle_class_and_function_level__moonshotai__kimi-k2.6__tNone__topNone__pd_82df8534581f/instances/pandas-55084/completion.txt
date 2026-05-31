@@ -1,0 +1,20 @@
+pandas/core/indexes/api.py
+[SEARCH]
+        if not all(index.equals(other) for other in indexes[1:]):
+            index = _unique_indices(indexes, dtype)
+[/SEARCH]
+[REPLACE]
+        if not all(index.equals(other) for other in indexes[1:]):
+            # Fast path: if indexes are already aligned and unique,
+            # we can avoid the expensive append/unique/sort path
+            # by checking if all indexes are identical.
+            # This is a common case in concat with axis=1.
+            first = indexes[0]
+            if all(
+                first.is_(other) or (first.dtype == other.dtype and first.equals(other))
+                for other in indexes[1:]
+            ):
+                pass  # all indexes are the same, keep `index`
+            else:
+                index = _unique_indices(indexes, dtype)
+[/REPLACE]

@@ -1,0 +1,155 @@
+I need to optimize `Series.str.split` with `expand=True` for PyArrow-backed strings by adding a fast path that avoids the expensive Python-level list manipulation when dealing with ArrowExtensionArray results.
+
+Looking at the `_wrap_result` method, I can see there's already handling for `ArrowDtype` when `expand=True`, but it's doing expensive operations. The key optimization is to add a fast path in `split` itself to use PyArrow's native string splitting capabilities directly, which can be much faster than the generic path.
+
+Let me trace through the code to find where `split` is defined and how it connects to `_wrap_result`. The `split` method is likely in the same file and calls through to an underlying implementation. Let me look for it.
+
+Based on the structure, `split` likely uses `_str_map` or similar and eventually calls a method that returns results to `_wrap_result`. I need to find the actual split method and optimize it for the PyArrow case with `expand=True`.
+
+Looking at the accessor pattern, I'll search for the `split` method definition. Since it's not in the provided snippet, it must call through a generic mechanism. Let me add the optimization in `_wrap_result` where ArrowExtensionArray results are handled, as that's where the `expand=True` logic currently lives.
+
+The current Arrow handling in `_wrap_result` does:
+1. Gets max_len from value_lengths
+2. Handles NA values by filling with [None] * max_len
+3. Pads lists to max_len
+4. Then transposes with zip(*result.tolist())
+
+This is inefficient. We can use PyArrow's `utf8_split_whitespace` or `split_pattern` directly for much better performance, and use `fixed_size_list` or similar to avoid the Python-level transposition.
+
+However, based on the provided code, I can only modify what's in `_wrap_result` since that's where the Arrow-specific expand logic is. Let me optimize that section.
+
+Actually, let me re-read more carefully. The optimization request says "Optimize Series.str.split with expand=True for PyArrow-backed strings". The most impactful optimization would be to use PyArrow's compute functions directly rather than converting to Python lists.
+
+Looking at the code more carefully, I need to find where `split` dispatches. Since I only have `_wrap_result`, let me optimize the Arrow path there. But actually, the real optimization should be in the split method itself to use PyArrow directly.
+
+Let me search for the split method. Since it's not in the provided context, it must be generated dynamically or the file is truncated. Let me work with what I have and optimize the `_wrap_result` method's handling of Arrow results.
+
+Actually, re-reading the provided code, I think the most impactful change is in `_wrap_result` for the Arrow path. Currently it:
+1. Does `result.tolist()` which is expensive
+2. Does `zip(*result.tolist())` which creates tuples in Python
+
+We can instead use PyArrow's list transposition at the array level, or better yet, avoid the Python-level zip entirely by using pa.compute functions.
+
+Let me craft the optimization. The key insight is that for PyArrow-backed strings with `expand=True`, we can use `pc.utf8_split_whitespace` or `pc.split_pattern` directly, and then use `pa.compute.list_flatten` and proper indexing to create the columns without ever going to Python.
+
+However, since I can only modify `_wrap_result` and the split method isn't in the provided code, let me optimize what I can. Actually, looking again - the split method must call `_wrap_result(expand=True)`, so the optimization of the Arrow path in `_wrap_result` is the right place.
+
+Let me optimize the Arrow path in `_wrap_result` to avoid the expensive `result.tolist()` and `zip(*)` by using PyArrow compute functions directly:
+
+pandas/core/strings/accessor.py
+[SEARCH]
+            elif expand is True and not isinstance(self._orig, ABCIndex):
+            # required when expand=True is explicitly specified
+            # not needed when inferred
+            if isinstance(result.dtype, ArrowDtype):
+                import pyarrow as pa
+
+                from pandas.compat import pa_version_under11p0
+
+                from pandas.core.arrays.arrow.array import ArrowExtensionArray
+
+                value_lengths = result._pa_array.combine_chunks().value_lengths()
+                max_len = pa.compute.max(value_lengths).as_py()
+                min_len = pa.compute.min(value_lengths).as_py()
+                if result._hasna:
+                    # ArrowExtensionArray.fillna doesn't work for list scalars
+                    result = ArrowExtensionArray(
+                        result._pa_array.fill_null([None] * max_len)
+                    )
+                if min_len < max_len:
+                    # append nulls to each scalar list element up to max_len
+                    if not pa_version_under11p0:
+                        result = ArrowExtensionArray(
+                            pa.compute.list_slice(
+                                result._pa_array,
+                                start=0,
+                                stop=max_len,
+                                return_fixed_size_list=True,
+                            )
+                        )
+                    else:
+                        all_null = np.full(max_len, fill_value=None, dtype=object)
+                        values = result.to_numpy()
+                        new_values = []
+                        for row in values:
+                            if len(row) < max_len:
+                                nulls = all_null[: max_len - len(row)]
+                                row = np.append(row, nulls)
+                            new_values.append(row)
+                        pa_type = result._pa_array.type
+                        result = ArrowExtensionArray(pa.array(new_values, type=pa_type))
+                if name is not None:
+                    labels = name
+                else:
+                    labels = range(max_len)
+                result = {
+                    label: ArrowExtensionArray(pa.array(res))
+                    for label, res in zip(labels, (zip(*result.tolist())))
+                }
+[/SEARCH]
+[REPLACE]
+            elif expand is True and not isinstance(self._orig, ABCIndex):
+            # required when expand=True is explicitly specified
+            # not needed when inferred
+            if isinstance(result.dtype, ArrowDtype):
+                import pyarrow as pa
+                import pyarrow.compute as pc
+
+                from pandas.core.arrays.arrow.array import ArrowExtensionArray
+
+                # Fast path for PyArrow-backed strings: use native list ops
+                pa_arr = result._pa_array
+                # Ensure combined single chunk for compute ops
+                pa_arr = getattr(pa_arr, 'combine_chunks', lambda: pa_arr)()
+
+                # Get list lengths to determine max_len
+                value_lengths = pc.list_value_length(pa_arr)
+                max_len = pc.max(value_lengths).as_py()
+                min_len = pc.min(value_lengths).as_py()
+
+                if max_len == 0:
+                    # Handle edge case of all-empty lists
+                    if name is not None:
+                        labels = name if isinstance(name, list) else [name]
+                    else:
+                        labels = range(max_len)
+                    result = {
+                        label: ArrowExtensionArray(pa.array([], type=pa.string()))
+                        for label in labels
+                    }
+                else:
+                    # Fill nulls and pad to max_len using native PyArrow ops
+                    if result._hasna:
+                        pa_arr = pc.fill_null(pa_arr, [None] * max_len)
+
+                    if min_len < max_len:
+                        # Use list_slice with return_fixed_size_list to pad
+                        list_type = pa.list_(pa.string(), max_len)
+                        pa_arr = pc.list_slice(
+                            pa_arr,
+                            start=0,
+                            stop=max_len,
+                            return_fixed_size_list=True,
+                        )
+                    else:
+                        # Already fixed-size, but ensure the type
+                        pass
+
+                    # Extract columns without Python zip(*)
+                    # Use struct_field to pull out each list element
+                    if name is not None:
+                        labels = name if hasattr(name, '__iter__') and not isinstance(name, str) else [name]
+                    else:
+                        labels = range(max_len)
+
+                    # Build a fixed-size list then extract fields
+                    # Convert to struct and extract fields, or flatten by index
+                    # Use list_flatten per position
+                    result_data = {}
+                    for i, label in enumerate(labels):
+                        # Extract i-th element from each list
+                        item_arr = pc.list_element(pa_arr, i)
+                        result_data[label] = ArrowExtensionArray(item_arr)
+
+                    result = result_data
+[/REPLACE]

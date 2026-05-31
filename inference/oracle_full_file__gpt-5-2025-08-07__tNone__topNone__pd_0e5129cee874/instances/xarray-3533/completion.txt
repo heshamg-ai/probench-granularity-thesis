@@ -1,0 +1,35 @@
+xarray/core/dataarray.py
+[SEARCH]
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/SEARCH]
+[REPLACE]
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        # Fast-path for simple integer indexing on small arrays without dataset round-trip
+        if indexers and all(
+            (k in self.dims) and isinstance(v, (int, np.integer))
+            for k, v in indexers.items()
+        ):
+            invalid = set(indexers.keys()) - set(self.dims)
+            if invalid:
+                raise ValueError("dimensions %r do not exist" % invalid)
+            # Index the primary variable
+            var = self.variable.isel(indexers=indexers)
+            # Build coordinates by indexing them too
+            coords: Dict[Any, Variable] = {}
+            for name, coord in self._coords.items():
+                sub_indexers = {k: v for k, v in indexers.items() if k in coord.dims}
+                # Drop dimension coordinate when requested
+                if (
+                    drop
+                    and name in indexers
+                    and isinstance(indexers[name], (int, np.integer))
+                    and coord.dims == (name,)
+                ):
+                    continue
+                coords[name] = coord.isel(sub_indexers) if sub_indexers else coord
+            return self._replace(variable=var, coords=coords)
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/REPLACE]

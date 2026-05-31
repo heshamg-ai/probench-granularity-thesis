@@ -1,0 +1,378 @@
+The user wants me to optimize `DataFrameGroupBy.groups` execution. Looking at the provided code, specifically the `BaseGrouper.groups` property in `pandas/core/groupby/ops.py`, I need to understand what it does and how it can be optimized.
+
+Current code:
+```python
+@cache_readonly
+def groups(self) -> dict[Hashable, np.ndarray]:
+    """dict {group name -> group labels}"""
+    if len(self.groupings) == 1:
+        return self.groupings[0].groups
+    else:
+        to_groupby = zip(*(ping.grouping_vector for ping in self.groupings))
+        index = Index(to_groupby)
+        return self.axis.groupby(index)
+```
+
+There are two issues here:
+1. When `len(self.groupings) == 1`, it calls `self.groupings[0].groups` but the return type annotation says `dict[Hashable, np.ndarray]` while `self.groupings[0].groups` might return something else? Actually, we need to be careful. The `Grouping.groups` property likely returns `dict[Hashable, np.ndarray]`. But looking at the pattern, `self.groupings[0].groups` probably works fine.
+
+Wait, the issue in the original pandas codebase that this is likely addressing is that `DataFrameGroupBy.groups` is slow. Let me look at the original code again.
+
+Actually, looking at the code, when there are multiple groupings, it creates an `Index` from `zip(*(ping.grouping_vector for ping in self.groupings))` and then calls `self.axis.groupby(index)`.
+
+This is inefficient because:
+1. `grouping_vector` might be expensive
+2. Creating an `Index` from zipped tuples can be slow and memory intensive for large data
+3. `self.axis.groupby(index)` creates a new GroupBy object just to compute groups
+
+A better approach would be to use the existing `indices` property which already computes `dict[Hashable, np.ndarray]` efficiently using `get_indexer_dict`. But `indices` returns group index -> positions, where the keys might not be formatted the same way as `groups` expects.
+
+Wait, let me check. The `indices` property on `BaseGrouper`:
+```python
+@cache_readonly
+def indices(self) -> dict[Hashable, npt.NDArray[np.intp]]:
+    """dict {group name -> group indices}"""
+    if len(self.groupings) == 1 and isinstance(self.result_index, CategoricalIndex):
+        # This shows unused categories in indices GH#38642
+        return self.groupings[0].indices
+    codes_list = [ping.codes for ping in self.groupings]
+    keys = [ping.group_index for ping in self.groupings]
+    return get_indexer_dict(codes_list, keys)
+```
+
+And the `groups` property:
+```python
+@cache_readonly
+def groups(self) -> dict[Hashable, np.ndarray]:
+    """dict {group name -> group labels}"""
+    if len(self.groupings) == 1:
+        return self.groupings[0].groups
+    else:
+        to_groupby = zip(*(ping.grouping_vector for ping in self.groupings))
+        index = Index(to_groupby)
+        return self.axis.groupby(index)
+```
+
+So `groups` needs to return the group labels (names) mapped to axis labels. While `indices` returns the integer positions.
+
+Wait, actually, looking more carefully at the semantics:
+- `groups` should return `dict[group_label, [row_labels]]` where row_labels are from the original axis (like index values)
+- `indices` returns `dict[group_label, [row_positions]]` where row_positions are integer positions
+
+But there's another important point: the current `groups` implementation for multiple keys uses `self.axis.groupby(index)` which returns a dictionary where keys are tuples and values are arrays of axis labels.
+
+Actually, looking at pandas tests, `DataFrameGroupBy.groups` returns a dictionary mapping group names to arrays of row labels (the index values of the rows in that group).
+
+However, there's an optimization here. Instead of creating the zip and doing groupby on the axis, we can use the `codes_list` and `keys` to construct the result, or better yet, leverage the existing `indices` property which maps names to positions, and then map those positions to labels.
+
+But wait, `indices` for multiple groupings returns a dict with tuple keys (MultiIndex level tuples) mapping to integer positions. We could convert those to labels using `self.axis.take(positions)`.
+
+Actually, looking at the pandas codebase history, there was an optimization made to `BaseGrouper.groups` to avoid the expensive `axis.groupby` when there are multiple groupings. The optimization uses `self.indices` and then maps each group to axis labels using the axis at those positions.
+
+Let me think about this more carefully. The `indices` property already computes the groups-to-positions mapping efficiently. So we can do:
+
+```python
+@cache_readonly
+def groups(self) -> dict[Hashable, np.ndarray]:
+    """dict {group name -> group labels}"""
+    if len(self.groupings) == 1:
+        return self.groupings[0].groups
+    else:
+        return {key: self.axis.take(indices) for key, indices in self.indices.items()}
+```
+
+But wait, `self.axis` might be a RangeIndex or other index, and `take` should return the labels.
+
+Let me check if this is correct. For `DataFrameGroupBy`, `self.axis` corresponds to the row axis (index of the DataFrame). So `self.axis.take(indices)` gives the index labels for those rows.
+
+This is much more memory and CPU efficient because:
+1. It reuses the already-cached or easily-computable `indices` property
+2. It avoids constructing a large temporary `Index` from zipped group vectors
+3. It avoids the overhead of creating a new GroupBy object and running `groupby` on it
+
+But wait, there's an even better approach if we look at the `Grouping.groups` property. For a single grouping, `self.groupings[0].groups` delegates to something. For multiple groupings, the current approach is very inefficient.
+
+One important detail: the current code returns `np.ndarray` for the values (the group labels for each row in the group). `self.axis.take(indices)` would return an `Index`, not necessarily an ndarray. Looking at the return type annotation: `dict[Hashable, np.ndarray]`. But the single-grouping path returns `self.groupings[0].groups` which might also be returning `Index` or `np.ndarray` depending on the implementation.
+
+Actually, looking at pandas source, `Grouping.groups` returns a dict with values that are arrays of labels from the original axis. And for multiple groupings, we need to ensure we return `np.ndarray` or at least something compatible.
+
+Wait, `Index.take()` returns an `Index`. We probably want to convert it to `np.ndarray` to match the exact behavior. Or do we? Let me check what `self.axis.groupby(index)` returns. If `self.axis` is a DatetimeIndex and we do groupby, the values returned might be `DatetimeIndex` objects. So maybe returning `Index` values is fine. But the type hint says `np.ndarray`.
+
+Actually, let's look at what `axis.groupby` returns. In pandas, the `groups` property on a GroupBy object eventually calls into `Grouper.get_iterator` or similar. But for Index, `groupby` is a method that returns an `IndexGroupBy` (not the same as DataFrameGroupBy). Wait no, `Index` has a `groupby` method that returns an `dict`? Let me check... Actually, `Index` doesn't have a `groupby` method in pandas. Hmm.
+
+Wait, looking at the original code again: `return self.axis.groupby(index)`. This is in `BaseGrouper`. What is `self.axis`? It's an `Index`. In pandas, `Index` doesn't have a `groupby` method. Oh wait, maybe this is an older version of pandas, or maybe `axis` is actually an object that has `groupby`? Let me re-read...
+
+Actually, `Index` in pandas does NOT have a `groupby` method. But the code says `self.axis.groupby(index)`. This must be pandas from a time when Index didn't have groupby? No, actually in modern pandas, `Index` has `groupby`? Let me think.
+
+Actually, maybe `self.axis` here is the `obj._get_axis(self.axis)` thing? Wait, in `BaseGrouper.__init__`, `self.axis` is typed as `Index`. And `Index` objects don't have a `groupby` method. So how does this code work?
+
+Oh, I see. Maybe it's using `pd.core.groupby.Grouper`? No... Actually, looking at the pandas GitHub, `Index.groupby` was added at some point. Yes, in pandas, `Index.groupby` exists and returns a dictionary mapping group keys to index values.
+
+So the current multiple-grouping path does:
+1. `zip(*(ping.grouping_vector for ping in self.groupings))` - creates tuples of grouping values for each row
+2. `index = Index(to_groupby)` - creates an Index from these tuples
+3. `return self.axis.groupby(index)` - groups the axis labels by these tuples
+
+This is very memory-intensive because:
+- It materializes all grouping vectors into tuples
+- It creates a new Index from all these tuples
+- Then it runs a group-by on the axis
+
+The optimization is to reuse `self.indices` which uses `get_indexer_dict` and works directly with the already-computed codes. This avoids all that overhead.
+
+But there's a catch: `self.indices` for multiple groupings returns keys that are tuples of the group values, which is exactly what we want. Then for the values (the axis labels), we can map the integer positions in `self.indices` back to axis labels using `self.axis.take()`.
+
+Actually, wait. Let me reconsider whether `self.indices` is the right thing to use.
+
+`indices` property:
+```python
+@cache_readonly
+def indices(self) -> dict[Hashable, npt.NDArray[np.intp]]:
+    """dict {group name -> group indices}"""
+    if len(self.groupings) == 1 and isinstance(self.result_index, CategoricalIndex):
+        return self.groupings[0].indices
+    codes_list = [ping.codes for ping in self.groupings]
+    keys = [ping.group_index for ping in self.groupings]
+    return get_indexer_dict(codes_list, keys)
+```
+
+And `get_indexer_dict(codes_list, keys)` likely returns a dict mapping group tuples to integer positions. So we can do:
+
+```python
+@cache_readonly
+def groups(self) -> dict[Hashable, np.ndarray]:
+    """dict {group name -> group labels}"""
+    if len(self.groupings) == 1:
+        return self.groupings[0].groups
+    else:
+        return {key: self.axis.take(indices) for key, indices in self.indices.items()}
+```
+
+This is much more efficient! However, I'm a bit concerned about whether `self.axis.take(indices)` returns the exact same type as `self.axis.groupby(index)` would return. In the old code, `axis.groupby` on Index returns arrays of index values. Actually, `Index.groupby` (if it exists) should return either `Index` objects or arrays.
+
+Wait, I should check if `Index` actually has `groupby`. Looking at pandas 2.x source... Yes, `Index` has a `groupby` method in `pandas/core/indexes/base.py`:
+
+```python
+def groupby(self, values) -> dict[Hashable, Index]:
+```
+
+Actually, I just checked mentally, and `Index.groupby` might not exist. But the code clearly uses it. Let me assume it exists and returns a dict.
+
+The biggest issue with the current implementation is memory and speed. The optimized version using `indices` and `axis.take` should be much better.
+
+But wait, I should also check if this is actually the code path for `DataFrameGroupBy.groups`. The user is specifically asking about `pandas.core.groupby.DataFrameGroupBy.groups`. Looking at the code, `DataFrameGroupBy.groups` probably delegates to `Grouper.groups` or `BaseGrouper.groups`. Since `BaseGrouper` is the one holding the groups, and looking at the file `pandas/core/groupby/ops.py`, `BaseGrouper.groups` is what we need to optimize.
+
+There's one more thing: returning `self.axis.take(indices)` will give us an `Index` object as the dict values, but the original might return `np.ndarray`. Looking at the return type hint: `dict[Hashable, np.ndarray]`. However, in the single-key path, `self.groupings[0].groups` returns `dict[Hashable, np.ndarray]` from the `Grouping` class. For the multi-key path, the old code returned `self.axis.groupby(index)` which for an Index might return `Index` values. We need to check if we need to cast to `np.ndarray`.
+
+Actually, in pandas, `Index.groupby` might return ndarray values. Let me just check: if `axis` is an Index, `.take(indices)` returns an `Index`. But `Grouping.groups` returns arrays. To be safe, maybe we should return `self.axis.take(indices)._values` or `np.asarray(self.axis.take(indices))`. But if the old code returned `Index` values for the multi-key case, then we should maintain that.
+
+Actually, I just realized: the old code says `return self.axis.groupby(index)`. The `Index.groupby` method in pandas actually returns a `dict` with `Index` values (if it exists). Wait, no, I don't think `Index.groupby` exists as a public API in pandas.
+
+Let me not overthink this. The standard optimization for this exact problem in pandas is:
+
+```python
+@cache_readonly
+def groups(self) -> dict[Hashable, np.ndarray]:
+    """dict {group name -> group labels}"""
+    if len(self.groupings) == 1:
+        return self.groupings[0].groups
+    else:
+        return {key: self.axis.take(indices) for key, indices in self.indices.items()}
+```
+
+But for maximum compatibility and to avoid constructing a dict that might have the wrong value type, we might want:
+
+```python
+@cache_readonly
+def groups(self) -> dict[Hashable, np.ndarray]:
+    """dict {group name -> group labels}"""
+    if len(self.groupings) == 1:
+        return self.groupings[0].groups
+    else:
+        return {key: self.axis[indices] for key, indices in self.indices.items()}
+```
+
+Wait, `self.axis[indices]` where `indices` is an ndarray of integers does fancy indexing and returns an `Index`. That's the same as `take`. 
+
+Actually, I think the cleanest and most correct optimization is:
+
+```python
+@cache_readonly
+def groups(self) -> dict[Hashable, np.ndarray]:
+    """dict {group name -> group labels}"""
+    if len(self.groupings) == 1:
+        return self.groupings[0].groups
+    else:
+        return {key: self.axis.take(indices) for key, indices in self.indices.items()}
+```
+
+This avoids the expensive creation of the intermediate `Index(to_groupby)` and the `groupby` call.
+
+Wait, I need to double check: does `self.indices` have exactly the same keys as what the old `groups` would produce? 
+
+For multiple groupings, `get_indexer_dict(codes_list, keys)` computes the unique group combinations from the codes and maps them to positions. The keys should be tuples of group labels. The old approach also produces tuples because `zip(*...)` creates tuples, and when `Index(to_groupby)` is used with `groupby`, the group keys are the unique tuples. So yes, the keys should match.
+
+However, there's a subtle issue: NaN handling and ordering. The old approach goes through `Index.groupby`, which may have slightly different behavior for NaN or sorting. But since `self.indices` is based on the same underlying `codes` and uses the same sorting settings (via `self._sort`), the keys should come out in the same order and with the same values.
+
+Actually, `get_indexer_dict` doesn't necessarily sort by default. Let me check the get_indexer_dict signature or implementation... it's a Cython utility function. Looking at the code, `indices` is already used elsewhere and should be consistent.
+
+One more thing: the `Cache` memory benefit. By using `self.indices`, we avoid allocating the `to_groupby` zip, the `Index` from it, and the internal structures of `groupby`. This is a huge memory win for large datasets.
+
+I think the search/replace should be:
+
+SEARCH:
+```python
+    @cache_readonly
+    def groups(self) -> dict[Hashable, np.ndarray]:
+        """dict {group name -> group labels}"""
+        if len(self.groupings) == 1:
+            return self.groupings[0].groups
+        else:
+            to_groupby = zip(*(ping.grouping_vector for ping in self.groupings))
+            index = Index(to_groupby)
+            return self.axis.groupby(index)
+```
+
+REPLACE:
+```python
+    @cache_readonly
+    def groups(self) -> dict[Hashable, np.ndarray]:
+        """dict {group name -> group labels}"""
+        if len(self.groupings) == 1:
+            return self.groupings[0].groups
+        else:
+            return {key: self.axis.take(indices) for key, indices in self.indices.items()}
+```
+
+Actually, I'm slightly worried about the return type. The old code returned whatever `self.axis.groupby(index)` returns. Does `self.axis.take(indices)` return the same thing? In pandas, `Index.take` returns an `Index`, not an `np.ndarray`. But the single-key path also returns group labels which might also be `Index` in some cases but typed as `np.ndarray`.
+
+Actually, looking at `Grouping.groups` in pandas source, it likely returns `np.ndarray` values. For multi-key, maybe returning `Index` is wrong. However, in many pandas internals, `Index` and `np.ndarray` are somewhat interchangeable for this purpose. And `axis.groupby` was returning a dict with `Index` values or arrays? Let me think...
+
+In pandas `Index` actually DOES NOT have a `groupby` method. So what was the original code doing? Wait, looking up pandas 2.1.x source: `BaseGrouper.groups` property in `pandas/core/groupby/ops.py` was changed at some point. In earlier versions, it didn't use `axis.groupby`. Let me search my memory...
+
+Actually, I recall seeing this exact optimization in a pandas pull request. The `axis.groupby` approach was indeed the original, and it was replaced with the `indices` + `axis.take` approach. So my optimization is correct and follows the actual pandas optimization.
+
+Let me verify the exact code to search for and replace with.
+
+The search should be exactly the `groups` property in the provided code.
+
+Wait, looking again at the code provided:
+
+```python
+    @cache_readonly
+    def groups(self) -> dict[Hashable, np.ndarray]:
+        """dict {group name -> group labels}"""
+        if len(self.groupings) == 1:
+            return self.groupings[0].groups
+        else:
+            to_groupby = zip(*(ping.grouping_vector for ping in self.groupings))
+            index = Index(to_groupby)
+            return self.axis.groupby(index)
+```
+
+I need to replace the multigroup branch. But actually, the original code has `return self.axis.groupby(index)`. However, `Index` might not have a `groupby` method, or it might. Regardless, the replacement uses `self.indices.items()`.
+
+But wait, I need to be careful. I'll use the exact text from the provided code.
+
+One more thought: should we use a dictionary comprehension or build a dict in a loop? For very large numbers of groups, a comprehension is slightly faster in Python. So:
+
+```python
+return {key: self.axis.take(indices) for key, indices in self.indices.items()}
+```
+
+This is good.
+
+However, I realize there might be a type issue. The type hint says `dict[Hashable, np.ndarray]`, but `self.axis.take(indices)` returns an `Index`. Should we convert it? 
+
+In the actual pandas codebase, when this optimization was made, I believe they might have changed the return type or kept it as is. But for the purposes of preserving exact semantics and outputs, if `axis.groupby` returned `Index` values, then `axis.take` returning `Index` is fine. If it returned `np.ndarray`, we might need `np.asarray(axis.take(...))`. But since the single-key path might also return `Index`, and the type hint might just be an approximation, I'll leave it as `axis.take` for efficiency and because it matches the typical pandas behavior.
+
+Actually, I just remembered: `DataFrameGroupBy.groups` returns `dict` values that are `Index` when the axis is a MultiIndex, and arrays otherwise? No, I think `groups` returns arrays of the index values. In any case, in pandas, `Index` objects are acceptable where arrays are expected in many cases.
+
+Let me write the search/replace block.
+
+One more thing: do I need to import anything? No, because `self.indices` already exists on the class.
+
+Wait, I need to make sure that `self.indices` is accessible at this point. `indices` is defined as:
+
+```python
+@cache_readonly
+def indices(self) -> dict[Hashable, npt.NDArray[np.intp]]:
+```
+
+And `groups` is also `@cache_readonly`. So when `groups` is accessed, `self.indices` might not be cached yet, but it will be computed on first access. That's fine.
+
+Also, `self.indices` for `len(self.groupings) > 1` returns a dict, so `.items()` works.
+
+Let me double check the `indices` code for multiple groupings:
+
+```python
+codes_list = [ping.codes for ping in self.groupings]
+keys = [ping.group_index for ping in self.groupings]
+return get_indexer_dict(codes_list, keys)
+```
+
+`get_indexer_dict` returns `dict[Hashable, npt.NDArray[np.intp]]` where the keys are tuples for multiple groupings. This matches what we need.
+
+So the optimization is solid.
+
+Final check: only output search/replace blocks, no prose.
+
+Wait, I need to check if there are any other files to modify. The user wants to optimize `pandas.core.groupby.DataFrameGroupBy.groups`. Looking at the pandas codebase, `DataFrameGroupBy` and `SeriesGroupBy` share the `groups` property through `BaseGrouper`. The `BaseGrouper.groups` is what's shown in the file. So modifying `pandas/core/groupby/ops.py` is correct.
+
+Actually, looking at the provided file path: it's `pandas/core/groupby/ops.py`, so I'll use that path.
+
+Wait, let me look at the code one more time to make sure I have the exact search text:
+
+```python
+    @cache_readonly
+    def groups(self) -> dict[Hashable, np.ndarray]:
+        """dict {group name -> group labels}"""
+        if len(self.groupings) == 1:
+            return self.groupings[0].groups
+        else:
+            to_groupby = zip(*(ping.grouping_vector for ping in self.groupings))
+            index = Index(to_groupby)
+            return self.axis.groupby(index)
+```
+
+This is at indentation level 4 spaces (inside a class). I need to copy the exact indentation.
+
+My replacement will be:
+
+```python
+    @cache_readonly
+    def groups(self) -> dict[Hashable, np.ndarray]:
+        """dict {group name -> group labels}"""
+        if len(self.groupings) == 1:
+            return self.groupings[0].groups
+        else:
+            return {key: self.axis.take(indices) for key, indices in self.indices.items()}
+```
+
+This looks correct.
+
+Actually, I want to add: should I worry that `self.axis.take(indices)` doesn't exist for all axis types, or that it has different behavior than `groupby`? `Index.take` exists and is well-defined. For a MultiIndex axis, `take` will return a MultiIndex. For a regular Index, it returns a regular Index. This is consistent with what `axis.groupby` would return (groups of index values).
+
+One more consideration: memory view vs copy. `Index.take` typically returns a new `Index`. The old `groupby` would also create new Index/arrays for each group. So this is equivalent.
+
+I think we're good. Let me format the block.</think>pandas/core/groupby/ops.py
+[SEARCH]
+    @cache_readonly
+    def groups(self) -> dict[Hashable, np.ndarray]:
+        """dict {group name -> group labels}"""
+        if len(self.groupings) == 1:
+            return self.groupings[0].groups
+        else:
+            to_groupby = zip(*(ping.grouping_vector for ping in self.groupings))
+            index = Index(to_groupby)
+            return self.axis.groupby(index)
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def groups(self) -> dict[Hashable, np.ndarray]:
+        """dict {group name -> group labels}"""
+        if len(self.groupings) == 1:
+            return self.groupings[0].groups
+        else:
+            return {key: self.axis.take(indices) for key, indices in self.indices.items()}
+[/REPLACE]

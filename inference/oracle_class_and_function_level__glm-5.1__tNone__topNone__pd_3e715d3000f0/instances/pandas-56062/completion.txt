@@ -1,0 +1,43 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+        if is_hashable(key):
+            level_values = self._get_level_values(level)
+            loc = level_values.get_loc(key)
+[/SEARCH]
+[REPLACE]
+        if is_hashable(key):
+            level_values = self._get_level_values(level)
+            # Fast path for unique or monotonic levels to avoid full linear scan
+            if level_values.is_unique or level_values.is_monotonic_increasing:
+                try:
+                    return level_values._engine.get_loc(key)
+                except KeyError:
+                    return -1
+            loc = level_values.get_loc(key)
+[/REPLACE]
+
+pandas/core/indexes/multi.py
+[SEARCH]
+            if not isinstance(loc, int):
+                warnings.warn(
+                    "Indexing with multiple keys ({}ixed) is deprecated "
+                    "and will be removed in a future version. Index "
+                    "with a single key or an explicit sequence of keys "
+                    "instead.".format("m" if isinstance(key, tuple) else ""),
+                    FutureWarning,
+                    stacklevel=find_stack_level(),
+                )
+[/SEARCH]
+[REPLACE]
+            if not isinstance(loc, int):
+                # Skip expensive warning for boolean indexers (e.g. slice(None))
+                if not is_bool_indexer(key):
+                    warnings.warn(
+                        "Indexing with multiple keys ({}ixed) is deprecated "
+                        "and will be removed in a future version. Index "
+                        "with a single key or an explicit sequence of keys "
+                        "instead.".format("m" if isinstance(key, tuple) else ""),
+                        FutureWarning,
+                        stacklevel=find_stack_level(),
+                    )
+[/REPLACE]

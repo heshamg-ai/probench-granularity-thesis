@@ -1,0 +1,17 @@
+pandas/core/reshape/encoding.py
+[SEARCH]
+    from pandas.core.reshape.concat import concat
+
+    # Series avoids inconsistent NaN handling
+    codes, levels = factorize_from_iterable(Series(data, copy=False))
+[/SEARCH]
+[REPLACE]
+    from pandas.core.reshape.concat import concat
+
+    # Series avoids inconsistent NaN handling
+    if isinstance(data, Categorical):
+        codes = data.codes
+        levels = data.categories
+    else:
+        codes, levels = factorize_from_iterable(Series(data, copy=False))
+[/REPLACE]

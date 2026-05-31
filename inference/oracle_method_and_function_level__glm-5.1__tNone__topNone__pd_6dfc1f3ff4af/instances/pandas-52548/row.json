@@ -1,0 +1,102 @@
+{
+  "id": 18,
+  "scenario_id": "pandas-52548",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 52548,
+  "baseline_sha": "7187e675002fe88e639b8c9c62a8625a1dd1235b",
+  "reference_sha": "f71c5128ca3d55a2c89063d4e2bde17c768e8c6c",
+  "task": "Optimize pd.read_csv execution with engine='pyarrow' when parsing date/timestamp columns via parse_dates",
+  "entry_point": "pandas.read_csv",
+  "whats_new": "Bug in read_csv casting PyArrow datetimes to NumPy when ``dtype_backend=\"pyarrow\"`` and ``parse_dates`` is set causing a performance bottleneck in the process",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-52548:baseline",
+      "digest": "sha256:4bc31da72bd794fe1bcbd394b7a9438a9ac20b5af5a4d5293de565c85440fe64"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-52548:reference",
+      "digest": "sha256:655e51e631cb757c5a0814cbede6878d8dc9ff3873df42f29d909ea145558cdb"
+    }
+  },
+  "params": [
+    {
+      "name": "Rows",
+      "short_indicator": "R",
+      "explanation": "Number of rows in CSV",
+      "values": [
+        "1000",
+        "10000"
+      ]
+    },
+    {
+      "name": "Date Columns",
+      "short_indicator": "DC",
+      "explanation": "Number of date columns",
+      "values": [
+        "1",
+        "5",
+        "10"
+      ]
+    },
+    {
+      "name": "Temporal Type",
+      "short_indicator": "TT",
+      "explanation": "Type of temporal data",
+      "values": [
+        "timestamp",
+        "date"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/io/parser/dtypes/test_dtypes_basic.py::test_delimiter_with_usecols_and_parse_dates",
+    "pandas/tests/io/parser/dtypes/test_dtypes_basic.py::test_dtype_backend",
+    "pandas/tests/io/parser/dtypes/test_dtypes_basic.py::test_dtype_backend_and_dtype",
+    "pandas/tests/io/parser/dtypes/test_dtypes_basic.py::test_dtype_backend_ea_dtype_specified",
+    "pandas/tests/io/parser/dtypes/test_dtypes_basic.py::test_dtype_backend_pyarrow",
+    "pandas/tests/io/parser/dtypes/test_dtypes_basic.py::test_dtype_backend_string",
+    "pandas/tests/io/parser/test_parse_dates.py::test_bad_date_parse",
+    "pandas/tests/io/parser/test_parse_dates.py::test_csv_custom_parser",
+    "pandas/tests/io/parser/test_parse_dates.py::test_date_col_as_index_col",
+    "pandas/tests/io/parser/test_parse_dates.py::test_date_parser_multiindex_columns",
+    "pandas/tests/io/parser/test_parse_dates.py::test_date_parser_multiindex_columns_combine_cols",
+    "pandas/tests/io/parser/test_parse_dates.py::test_dayfirst_warnings",
+    "pandas/tests/io/parser/test_parse_dates.py::test_dayfirst_warnings_no_leading_zero",
+    "pandas/tests/io/parser/test_parse_dates.py::test_infer_first_column_as_index",
+    "pandas/tests/io/parser/test_parse_dates.py::test_invalid_parse_delimited_date",
+    "pandas/tests/io/parser/test_parse_dates.py::test_missing_parse_dates_column_raises",
+    "pandas/tests/io/parser/test_parse_dates.py::test_multiple_date_col",
+    "pandas/tests/io/parser/test_parse_dates.py::test_multiple_date_col_multiple_index_compat",
+    "pandas/tests/io/parser/test_parse_dates.py::test_multiple_date_col_name_collision",
+    "pandas/tests/io/parser/test_parse_dates.py::test_multiple_date_col_named_index_compat",
+    "pandas/tests/io/parser/test_parse_dates.py::test_multiple_date_cols_chunked",
+    "pandas/tests/io/parser/test_parse_dates.py::test_multiple_date_cols_index",
+    "pandas/tests/io/parser/test_parse_dates.py::test_multiple_date_cols_with_header",
+    "pandas/tests/io/parser/test_parse_dates.py::test_nat_parse",
+    "pandas/tests/io/parser/test_parse_dates.py::test_parse_date_column_with_empty_string",
+    "pandas/tests/io/parser/test_parse_dates.py::test_parse_date_float",
+    "pandas/tests/io/parser/test_parse_dates.py::test_parse_dates_and_keep_orgin_column",
+    "pandas/tests/io/parser/test_parse_dates.py::test_parse_dates_and_string_dtype",
+    "pandas/tests/io/parser/test_parse_dates.py::test_parse_dates_column_list",
+    "pandas/tests/io/parser/test_parse_dates.py::test_parse_dates_dict_format",
+    "pandas/tests/io/parser/test_parse_dates.py::test_parse_dates_dict_format_index",
+    "pandas/tests/io/parser/test_parse_dates.py::test_parse_dates_empty_string",
+    "pandas/tests/io/parser/test_parse_dates.py::test_parse_dates_implicit_first_col",
+    "pandas/tests/io/parser/test_parse_dates.py::test_parse_dates_no_convert_thousands",
+    "pandas/tests/io/parser/test_parse_dates.py::test_parse_dates_string",
+    "pandas/tests/io/parser/test_parse_dates.py::test_parse_delimited_date_swap_no_warning",
+    "pandas/tests/io/parser/test_parse_dates.py::test_parse_timezone",
+    "pandas/tests/io/parser/test_parse_dates.py::test_read_with_parse_dates_invalid_type",
+    "pandas/tests/io/parser/test_parse_dates.py::test_read_with_parse_dates_scalar_non_bool",
+    "pandas/tests/io/parser/test_parse_dates.py::test_separator_date_conflict",
+    "pandas/tests/io/parser/test_unsupported.py::test_invalid_dtype_backend",
+    "pandas/tests/io/parser/usecols/test_parse_dates.py::test_usecols_with_parse_dates",
+    "pandas/tests/io/parser/usecols/test_parse_dates.py::test_usecols_with_parse_dates2",
+    "pandas/tests/io/parser/usecols/test_parse_dates.py::test_usecols_with_parse_dates3",
+    "pandas/tests/io/parser/usecols/test_parse_dates.py::test_usecols_with_parse_dates4",
+    "pandas/tests/io/parser/usecols/test_parse_dates.py::test_usecols_with_parse_dates_and_names",
+    "pandas/tests/io/parser/test_concatenate_chunks.py::test_concatenate_chunks_pyarrow"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.read_csv for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n- Only change what directly improves the optimization target.\n\nOPTIMIZATION REQUEST:\nOptimize pd.read_csv execution with engine='pyarrow' when parsing date/timestamp columns via parse_dates\nOptimization function: pandas.read_csv\n\n\n[start of pandas/io/parsers/base_parser.py]\n### Relevant context\n#### Class `pandas.io.parsers.base_parser.ParserBase`\n**Class Signature**\n```python\nclass ParserBase:\n```\n**Class Attributes**\n```python\n    _implicit_index: bool = False\n    _first_chunk: bool\n```\n**Class __init__ method**\n```python\n    def __init__(self, kwds) -> None:\n        self.names = kwds.get(\"names\")\n        self.orig_names: Sequence[Hashable] | None = None\n\n        self.index_col = kwds.get(\"index_col\", None)\n        self.unnamed_cols: set = set()\n        self.index_names: Sequence[Hashable] | None = None\n        self.col_names: Sequence[Hashable] | None = None\n\n        self.parse_dates = _validate_parse_dates_arg(kwds.pop(\"parse_dates\", False))\n        self._parse_date_cols: Iterable = []\n        self.date_parser = kwds.pop(\"date_parser\", lib.no_default)\n        self.date_format = kwds.pop(\"date_format\", None)\n        self.dayfirst = kwds.pop(\"dayfirst\", False)\n        self.keep_date_col = kwds.pop(\"keep_date_col\", False)\n\n        self.na_values = kwds.get(\"na_values\")\n        self.na_fvalues = kwds.get(\"na_fvalues\")\n        self.na_filter = kwds.get(\"na_filter\", False)\n        self.keep_default_na = kwds.get(\"keep_default_na\", True)\n\n        self.dtype = copy(kwds.get(\"dtype\", None))\n        self.converters = kwds.get(\"converters\")\n        self.dtype_backend = kwds.get(\"dtype_backend\")\n\n        self.true_values = kwds.get(\"true_values\")\n        self.false_values = kwds.get(\"false_values\")\n        self.cache_dates = kwds.pop(\"cache_dates\", True)\n\n        self._date_conv = _make_date_converter(\n            date_parser=self.date_parser,\n            date_format=self.date_format,\n            dayfirst=self.dayfirst,\n            cache_dates=self.cache_dates,\n        )\n\n        # validate header options for mi\n        self.header = kwds.get(\"header\")\n        if is_list_like(self.header, allow_sets=False):\n            if kwds.get(\"usecols\"):\n                raise ValueError(\n                    \"cannot specify usecols when specifying a multi-index header\"\n                )\n            if kwds.get(\"names\"):\n                raise ValueError(\n                    \"cannot specify names when specifying a multi-index header\"\n                )\n\n            # validate index_col that only contains integers\n            if self.index_col is not None:\n                if not (\n                    is_list_like(self.index_col, allow_sets=False)\n                    and all(map(is_integer, self.index_col))\n                    or is_integer(self.index_col)\n                ):\n                    raise ValueError(\n                        \"index_col must only contain row numbers \"\n                        \"when specifying a multi-index header\"\n                    )\n\n        self._name_processed = False\n\n        self._first_chunk = True\n\n        self.usecols, self.usecols_dtype = self._validate_usecols_arg(kwds[\"usecols\"])\n\n        # Fallback to error to pass a sketchy test(test_override_set_noconvert_columns)\n        # Normally, this arg would get pre-processed earlier on\n        self.on_bad_lines = kwds.get(\"on_bad_lines\", self.BadLineHandleMethod.ERROR)\n```\n##### Method `pandas.io.parsers.base_parser.ParserBase._do_date_conversions`\n```python\ndef _do_date_conversions(\n        self,\n        names: Sequence[Hashable] | Index,\n        data: Mapping[Hashable, ArrayLike] | DataFrame,\n    ) -> tuple[Sequence[Hashable] | Index, Mapping[Hashable, ArrayLike] | DataFrame]:\n        # returns data, columns\n\n        if self.parse_dates is not None:\n            data, names = _process_date_conversion(\n                data,\n                self._date_conv,\n                self.parse_dates,\n                self.index_col,\n                self.index_names,\n                names,\n                keep_date_col=self.keep_date_col,\n            )\n\n        return names, data\n```\n#### Function `pandas.io.parsers.base_parser._process_date_conversion`\n```python\ndef _process_date_conversion(\n    data_dict,\n    converter: Callable,\n    parse_spec,\n    index_col,\n    index_names,\n    columns,\n    keep_date_col: bool = False,\n):\n    def _isindex(colspec):\n        return (isinstance(index_col, list) and colspec in index_col) or (\n            isinstance(index_names, list) and colspec in index_names\n        )\n\n    new_cols = []\n    new_data = {}\n\n    orig_names = columns\n    columns = list(columns)\n\n    date_cols = set()\n\n    if parse_spec is None or isinstance(parse_spec, bool):\n        return data_dict, columns\n\n    if isinstance(parse_spec, list):\n        # list of column lists\n        for colspec in parse_spec:\n            if is_scalar(colspec) or isinstance(colspec, tuple):\n                if isinstance(colspec, int) and colspec not in data_dict:\n                    colspec = orig_names[colspec]\n                if _isindex(colspec):\n                    continue\n                # Pyarrow engine returns Series which we need to convert to\n                # numpy array before converter, its a no-op for other parsers\n                data_dict[colspec] = converter(\n                    np.asarray(data_dict[colspec]), col=colspec\n                )\n            else:\n                new_name, col, old_names = _try_convert_dates(\n                    converter, colspec, data_dict, orig_names\n                )\n                if new_name in data_dict:\n                    raise ValueError(f\"New date column already in dict {new_name}\")\n                new_data[new_name] = col\n                new_cols.append(new_name)\n                date_cols.update(old_names)\n\n    elif isinstance(parse_spec, dict):\n        # dict of new name to column list\n        for new_name, colspec in parse_spec.items():\n            if new_name in data_dict:\n                raise ValueError(f\"Date column {new_name} already in dict\")\n\n            _, col, old_names = _try_convert_dates(\n                converter,\n                colspec,\n                data_dict,\n                orig_names,\n                target_name=new_name,\n            )\n\n            new_data[new_name] = col\n\n            # If original column can be converted to date we keep the converted values\n            # This can only happen if values are from single column\n            if len(colspec) == 1:\n                new_data[colspec[0]] = col\n\n            new_cols.append(new_name)\n            date_cols.update(old_names)\n\n    data_dict.update(new_data)\n    new_cols.extend(columns)\n\n    if not keep_date_col:\n        for c in list(date_cols):\n            data_dict.pop(c)\n            new_cols.remove(c)\n\n    return data_dict, new_cols\n```\n[end of pandas/io/parsers/base_parser.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

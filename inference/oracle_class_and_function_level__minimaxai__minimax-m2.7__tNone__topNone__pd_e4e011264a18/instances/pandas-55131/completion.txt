@@ -1,0 +1,23 @@
+
+
+Looking at the code, I need to optimize `DataFrame.groupby.max` for PyArrow-backed timestamp/duration dtypes. The issue is in `_reduce_pyarrow` where temporal types (timestamp/duration) don't get optimized for min/max operations like other temporal reductions do.
+
+Let me find the exact location and make the optimization.
+[start of pandas/core/arrays/arrow/array.py]
+[SEARCH]
+        elif name in ["min", "max", "sum"] and pa.types.is_duration(pa_type):
+            data_to_reduce = self._pa_array.cast(pa.int64())
+
+        elif name in ["median", "mean", "std", "sem"] and pa.types.is_temporal(pa_type):
+[/SEARCH]
+[REPLACE]
+        elif name in ["min", "max", "sum"] and pa.types.is_duration(pa_type):
+            data_to_reduce = self._pa_array.cast(pa.int64())
+
+        elif name in ["min", "max"] and (
+            pa.types.is_timestamp(pa_type) or pa.types.is_duration(pa_type)
+        ):
+            data_to_reduce = self._pa_array.cast(pa.int64())
+
+        elif name in ["median", "mean", "std", "sem"] and pa.types.is_temporal(pa_type):
+[/REPLACE]

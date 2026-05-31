@@ -1,0 +1,56 @@
+
+
+pandas/core/strings/accessor.py
+[SEARCH]
+        if returns_df:
+            name = None
+            columns = _get_group_names(regex)
+
+            if obj.array.size == 0:
+                result = DataFrame(columns=columns, dtype=result_dtype)
+
+            else:
+                result_list = self._data.array._str_extract(
+                    pat, flags=flags, expand=returns_df
+                )
+
+                result_index: Index | None
+                if isinstance(obj, ABCSeries):
+                    result_index = obj.index
+                else:
+                    result_index = None
+
+                result = DataFrame(
+                    result_list, columns=columns, index=result_index, dtype=result_dtype
+                )
+[/SEARCH]
+[REPLACE]
+        if returns_df:
+            name = None
+            columns = _get_group_names(regex)
+
+            if obj.array.size == 0:
+                result = DataFrame(columns=columns, dtype=result_dtype)
+
+            else:
+                result_list = self._data.array._str_extract(
+                    pat, flags=flags, expand=returns_df
+                )
+
+                result_index: Index | None
+                if isinstance(obj, ABCSeries):
+                    result_index = obj.index
+                else:
+                    result_index = None
+
+                # Optimization: Use RangeIndex for unnamed capture groups
+                # This avoids storing integer column names, improving memory and speed
+                if all(isinstance(col, int) for col in columns):
+                    result = DataFrame(
+                        result_list, index=result_index, dtype=result_dtype
+                    )
+                else:
+                    result = DataFrame(
+                        result_list, columns=columns, index=result_index, dtype=result_dtype
+                    )
+[/REPLACE]

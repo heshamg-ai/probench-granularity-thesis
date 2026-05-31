@@ -1,0 +1,54 @@
+xarray/core/dataset.py
+[SEARCH]
+    @property
+    def _item_sources(self) -> List[Mapping[Hashable, Any]]:
+        """List of places to look-up items for key-completion"""
+        return [
+            self.data_vars,
+            self.coords,
+            {d: self[d] for d in self.dims},
+            LevelCoordinatesSource(self),
+        ]
+[/SEARCH]
+[REPLACE]
+    @property
+    def _item_sources(self) -> List[Mapping[Hashable, Any]]:
+        """List of places to look-up items for key-completion"""
+        return [
+            self.data_vars,
+            self.coords,
+            {d: self[d] for d in self.dims},
+            LevelCoordinatesSource(self),
+        ]
+
+    def _ipython_key_completions_(self) -> List[str]:
+        """Provide method for the key-autocompletions in IPython.
+        See http://ipython.readthedocs.io/en/stable/config/integrating.html#tab-completion
+        For the details.
+
+        Optimized override to avoid constructing temporary mappings and large intermediate lists.
+        """
+        out: Set[str] = set()
+
+        # data variable names
+        for k in self.data_vars:
+            if isinstance(k, str):
+                out.add(k)
+
+        # coordinate names
+        for k in self.coords:
+            if isinstance(k, str):
+                out.add(k)
+
+        # dimension names
+        for k in self.dims:
+            if isinstance(k, str):
+                out.add(k)
+
+        # MultiIndex level coordinate names
+        for k in self._level_coords:
+            if isinstance(k, str):
+                out.add(k)
+
+        return list(out)
+[/REPLACE]

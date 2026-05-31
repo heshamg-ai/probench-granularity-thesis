@@ -1,0 +1,19 @@
+pandas/core/reshape/reshape.py
+[SEARCH]
+        else:
+            return obj.T.stack()
+[/SEARCH]
+[REPLACE]
+        else:
+            # Optimize unstack for non-MultiIndex index when future stack is enabled
+            # by using the faster stack_v3 path when possible.
+            t = obj.T
+            use_future = False
+            try:
+                use_future = bool(get_option("future.stack"))
+            except Exception:
+                use_future = False
+            if use_future and t.columns.is_unique:
+                return stack_v3(t, [0])
+            return t.stack()
+[/REPLACE]

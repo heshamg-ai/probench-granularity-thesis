@@ -1,0 +1,63 @@
+
+
+Looking at the `predict` method for `HistGradientBoostingClassifier`:
+
+```python
+def predict(self, X):
+    # TODO: This could be done in parallel
+    encoded_classes = np.argmax(self.predict_proba(X), axis=1)
+    return self.classes_[encoded_classes]
+```
+
+For binary classification (`n_trees_per_iteration_ == 1`), we can optimize by avoiding the `predict_proba` call (which computes sigmoid probabilities) and the `argmax` operation. For binary classification, the predicted class is determined by the sign of the raw prediction:
+- `raw >= 0` → positive class (index 1)
+- `raw < 0` → negative class (index 0)
+
+This is mathematically equivalent because the sigmoid function is monotonic, so `sigmoid(x) >= 0.5` iff `x >= 0`.
+
+sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py
+[SEARCH]
+    def predict(self, X):
+        """Predict classes for X.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            The input samples.
+
+        Returns
+        -------
+        y : ndarray, shape (n_samples,)
+            The predicted classes.
+        """
+        # TODO: This could be done in parallel
+        encoded_classes = np.argmax(self.predict_proba(X), axis=1)
+        return self.classes_[encoded_classes]
+[/SEARCH]
+[REPLACE]
+    def predict(self, X):
+        """Predict classes for X.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            The input samples.
+
+        Returns
+        -------
+        y : ndarray, shape (n_samples,)
+            The predicted classes.
+        """
+        # Fast path for binary classification
+        if self.n_trees_per_iteration_ == 1:
+            raw_predictions = self._raw_predict(X)
+            # For binary classification: positive class predicted if raw >= 0
+            # This is equivalent to argmax(predict_proba) but avoids computing
+            # probabilities via the (inverse) link function.
+            encoded_classes = raw_predictions[:, 0] >= 0
+            return np.where(encoded_classes, self.classes_[1], self.classes_[0])
+
+        # Multiclass case
+        encoded_classes = np.argmax(self.predict_proba(X), axis=1)
+        return self.classes_[encoded_classes]
+[/REPLACE]

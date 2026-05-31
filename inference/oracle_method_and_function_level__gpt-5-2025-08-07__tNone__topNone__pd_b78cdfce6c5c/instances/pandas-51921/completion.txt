@@ -1,0 +1,31 @@
+pandas/core/algorithms.py
+[SEARCH]
+    if ndtype == "object":
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+[/SEARCH]
+[REPLACE]
+    if ndtype == "object":
+        # Fast negative path: if we encounter any non-string element, we can
+        # immediately decide to use object hashtable and avoid a full dtype
+        # inference scan.
+        # Note: With skipna=False, presence of any non-string (including nulls)
+        # guarantees infer_dtype(... ) != "string".
+        try:
+            for obj in values:
+                if isinstance(obj, str):
+                    continue
+                # any non-str element (including None/NaN) => not pure strings
+                return ndtype
+        except Exception:
+            # On any unexpected issue, fall back to inference below
+            pass
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+[/REPLACE]

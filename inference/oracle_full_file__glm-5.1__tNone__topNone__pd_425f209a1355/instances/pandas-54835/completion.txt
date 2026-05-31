@@ -1,0 +1,19 @@
+pandas/core/sorting.py
+[SEARCH]
+    elif isinstance(target, ABCMultiIndex):
+        indexer = lexsort_indexer(
+            target.codes, orders=ascending, na_position=na_position, codes_given=True
+        )
+[/SEARCH]
+[REPLACE]
+    elif isinstance(target, ABCMultiIndex):
+        if (ascending is True and target.is_monotonic_increasing) or (
+            isinstance(ascending, bool)
+            and not ascending
+            and target.is_monotonic_decreasing
+        ):
+            return None
+        indexer = lexsort_indexer(
+            target.codes, orders=ascending, na_position=na_position, codes_given=True
+        )
+[/REPLACE]

@@ -1,0 +1,24 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        elif pa.types.is_boolean(pa_type):
+            from pandas.core.arrays import BooleanArray
+
+            scalars = BooleanArray._from_sequence_of_strings(strings).to_numpy()
+[/SEARCH]
+[REPLACE]
+        elif pa.types.is_boolean(pa_type):
+            # Fast path: try using pyarrow to parse strings to boolean directly
+            try:
+                if isinstance(strings, (pa.Array, pa.ChunkedArray)):
+                    if pa.types.is_boolean(strings.type):
+                        scalars = strings
+                    else:
+                        scalars = strings.cast(pa.bool_())
+                else:
+                    arr = pa.array(strings, type=pa.string(), from_pandas=True)
+                    scalars = arr.cast(pa.bool_())
+            except (pa.ArrowInvalid, pa.ArrowNotImplementedError, pa.ArrowTypeError):
+                from pandas.core.arrays import BooleanArray
+
+                scalars = BooleanArray._from_sequence_of_strings(strings).to_numpy()
+[/REPLACE]

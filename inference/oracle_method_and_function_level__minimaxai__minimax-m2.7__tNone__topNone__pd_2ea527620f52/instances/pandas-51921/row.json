@@ -1,0 +1,48 @@
+{
+  "id": 13,
+  "scenario_id": "pandas-51921",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 51921,
+  "baseline_sha": "6169cba72dbe8c7e9c7f17ab38af15a256f083da",
+  "reference_sha": "ed77ca3b187320a550c7bbbbab784e54ddd746e6",
+  "task": "Optimize pandas.factorize for object columns not containing strings",
+  "entry_point": "pandas.factorize",
+  "whats_new": "Performance improvement in factorize for object columns not containing strings",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-51921:baseline",
+      "digest": "sha256:2d8dfe0d4aa39e8db73d1e47c1c16a75345809f0a56d8eab3f20c7b10fbc218f"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-51921:reference",
+      "digest": "sha256:ef8355a38322a44a1913bfa0a9d1e8b3048fd5f84c0288de13199bfbb68c2b99"
+    }
+  },
+  "params": [
+    {
+      "name": "Array Length",
+      "short_indicator": "N",
+      "explanation": "Number of elements in the array to be factorized.",
+      "values": [
+        "100000",
+        "1000000"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/test_algos.py::TestFactorize::test_basic",
+    "pandas/tests/test_algos.py::TestFactorize::test_complex_sorting",
+    "pandas/tests/test_algos.py::TestFactorize::test_factorize",
+    "pandas/tests/test_algos.py::TestFactorize::test_factorize_tuple_list",
+    "pandas/tests/test_algos.py::TestFactorize::test_factorize_use_na_sentinel",
+    "pandas/tests/test_algos.py::TestFactorize::test_int_factorize_use_na_sentinel_false",
+    "pandas/tests/test_algos.py::TestFactorize::test_mixed",
+    "pandas/tests/test_algos.py::TestFactorize::test_object_factorize",
+    "pandas/tests/test_algos.py::TestFactorize::test_object_factorize_use_na_sentinel_false",
+    "pandas/tests/test_algos.py::TestFactorize::test_parametrized_factorize_na_value",
+    "pandas/tests/test_algos.py::TestFactorize::test_parametrized_factorize_na_value_default",
+    "pandas/tests/test_algos.py::TestFactorize::test_string_factorize"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.factorize for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize pandas.factorize for object columns not containing strings\nOptimization function: pandas.factorize\n\n\n[start of pandas/core/algorithms.py]\n### Relevant context\n#### Function `pandas.core.algorithms._check_object_for_strings`\n```python\ndef _check_object_for_strings(values: np.ndarray) -> str:\n    \"\"\"\n    Check if we can use string hashtable instead of object hashtable.\n\n    Parameters\n    ----------\n    values : ndarray\n\n    Returns\n    -------\n    str\n    \"\"\"\n    ndtype = values.dtype.name\n    if ndtype == \"object\":\n        # it's cheaper to use a String Hash Table than Object; we infer\n        # including nulls because that is the only difference between\n        # StringHashTable and ObjectHashtable\n        if lib.infer_dtype(values, skipna=False) in [\"string\"]:\n            ndtype = \"string\"\n    return ndtype\n```\n[end of pandas/core/algorithms.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

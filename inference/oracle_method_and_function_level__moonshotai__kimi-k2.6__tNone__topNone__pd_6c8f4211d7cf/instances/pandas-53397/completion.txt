@@ -1,0 +1,171 @@
+ pandas/core/indexes/range.py
+[SEARCH]
+class RangeIndex(Index):
+    """
+    Immutable Index implementing a monotonic integer range.
+
+    RangeIndex is a memory-saving special case of Int64Index limited to
+    representing monotonic ranges with a constant step.
+
+    Parameters
+    ----------
+    start : int, optional
+        Start of the range (default is 0).
+    stop : int
+        End of the range (exclusive).
+    step : int, optional
+        Step of the range (default is 1).
+    dtype : dtype, optional
+        Data type of the resulting index (default is np.int64).
+    copy : bool, default False
+        Unused, accepted for API compatibility.
+    name : object, optional
+        Name to be stored in the index.
+
+    Attributes
+    ----------
+    start : int
+        Start of the range.
+    stop : int
+        End of the range (exclusive).
+    step : int
+        Step of the range.
+
+    Methods
+    -------
+    from_range : Create a RangeIndex from a range object.
+
+    See Also
+    --------
+    Index : The base pandas Index type.
+    Int64Index : Index of int64 data.
+    """
+
+    _typ = "rangeindex"
+    _dtype_validation_metadata = (is_signed_integer_dtype, "signed integer")
+    _range: range
+    _values: np.ndarray
+[/SEARCH]
+[REPLACE]
+class RangeIndex(Index):
+    """
+    Immutable Index implementing a monotonic integer range.
+
+    RangeIndex is a memory-saving special case of Int64Index limited to
+    representing monotonic ranges with a constant step.
+
+    Parameters
+    ----------
+    start : int, optional
+        Start of the range (default is 0).
+    stop : int
+        End of the range (exclusive).
+    step : int, optional
+        Step of the range (default is 1).
+    dtype : dtype, optional
+        Data type of the resulting index (default is np.int64).
+    copy : bool, default False
+        Unused, accepted for API compatibility.
+    name : object, optional
+        Name to be stored in the index.
+
+    Attributes
+    ----------
+    start : int
+        Start of the range.
+    stop : int
+        End of the range (exclusive).
+    step : int
+        Step of the range.
+
+    Methods
+    -------
+    from_range : Create a RangeIndex from a range object.
+
+    See Also
+    --------
+    Index : The base pandas Index type.
+    Int64Index : Index of int64 data.
+    """
+
+    _typ = "rangeindex"
+    _dtype_validation_metadata = (is_signed_integer_dtype, "signed integer")
+    _range: range
+    _values: np.ndarray
+
+    @doc(Index.take)
+    def take(
+        self,
+        indices,
+        axis: Axis = 0,
+        allow_fill: bool = True,
+        fill_value=None,
+        **kwargs,
+    ):
+        if kwargs:
+            nv.validate_take((), kwargs)
+        if is_scalar(indices):
+            raise TypeError("Expected indices to be array-like")
+        indices = ensure_platform_int(indices)
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+
+        # Fast path: if indices are sorted and contiguous with step matching
+        # our own, return another RangeIndex
+        if len(indices) > 1 and not allow_fill:
+            indices_arr = np.asarray(indices)
+            if indices_arr.ndim == 1:
+                diff = indices_arr[1] - indices_arr[0]
+                if diff == self.step:
+                    # Check if sorted and contiguous
+                    if (indices_arr[1:] - indices_arr[:-1] == diff).all():
+                        new_start = self.start + indices_arr[0] * self.step
+                        new_stop = self.start + indices_arr[-1] * self.step + self.step
+                        return type(self)._simple_new(
+                            range(new_start, new_stop, self.step), name=self.name
+                        )
+
+        # Fast path: if indices are sorted (not necessarily contiguous) with
+        # same step direction, we may still be able to return RangeIndex
+        if len(indices) > 1 and not allow_fill:
+            indices_arr = np.asarray(indices)
+            if indices_arr.ndim == 1 and len(indices_arr) > 1:
+                diff = indices_arr[1] - indices_arr[0]
+                if diff != 0 and (
+                    (self.step > 0 and diff > 0) or (self.step < 0 and diff < 0)
+                ):
+                    # Check if all differences are equal
+                    if (indices_arr[1:] - indices_arr[:-1] == diff).all():
+                        new_step = self.step * diff
+                        new_start = self.start + indices_arr[0] * self.step
+                        new_stop = self.start + indices_arr[-1] * self.step + new_step
+                        return type(self)._simple_new(
+                            range(new_start, new_stop, new_step), name=self.name
+                        )
+
+        # Fast path for empty indices
+        if len(indices) == 0:
+            return type(self)._simple_new(range(0), name=self.name)
+
+        # Fast path for single element
+        if len(indices) == 1 and not allow_fill:
+            idx = indices[0]
+            val = self.start + idx * self.step
+            return type(self)._simple_new(range(val, val + self.step, self.step), name=self.name)
+
+        # Compute the taken values using numpy for efficiency
+        indices_arr = np.asarray(indices)
+        if allow_fill:
+            # Need to handle -1 fill values
+            mask = indices_arr == -1
+            if mask.any():
+                # Can't preserve RangeIndex with fill values
+                taken = np.empty(len(indices_arr), dtype=np.int64)
+                valid_mask = ~mask
+                taken[valid_mask] = self.start + indices_arr[valid_mask] * self.step
+                taken[mask] = fill_value if fill_value is not None else self._na_value
+                return self._constructor._simple_new(taken, name=self.name)
+        
+        # No fill values needed, use vectorized computation
+        taken = self.start + indices_arr * self.step
+        return self._constructor._simple_new(taken, name=self.name)
+[/REPLACE]

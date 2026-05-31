@@ -1,0 +1,51 @@
+Looking at the `_where` method in `NDFrame`, I can see that when `cond` is a DataFrame, the boolean columns are validated one-by-one through iteration over `cond.dtypes`. When the DataFrame is backed by `ExtensionArray` columns (e.g., `BooleanDtype`), each `is_bool_dtype()` call triggers a dtype string conversion that is slow.
+
+The optimization is to convert the condition DataFrame's values to a numpy boolean array upfront when all columns have boolean dtypes, which is always the case here (we're validating that they ARE boolean). This avoids per-column dtype checks and leverages fast bulk conversion.
+
+pandas/core/generic.py
+[SEARCH]
+        msg = "Boolean array expected for the condition, not {dtype}"
+
+        if not cond.empty:
+            if not isinstance(cond, ABCDataFrame):
+                # This is a single-dimensional object.
+                if not is_bool_dtype(cond):
+                    raise ValueError(msg.format(dtype=cond.dtype))
+            else:
+                for _dt in cond.dtypes:
+                    if not is_bool_dtype(_dt):
+                        raise ValueError(msg.format(dtype=_dt))
+        else:
+            # GH#21947 we have an empty DataFrame/Series, could be object-dtype
+            cond = cond.astype(bool)
+[/SEARCH]
+[REPLACE]
+        msg = "Boolean array expected for the condition, not {dtype}"
+
+        if not cond.empty:
+            if not isinstance(cond, ABCDataFrame):
+                # This is a single-dimensional object.
+                if not is_bool_dtype(cond):
+                    raise ValueError(msg.format(dtype=cond.dtype))
+            else:
+                # GH#45769 Fast path for ExtensionArray-backed DataFrames:
+                # convert to numpy bool array upfront to avoid slow per-column
+                # dtype checks and downstream overhead.
+                try:
+                    cond_vals = cond.values
+                except (ValueError, TypeError):
+                    # Fallback if .values fails (e.g. mixed types)
+                    cond_vals = None
+
+                if cond_vals is not None and is_bool_dtype(cond_vals.dtype):
+                    cond = self._constructor(
+                        cond_vals, **self._construct_axes_dict(), dtype=bool
+                    )
+                else:
+                    for _dt in cond.dtypes:
+                        if not is_bool_dtype(_dt):
+                            raise ValueError(msg.format(dtype=_dt))
+        else:
+            # GH#21947 we have an empty DataFrame/Series, could be object-dtype
+            cond = cond.astype(bool)
+[/REPLACE]

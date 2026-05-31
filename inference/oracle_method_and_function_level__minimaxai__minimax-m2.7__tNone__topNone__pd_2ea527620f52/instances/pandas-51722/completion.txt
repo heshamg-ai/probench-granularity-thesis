@@ -1,0 +1,127 @@
+
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+        # Put '-1' (NaN) labels as the last group so it does not interfere
+        # with the calculations. Note: length check avoids failure on empty
+        # labels. In that case, the value doesn't matter
+        na_label_for_sorting = ids.max() + 1 if len(ids) > 0 else 0
+        labels_for_lexsort = np.where(ids == -1, na_label_for_sorting, ids)
+
+        def blk_func(values: ArrayLike) -> ArrayLike:
+            orig_vals = values
+            if isinstance(values, BaseMaskedArray):
+                mask = values._mask
+                result_mask = np.zeros((ngroups, nqs), dtype=np.bool_)
+            else:
+                mask = isna(values)
+                result_mask = None
+
+            is_datetimelike = needs_i8_conversion(values.dtype)
+
+            vals, inference = pre_processor(values)
+
+            ncols = 1
+            if vals.ndim == 2:
+                ncols = vals.shape[0]
+                shaped_labels = np.broadcast_to(
+                    labels_for_lexsort, (ncols, len(labels_for_lexsort))
+                )
+            else:
+                shaped_labels = labels_for_lexsort
+
+            out = np.empty((ncols, ngroups, nqs), dtype=np.float64)
+[/SEARCH]
+[REPLACE]
+        # Put '-1' (NaN) labels as the last group so it does not interfere
+        # with the calculations. Note: length check avoids failure on empty
+        # labels. In that case, the value doesn't matter
+        na_label_for_sorting = ids.max() + 1 if len(ids) > 0 else 0
+        labels_for_lexsort = np.where(ids == -1, na_label_for_sorting, ids)
+
+        def pre_processor(vals: ArrayLike) -> tuple[np.ndarray, DtypeObj | None]:
+            if is_object_dtype(vals.dtype):
+                raise TypeError(
+                    "'quantile' cannot be performed against 'object' dtypes!"
+                )
+
+            inference: DtypeObj | None = None
+            if isinstance(vals, BaseMaskedArray):
+                if is_numeric_dtype(vals.dtype):
+                    inference = vals.dtype
+                    out = vals.to_numpy(dtype=float, na_value=np.nan)
+                elif is_integer_dtype(vals.dtype):
+                    out = vals.to_numpy(dtype=float, na_value=np.nan)
+                    inference = vals.dtype
+                elif needs_i8_conversion(vals.dtype):
+                    inference = vals.dtype
+                    return vals, inference  # type: ignore[return-value]
+                elif is_bool_dtype(vals.dtype):
+                    out = vals.to_numpy(dtype=float, na_value=np.nan)
+                    inference = np.dtype(np.bool_)
+                else:
+                    out = np.asarray(vals)
+            elif isinstance(vals, ExtensionArray):
+                if is_integer_dtype(vals.dtype):
+                    out = vals.to_numpy(dtype=float, na_value=np.nan)
+                    inference = np.dtype(np.int64)
+                elif is_bool_dtype(vals.dtype):
+                    out = vals.to_numpy(dtype=float, na_value=np.nan)
+                elif is_float_dtype(vals.dtype):
+                    inference = np.dtype(np.float64)
+                    out = vals.to_numpy(dtype=float, na_value=np.nan)
+                elif needs_i8_conversion(vals.dtype):
+                    inference = vals.dtype
+                    return vals, inference  # type: ignore[return-value]
+                else:
+                    out = np.asarray(vals)
+            elif is_integer_dtype(vals.dtype):
+                out = np.asarray(vals)
+                inference = np.dtype(np.int64)
+            elif is_bool_dtype(vals.dtype):
+                # GH#51424 deprecate to match Series/DataFrame behavior
+                warnings.warn(
+                    f"Allowing bool dtype in {type(self).__name__}.quantile is "
+                    "deprecated and will raise in a future version, matching "
+                    "the Series/DataFrame behavior. Cast to uint8 dtype before "
+                    "calling quantile instead.",
+                    FutureWarning,
+                    stacklevel=find_stack_level(),
+                )
+                out = np.asarray(vals)
+            elif needs_i8_conversion(vals.dtype):
+                inference = vals.dtype
+                # In this case we need to delay the casting until after the
+                #  np.lexsort below.
+                # error: Incompatible return value type (got
+                # "Tuple[Union[ExtensionArray, ndarray[Any, Any]], Union[Any,
+                # ExtensionDtype]]", expected "Tuple[ndarray[Any, Any],
+                # Optional[Union[dtype[Any], ExtensionDtype]]]")
+                return vals, inference  # type: ignore[return-value]
+            elif is_float_dtype(vals.dtype):
+                inference = np.dtype(np.float64)
+                out = np.asarray(vals)
+            else:
+                out = np.asarray(vals)
+
+            return out, inference
+
+        def blk_func(values: ArrayLike) -> ArrayLike:
+            orig_vals = values
+            if isinstance(values, BaseMaskedArray):
+                mask = values._mask
+                result_mask = np.zeros((ngroups, nqs), dtype=np.bool_)
+            else:
+                mask = isna(values)
+                result_mask = None
+
+            vals, inference = pre_processor(values)
+
+            is_datetimelike = needs_i8_conversion(vals.dtype) if inference is None else needs_i8_conversion(inference)
+
+            ncols = 1
+            if vals.ndim == 2:
+                ncols = vals.shape[0]
+
+            out = np.empty((ncols, ngroups, nqs), dtype=np.float64)
+[/REPLACE]

@@ -1,0 +1,84 @@
+ xarray/core/dataset.py
+[SEARCH]
+    def __getitem__(self, key: Hashable) -> "DataArray":
+        """Access variables or coordinates by name as a DataArray.
+
+        Dataset contents can be indexed by variable or  coordinate name,
+        similar to how a :py:class:`dict` can be indexed by its keys.
+        """
+        if utils.is_dict_like(key):
+            return self.isel(**cast(Mapping, key))
+
+        return self._construct_dataarray(key)
+[/SEARCH]
+[REPLACE]
+    def __getitem__(self, key: Hashable) -> "DataArray":
+        """Access variables or coordinates by name as a DataArray.
+
+        Dataset contents can be indexed by variable or  coordinate name,
+        similar to how a :py:class:`dict` can be indexed by its keys.
+        """
+        if utils.is_dict_like(key):
+            return self.isel(**cast(Mapping, key))
+
+        return self._construct_dataarray(key)
+[/REPLACE]
+
+xarray/core/dataset.py
+[SEARCH]
+    def _construct_dataarray(self, name: Hashable) -> "DataArray":
+        """Construct a DataArray by indexing this dataset"""
+        from .dataarray import DataArray
+
+        try:
+            variable = self._variables[name]
+        except KeyError:
+            _, name, variable = _get_virtual_variable(
+                self._variables, name, self._level_coords, self.dims
+            )
+
+        needed_dims = set(variable.dims)
+        coords: Dict[Hashable, Variable] = {}
+        for k in self.coords:
+            if set(self.variables[k].dims) <= needed_dims:
+                coords[k] = self.variables[k]
+
+        if self._indexes is None:
+            indexes = None
+        else:
+            indexes = {k: v for k, v in self._indexes.items() if k in coords}
+
+        return DataArray(variable, coords, name=name, indexes=indexes, fastpath=True)
+[/SEARCH]
+[REPLACE]
+    def _construct_dataarray(self, name: Hashable) -> "DataArray":
+        """Construct a DataArray by indexing this dataset"""
+        from .dataarray import DataArray
+
+        try:
+            variable = self._variables[name]
+        except KeyError:
+            _, name, variable = _get_virtual_variable(
+                self._variables, name, self._level_coords, self.dims
+            )
+
+        needed_dims = set(variable.dims)
+        coords: Dict[Hashable, Variable] = {}
+        variables = self._variables
+        # Use local variables to avoid repeated attribute lookups
+        coord_names = self._coord_names
+        for k in coord_names:
+            # Check if coordinate dimensions are subset of needed dimensions
+            coord_var = variables[k]
+            if set(coord_var.dims) <= needed_dims:
+                coords[k] = coord_var
+
+        if self._indexes is None:
+            indexes = None
+        else:
+            # Use local variable for indexes lookup
+            idx = self._indexes
+            indexes = {k: idx[k] for k in coords if k in idx}
+
+        return DataArray(variable, coords, name=name, indexes=indexes, fastpath=True)
+[/REPLACE]

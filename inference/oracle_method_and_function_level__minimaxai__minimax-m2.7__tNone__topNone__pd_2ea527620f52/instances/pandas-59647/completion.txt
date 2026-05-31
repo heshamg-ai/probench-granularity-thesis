@@ -1,0 +1,71 @@
+
+
+pandas/core/dtypes/dtypes.py
+[SEARCH]
+    def update_dtype(self, dtype: str_type | CategoricalDtype) -> CategoricalDtype:
+        """
+        Returns a CategoricalDtype with categories and ordered taken from dtype
+        if specified, otherwise falling back to self if unspecified
+
+        Parameters
+        ----------
+        dtype : CategoricalDtype
+
+        Returns
+        -------
+        new_dtype : CategoricalDtype
+        """
+        if isinstance(dtype, str) and dtype == "category":
+            # dtype='category' should not change anything
+            return self
+        elif not self.is_dtype(dtype):
+            raise ValueError(
+                f"a CategoricalDtype must be passed to perform an update, "
+                f"got {dtype!r}"
+            )
+        else:
+            # from here on, dtype is a CategoricalDtype
+            dtype = cast(CategoricalDtype, dtype)
+
+        # update categories/ordered unless they've been explicitly passed as None
+        new_categories = (
+            dtype.categories if dtype.categories is not None else self.categories
+        )
+        new_ordered = dtype.ordered if dtype.ordered is not None else self.ordered
+
+        return CategoricalDtype(new_categories, new_ordered)
+[/SEARCH]
+[REPLACE]
+    def update_dtype(self, dtype: str_type | CategoricalDtype) -> CategoricalDtype:
+        """
+        Returns a CategoricalDtype with categories and ordered taken from dtype
+        if specified, otherwise falling back to self if unspecified
+
+        Parameters
+        ----------
+        dtype : CategoricalDtype
+
+        Returns
+        -------
+        new_dtype : CategoricalDtype
+        """
+        if isinstance(dtype, str) and dtype == "category":
+            # dtype='category' should not change anything
+            return self
+
+        # Fast path for common case: both categories and ordered are specified
+        if isinstance(dtype, CategoricalDtype):
+            if dtype.categories is not None and dtype.ordered is not None:
+                return CategoricalDtype(dtype.categories, dtype.ordered)
+        elif not self.is_dtype(dtype):
+            raise ValueError(
+                f"a CategoricalDtype must be passed to perform an update, "
+                f"got {dtype!r}"
+            )
+
+        # update categories/ordered unless they've been explicitly passed as None
+        return CategoricalDtype(
+            dtype.categories if dtype.categories is not None else self.categories,
+            dtype.ordered if dtype.ordered is not None else self.ordered,
+        )
+[/REPLACE]

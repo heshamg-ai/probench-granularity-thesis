@@ -1,0 +1,84 @@
+sklearn/decomposition/_dict_learning.py
+[SEARCH]
+    def _minibatch_step(self, X, dictionary, random_state, step):
+        """Perform the update on the dictionary for one minibatch."""
+        batch_size = X.shape[0]
+
+        # Compute code for this batch
+        code = sparse_encode(
+            X,
+            dictionary,
+            algorithm=self._fit_algorithm,
+            alpha=self.alpha,
+            n_jobs=self.n_jobs,
+            check_input=False,
+            positive=self.positive_code,
+            max_iter=self.transform_max_iter,
+            verbose=self.verbose,
+        )
+
+        batch_cost = (
+            0.5 * ((X - code @ dictionary) ** 2).sum()
+            + self.alpha * np.sum(np.abs(code))
+        ) / batch_size
+
+        # Update inner stats
+        self._update_inner_stats(X, code, batch_size, step)
+
+        # Update dictionary
+        _update_dict(
+            dictionary,
+            X,
+            code,
+            self._A,
+            self._B,
+            verbose=self.verbose,
+            random_state=random_state,
+            positive=self.positive_dict,
+        )
+
+        return batch_cost
+[/SEARCH]
+[REPLACE]
+    def _minibatch_step(self, X, dictionary, random_state, step):
+        """Perform the update on the dictionary for one minibatch."""
+        batch_size = X.shape[0]
+
+        # Compute code for this batch
+        code = sparse_encode(
+            X,
+            dictionary,
+            algorithm=self._fit_algorithm,
+            alpha=self.alpha,
+            n_jobs=self.n_jobs,
+            check_input=False,
+            positive=self.positive_code,
+            max_iter=self.transform_max_iter,
+            verbose=self.verbose,
+        )
+
+        # Use in-place operations where possible to reduce memory allocations
+        residual = code @ dictionary
+        np.subtract(X, residual, out=residual)
+        batch_cost = (
+            0.5 * np.dot(residual.ravel(), residual.ravel())
+            + self.alpha * np.sum(np.abs(code))
+        ) / batch_size
+
+        # Update inner stats
+        self._update_inner_stats(X, code, batch_size, step)
+
+        # Update dictionary
+        _update_dict(
+            dictionary,
+            X,
+            code,
+            self._A,
+            self._B,
+            verbose=self.verbose,
+            random_state=random_state,
+            positive=self.positive_dict,
+        )
+
+        return batch_cost
+[/REPLACE]

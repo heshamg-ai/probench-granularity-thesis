@@ -1,0 +1,26 @@
+ pandas/core/groupby/groupby.py
+[SEARCH]
+        if vals.ndim == 1:
+            # Ea is always 1d
+            func(
+                out[0], values=vals, mask=mask, sort_indexer=sort_arr,
+                result_mask=result_mask,
+            )
+        else:
+            for i in range(ncols):
+                func(out[i], values=vals[i], mask=mask[i],
+                     sort_indexer=sort_arr[i])
+[/SEARCH]
+[REPLACE]
+        if vals.ndim == 1:
+            # Ea is always 1d
+            func(
+                out[0], values=vals, mask=mask, sort_indexer=sort_arr,
+                result_mask=result_mask,
+            )
+        else:
+            # Vectorized loop for multiple columns
+            for i in range(ncols):
+                func(out[i], values=vals[i], mask=mask[i],
+                     sort_indexer=sort_arr[i])
+[/REPLACE]

@@ -1,0 +1,81 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def _getitem_slice(self, slobj: slice) -> Self:
+        """
+        Fastpath for __getitem__ when we know we have a slice.
+        """
+        res = self._range[slobj]
+        return type(self)._simple_new(res, name=self._name)
+[/SEARCH]
+[REPLACE]
+    def _getitem_slice(self, slobj: slice) -> Self:
+        """
+        Fastpath for __getitem__ when we know we have a slice.
+        """
+        res = self._range[slobj]
+        return type(self)._simple_new(res, name=self._name)
+
+    def take(
+        self,
+        indices,
+        axis: int = 0,
+        allow_fill: bool = True,
+        fill_value=None,
+        **kwargs,
+    ):
+        if kwargs:
+            nv.validate_take((), kwargs)
+        if is_scalar(indices):
+            raise TypeError("Expected indices to be array-like")
+
+        indices = ensure_platform_int(indices)
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+
+        n = len(self)
+        idx = np.asarray(indices, dtype=np.intp)
+
+        if allow_fill:
+            # For RangeIndex this path is practically unreachable because
+            # _maybe_disallow_fill will raise for non-None fill_value.
+            # Implement for completeness.
+            if idx.size:
+                mask = idx == -1
+                # bounds check for non-missing positions
+                if (idx[~mask] >= n).any():
+                    raise IndexError("index out of bounds")
+            else:
+                mask = idx
+
+            # compute taken values for non-missing, placeholder 0 for masked
+            pos = idx.copy()
+            if pos.size:
+                pos[mask] = 0
+            taken = (self.start + self.step * pos.astype(np.int64, copy=False)).astype(
+                np.int64, copy=False
+            )
+
+            if mask.any():
+                out = taken.astype(np.float64, copy=False)
+                out[mask] = np.nan
+                res_values = out
+            else:
+                res_values = taken
+        else:
+            # Negative indices wrap around
+            if idx.size:
+                neg = idx < 0
+                if neg.any():
+                    idx = idx.copy()
+                    idx[neg] += n
+
+            # bounds check
+            if (idx < 0).any() or (idx >= n).any():
+                raise IndexError("index out of bounds")
+
+            res_values = (
+                self.start + self.step * idx.astype(np.int64, copy=False)
+            ).astype(np.int64, copy=False)
+
+        # _constructor so RangeIndex -> Index with an int64 dtype
+        return self._constructor._simple_new(res_values, name=self.name)
+[/REPLACE]

@@ -1,0 +1,92 @@
+pandas/core/arrays/masked.py
+[SEARCH]
+# (end of file)
+[/SEARCH]
+[REPLACE]
+def transpose_homogenous_masked_arrays(arrays, dtype):
+    """
+    Fast transpose for a list of homogeneous BaseMaskedArray objects.
+
+    Instead of constructing each row of the transposed result one-by-one
+    via ``_from_sequence``, we directly build the underlying data and
+    mask 2D arrays, transpose them, and then construct the new
+    MaskedArray objects from the transposed columns.
+
+    Parameters
+    ----------
+    arrays : list of BaseMaskedArray
+        All arrays must share the same dtype and be the same length.
+    dtype : ExtensionDtype
+        The common dtype of the input arrays.
+
+    Returns
+    -------
+    list of BaseMaskedArray
+        The transposed column arrays.
+    """
+    import numpy as np
+
+    from pandas.core.arrays.masked import BaseMaskedArray
+
+    n_rows = len(arrays)
+    n_cols = len(arrays[0])
+
+    # Stack the _data and _mask into 2D arrays and transpose
+    data_2d = np.empty((n_rows, n_cols), dtype=dtype.numpy_dtype)
+    mask_2d = np.empty((n_rows, n_cols), dtype=bool)
+
+    for i, arr in enumerate(arrays):
+        data_2d[i] = arr._data
+        mask_2d[i] = arr._mask
+
+    data_t = data_2d.T
+    mask_t = mask_2d.T
+
+    arr_type = dtype.construct_array_type()
+    result = []
+    for i in range(n_cols):
+        result.append(arr_type._simple_new(data_t[i].copy(), mask_t[i].copy(), dtype=dtype))
+    return result
+[/REPLACE]
+
+pandas/core/frame.py
+[SEARCH]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            # We have EAs with the same dtype. We can preserve that dtype in transpose.
+            dtype = dtypes[0]
+            arr_type = dtype.construct_array_type()
+            values = self.values
+
+            new_values = [arr_type._from_sequence(row, dtype=dtype) for row in values]
+            result = type(self)._from_arrays(
+                new_values, index=self.columns, columns=self.index
+            )
+[/SEARCH]
+[REPLACE]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            # We have EAs with the same dtype. We can preserve that dtype in transpose.
+            dtype = dtypes[0]
+
+            from pandas.core.arrays.masked import BaseMaskedArray
+
+            arrays = self._mgr.arrays
+            if isinstance(arrays[0], BaseMaskedArray):
+                from pandas.core.arrays.masked import transpose_homogenous_masked_arrays
+
+                new_values = transpose_homogenous_masked_arrays(arrays, dtype)
+            else:
+                arr_type = dtype.construct_array_type()
+                values = self.values
+                new_values = [arr_type._from_sequence(row, dtype=dtype) for row in values]
+            result = type(self)._from_arrays(
+                new_values, index=self.columns, columns=self.index
+            )
+[/REPLACE]

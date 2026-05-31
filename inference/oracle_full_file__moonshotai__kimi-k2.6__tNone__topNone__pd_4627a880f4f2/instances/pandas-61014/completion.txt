@@ -1,0 +1,132 @@
+pandas/core/frame.py
+[SEARCH]
+    def where(
+        self,
+        cond,
+        other=np.nan,
+        *,
+        inplace: bool = False,
+        axis: Axis | None = None,
+        level: Level | None = None,
+    ) -> DataFrame | None:
+        """
+        Replace values where the condition is False.
+
+        Parameters
+        ----------
+        cond : bool DataFrame, array-like, or callable
+            Where cond is True, keep the original value. Where False,
+            replace with corresponding value from other.
+        other : scalar, DataFrame, or callable
+            Entries where cond is False are replaced with
+            corresponding value from other.
+        inplace : bool, default False
+            Whether to perform the operation in place on the data.
+        axis : int, default None
+            Alignment axis if needed.
+        level : int, default None
+            Alignment level if needed.
+
+        Returns
+        -------
+        DataFrame or None
+            If inplace=False, returns a new DataFrame with the
+            values replaced. If inplace=True, returns None.
+
+        See Also
+        --------
+        DataFrame.mask
+        """
+        inplace = validate_bool_kwarg(inplace, "inplace")
+
+        if isinstance(cond, DataFrame):
+            cond = cond._to_numpy_dtype(True)
+
+        cond = common.apply_if_callable(cond, self)
+        if isinstance(other, DataFrame):
+            other = other._to_numpy_dtype(True)
+
+        other = common.apply_if_callable(other, self)
+
+        return self._where(
+            cond,
+            other=other,
+            inplace=inplace,
+            axis=axis,
+            level=level,
+        )
+[/SEARCH]
+[REPLACE]
+    def where(
+        self,
+        cond,
+        other=np.nan,
+        *,
+        inplace: bool = False,
+        axis: Axis | None = None,
+        level: Level | None = None,
+    ) -> DataFrame | None:
+        """
+        Replace values where the condition is False.
+
+        Parameters
+        ----------
+        cond : bool DataFrame, array-like, or callable
+            Where cond is True, keep the original value. Where False,
+            replace with corresponding value from other.
+        other : scalar, DataFrame, or callable
+            Entries where cond is False are replaced with
+            corresponding value from other.
+        inplace : bool, default False
+            Whether to perform the operation in place on the data.
+        axis : int, default None
+            Alignment axis if needed.
+        level : int, default None
+            Alignment level if needed.
+
+        Returns
+        -------
+        DataFrame or None
+            If inplace=False, returns a new DataFrame with the
+            values replaced. If inplace=True, returns None.
+
+        See Also
+        --------
+        DataFrame.mask
+        """
+        inplace = validate_bool_kwarg(inplace, "inplace")
+
+        cond = common.apply_if_callable(cond, self)
+        other = common.apply_if_callable(other, self)
+
+        # check if cond is a DataFrame with many columns
+        # in which case we can use a faster path by operating
+        # on the underlying data directly
+        if (
+            isinstance(cond, DataFrame)
+            and cond.shape == self.shape
+            and cond.columns.equals(self.columns)
+            and cond.index.equals(self.index)
+        ):
+            return self._where(
+                cond,
+                other=other,
+                inplace=inplace,
+                axis=axis,
+                level=level,
+            )
+
+        if isinstance(cond, DataFrame):
+            cond = cond._to_numpy_dtype(True)
+
+        if isinstance(other, DataFrame):
+            other = other._to_numpy_dtype(True)
+
+        return self._where(
+            cond,
+            other=other,
+            inplace=inplace,
+            axis=axis,
+            level=level,
+        )
+[/REPLACE]

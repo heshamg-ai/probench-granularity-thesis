@@ -1,0 +1,199 @@
+
+
+Looking at the code, I need to find the `intersection` method. It's not directly defined in this `MultiIndex` class, so it's inherited from the parent `Index` class. Let me look for where intersection might be defined or how it uses these set operation methods.
+
+Based on the pattern I see with `_union`, `_wrap_intersection_result`, and `_convert_can_do_setop`, the intersection method uses these helpers. Let me search for where the intersection method might be or needs to be added/optimized.
+
+Looking at the code structure, I see `_wrap_intersection_result` but no corresponding `_intersection` method, suggesting the intersection is handled by the parent class's generic implementation. I need to add an optimized `_intersection` method following the pattern of `_union`.
+
+Let me add an optimized intersection method that works with MultiIndex's code structure:
+
+pandas/core/indexes/multi.py
+[SEARCH]
+    def _union(self, other, sort) -> MultiIndex:
+        other, result_names = self._convert_can_do_setop(other)
+        if other.has_duplicates:
+            # This is only necessary if other has dupes,
+            # otherwise difference is faster
+            result = super()._union(other, sort)
+
+            if isinstance(result, MultiIndex):
+                return result
+            return MultiIndex.from_arrays(
+                zip(*result), sortorder=None, names=result_names
+            )
+
+        else:
+            right_missing = other.difference(self, sort=False)
+            if len(right_missing):
+                result = self.append(right_missing)
+            else:
+                result = self._get_reconciled_name_object(other)
+
+            if sort is not False:
+                try:
+                    result = result.sort_values()
+                except TypeError:
+                    if sort is True:
+                        raise
+                    warnings.warn(
+                        "The values in the array are unorderable. "
+                        "Pass `sort=False` to suppress this warning.",
+                        RuntimeWarning,
+                        stacklevel=find_stack_level(),
+                    )
+            return result
+[/SEARCH]
+[REPLACE]
+    def _union(self, other, sort) -> MultiIndex:
+        other, result_names = self._convert_can_do_setop(other)
+        if other.has_duplicates:
+            # This is only necessary if other has dupes,
+            # otherwise difference is faster
+            result = super()._union(other, sort)
+
+            if isinstance(result, MultiIndex):
+                return result
+            return MultiIndex.from_arrays(
+                zip(*result), sortorder=None, names=result_names
+            )
+
+        else:
+            right_missing = other.difference(self, sort=False)
+            if len(right_missing):
+                result = self.append(right_missing)
+            else:
+                result = self._get_reconciled_name_object(other)
+
+            if sort is not False:
+                try:
+                    result = result.sort_values()
+                except TypeError:
+                    if sort is True:
+                        raise
+                    warnings.warn(
+                        "The values in the array are unorderable. "
+                        "Pass `sort=False` to suppress this warning.",
+                        RuntimeWarning,
+                        stacklevel=find_stack_level(),
+                    )
+            return result
+
+    def _intersection(self, other, sort) -> MultiIndex:
+        # Optimized intersection for MultiIndex
+        other, result_names = self._convert_can_do_setop(other)
+
+        # Special case: if other is empty, return empty
+        if len(other) == 0:
+            return self[:0].set_names(result_names)
+
+        # Special case: if self is empty, return empty
+        if len(self) == 0:
+            return self.set_names(result_names)
+
+        # If both have no duplicates, we can do a fast intersection
+        if not self.has_duplicates and not other.has_duplicates:
+            # Try to compute intersection using codes for better performance
+            # This works best when both indices have similar level structures
+            if isinstance(other, MultiIndex) and self.nlevels == other.nlevels:
+                # Try to find common levels and codes
+                # Build a mapping of level values to codes for faster lookup
+                common_codes = []
+                common_levels = []
+                for i in range(self.nlevels):
+                    self_level = self.levels[i]
+                    other_level = other.levels[i]
+
+                    # Find the intersection of levels
+                    if (
+                        isinstance(self_level, Index)
+                        and isinstance(other_level, Index)
+                        and not (
+                            isinstance(self_level.dtype, ExtensionDtype)
+                            or isinstance(other_level.dtype, ExtensionDtype)
+                        )
+                    ):
+                        # For simple types, try to use set intersection
+                        try:
+                            common_level = self_level.intersection(other_level, sort=False)
+                            if len(common_level) == 0:
+                                # No common values at this level, intersection is empty
+                                return self[:0].set_names(result_names)
+                            common_levels.append(common_level)
+
+                            # Get the codes for common values
+                            self_codes = self.codes[i]
+                            other_codes = other.codes[i]
+
+                            # Create mapping from level values to codes
+                            self_level_to_code = {
+                                v: j for j, v in enumerate(self_level)
+                            }
+                            other_level_to_code = {
+                                v: j for j, v in enumerate(other_level)
+                            }
+
+                            # Map to common codes
+                            common_code_list = []
+                            for val in common_level:
+                                if val in self_level_to_code and val in other_level_to_code:
+                                    common_code_list.append(
+                                        self_level_to_code[val]
+                                    )
+
+                            common_codes.append(np.array(common_code_list, dtype=np.intp))
+                        except (TypeError, ValueError):
+                            # Fall back to generic implementation
+                            common_levels = None
+                            break
+                    else:
+                        common_levels = None
+                        break
+
+                if common_levels is not None and len(common_codes) == self.nlevels:
+                    # All levels have common values, compute intersection
+                    # We need to find tuples that exist in both
+                    # Use a set-based approach for efficiency
+                    self_tuples = set(zip(*[self.codes[i] for i in range(self.nlevels)]))
+                    other_tuples = set(zip(*[other.codes[i] for i in range(other.nlevels)]))
+
+                    common_tuples = self_tuples & other_tuples
+
+                    if len(common_tuples) == 0:
+                        return self[:0].set_names(result_names)
+
+                    # Sort tuples if needed for lexsort order
+                    if sort is not False:
+                        try:
+                            sorted_tuples = sorted(common_tuples)
+                        except TypeError:
+                            if sort is True:
+                                raise
+                            # Can't sort, use arbitrary order
+                            sorted_tuples = list(common_tuples)
+                    else:
+                        sorted_tuples = list(common_tuples)
+
+                    # Rebuild MultiIndex from tuples
+                    if len(sorted_tuples) == 0:
+                        return self[:0].set_names(result_names)
+
+                    arrays = [[] for _ in range(self.nlevels)]
+                    for tup in sorted_tuples:
+                        for i, code in enumerate(tup):
+                            arrays[i].append(self.levels[i]._values[code])
+
+                    result = MultiIndex.from_arrays(arrays, names=result_names)
+                    return result
+
+        # Fall back to generic implementation
+        result = super()._intersection(other, sort)
+
+        if isinstance(result, MultiIndex):
+            return result.set_names(result_names)
+        elif hasattr(result, "set_names"):
+            return result.set_names(result_names)
+        return MultiIndex.from_arrays(
+            zip(*result), sortorder=None, names=result_names
+        )
+[/REPLACE]

@@ -1,0 +1,2585 @@
+I need to optimize `pandas.factorize` for object columns not containing strings. Let me analyze the code to understand the bottleneck and find the right optimization.
+
+Looking at the `_check_object_for_strings` function and `_get_hashtable_algo`, the issue is that for object dtype arrays, we always check `lib.infer_dtype(values, skipna=False)` to see if we can use a StringHashTable. But when we know the array doesn't contain strings, we should skip this check and directly use the ObjectHashTable.
+
+The key insight from the code is:
+1. `_get_hashtable_algo` calls `_check_object_for_strings` which calls `lib.infer_dtype(values, skipna=False)` for object arrays
+2. `lib.infer_dtype` is expensive for large object arrays
+3. If we know there are no strings, we can skip this check
+
+However, looking more carefully at the factorization path, the real optimization should be in `factorize_array` or in how we handle the object dtype case. Let me trace through:
+
+1. `factorize` calls `factorize_array`
+2. `factorize_array` calls `_get_hashtable_algo(values)` to get the hashtable class
+3. `_get_hashtable_algo` calls `_check_object_for_strings` which calls `lib.infer_dtype`
+
+The optimization requested is "for object columns not containing strings". This suggests we want to avoid the `lib.infer_dtype` call when we already know there are no strings.
+
+Looking at the code more carefully, the `factorize` function has a code path where it calls `_ensure_data` and then `_get_hashtable_algo`. But actually, the issue might be that we can optimize the check itself.
+
+Wait - let me re-read. The `lib.infer_dtype` check is done to see if we can use a more efficient StringHashTable. If we know there are no strings, we can skip this check entirely and just use ObjectHashTable.
+
+But how do we "know" there are no strings? Looking at the problem again, it says "object columns not containing strings". This likely refers to the case where the object column contains mixed types that are known not to be strings, or where we can cheaply determine there are no strings.
+
+Actually, looking more carefully at `_check_object_for_strings`:
+
+```python
+def _check_object_for_strings(values: np.ndarray) -> str:
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+    return ndtype
+```
+
+The comment says "it's cheaper to use a String Hash Table than Object" - so when there ARE strings, we want to use StringHashTable. But `lib.infer_dtype` is expensive.
+
+For the optimization: we could do a quick check first to see if there are ANY strings in the array, and only if there might be strings, do the full `infer_dtype`.
+
+Actually, a simpler optimization: `lib.infer_dtype` with `skipna=False` scans the whole array. But we can do a quick vectorized check: are there any elements that are instances of `str`? If not, we know it's not a string array.
+
+Wait - looking at StringHashTable vs ObjectHashTable, the StringHashTable likely handles string-specific hashing more efficiently. But for object arrays with no strings, we want to avoid the expensive `infer_dtype`.
+
+Let me think about this differently. The `lib.infer_dtype(values, skipna=False) in ["string"]` call is expensive because it inspects each element. We can pre-filter: if no element is an instance of `str`, then it can't be "string" dtype.
+
+Actually, we need to be careful. `lib.infer_dtype` might return "string" for things like numpy strings or other string-like objects. But for a quick optimization, we can check if any element is a `str` instance using a faster method.
+
+The fastest way to check if there are any strings in an object array is to use a comprehension or to use a numpy trick. Actually, we can't easily vectorize "isinstance(x, str)".
+
+But wait - there's another approach. Looking at pandas internals, perhaps we can use a faster check. Actually, let me look at what `lib.infer_dtype` does - it likely has some fast paths.
+
+Hmm, but we can't change `lib.infer_dtype`. The optimization must be in how we call it.
+
+Looking at the problem from a different angle: the `factorize` function at the top level eventually calls down. The optimization should be in `_check_object_for_strings`.
+
+Here's my proposed optimization: add a fast path that checks if there are any string-like elements using a faster method before calling the expensive `lib.infer_dtype`.
+
+Actually, the simplest fast path: if the array is empty, or if we can quickly determine no elements are strings, skip `infer_dtype`. 
+
+For object dtype arrays in numpy, we can't easily vectorize `isinstance(x, str)`. But we can use a generator with `any()` which will short-circuit.
+
+However, there's an even better approach: the `ObjectHashTable` can handle everything, so we only need to check for "string" if we want the optimization of using `StringHashTable`. If the string check is expensive and the array is large with non-string data, we may actually want to just use `ObjectHashTable` directly when strings are rare or absent.
+
+But the comment says "it's cheaper to use a String Hash Table than Object". So there is a performance benefit to using StringHashTable when there are strings.
+
+The optimal approach: do a quick sample or a quick vectorizable check. Actually, for object arrays, we can check `PyUnicode_Check` quickly in C, but from Python, a simple loop is our best bet.
+
+Let me re-examine: actually, `lib.infer_dtype` is implemented in Cython/C and might already be quite fast. But the issue description says "Optimize pandas.factorize for object columns not containing strings" - this implies the current code is slow for this case because it does the `infer_dtype` check unnecessarily.
+
+The simplest optimization: change `_check_object_for_strings` to have a fast path when we can quickly determine there are no strings.
+
+```python
+def _check_object_for_strings(values: np.ndarray) -> str:
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # Fast path: check if there are no strings using a quick generator
+        # This avoids the expensive lib.infer_dtype call for non-string object arrays
+        if not any(isinstance(x, str) for x in values):
+            pass  # Use object hashtable
+        elif lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+    return ndtype
+```
+
+Wait, but `any(isinstance(x, str) for x in values)` is also expensive in Python for large arrays. The C-level `lib.infer_dtype` might actually be faster.
+
+Let me think again... The `lib.infer_dtype` is already in C. So why would our approach be faster? 
+
+Actually, `lib.infer_dtype(values, skipna=False)` likely does more than just check for strings - it categorizes the entire dtype. So it might be doing extra work.
+
+But still, a Python generator with `any()` is likely slower than a C function for large arrays.
+
+Hmm, let me look at this from yet another angle. The problem says "object columns not containing strings". In pandas, when you have an object column with no strings, `lib.infer_dtype` will return something like "mixed", "integer", "floating", etc.
+
+Wait - maybe the optimization is elsewhere. Let me trace the full `factorize` path for object arrays:
+
+1. `factorize(values)` 
+2. `values = _ensure_arraylike(values)` - this may convert to array
+3. Since it's object dtype, goes to `factorize_array`
+4. `_get_hashtable_algo(values)` 
+5. `_check_object_for_strings(values)` calls `lib.infer_dtype(values, skipna=False)`
+6. Returns ObjectHashTable (since no strings)
+7. `table.factorize(values, ...)`
+
+Actually, re-reading the code more carefully:
+
+In `factorize`:
+```python
+    values = _ensure_arraylike(values)
+    original = values
+
+    if (...):
+        ...
+    else:
+        values = np.asarray(values)  # convert DTA/TDA/MultiIndex
+
+        if not use_na_sentinel and is_object_dtype(values):
+            # factorize can now handle differentiating various types of null values.
+            # These can only occur when the array has object dtype.
+            # However, for backwards compatibility we only use the null for the
+            # provided dtype. This may be revisited in the future, see GH#48476.
+            null_mask = isna(values)
+            if null_mask.any():
+                na_value = na_value_for_dtype(values.dtype, compat=False)
+                # Don't modify (potentially user-provided) array
+                values = np.where(null_mask, na_value, values)
+
+        codes, uniques = factorize_array(
+            values,
+            use_na_sentinel=use_na_sentinel,
+            size_hint=size_hint,
+        )
+```
+
+And in `factorize_array`:
+```python
+    original = values
+    if values.dtype.kind in ["m", "M"]:
+        na_value = iNaT
+
+    hash_klass, values = _get_hashtable_algo(values)
+    # ...
+    table = hash_klass(size_hint or len(values))
+    uniques, codes = table.factorize(...)
+```
+
+Wait, `_get_hashtable_algo` calls `_ensure_data` first! Let me look:
+
+```python
+def _get_hashtable_algo(values: np.ndarray):
+    values = _ensure_data(values)
+    ndtype = _check_object_for_strings(values)
+    hashtable = _hashtables[ndtype]
+    return hashtable, values
+```
+
+And `_ensure_data` for object dtype:
+```python
+    if is_object_dtype(values.dtype):
+        return ensure_object(np.asarray(value))
+```
+
+So `_ensure_data` returns an object array, and then `_check_object_for_strings` checks if it's actually strings.
+
+OK so here's a better observation: in `factorize`, we have:
+```python
+        values = np.asarray(values)  # convert DTA/TDA/MultiIndex
+
+        if not use_na_sentinel and is_object_dtype(values):
+```
+
+This `is_object_dtype(values)` check happens after `np.asarray`. For object columns that don't contain strings, the path goes through `factorize_array`, then `_get_hashtable_algo`, then `_check_object_for_strings` with the expensive `lib.infer_dtype`.
+
+I wonder if we can avoid the `lib.infer_dtype` call by caching or by a simpler check. Actually, let me look at what `lib.infer_dtype` does with `skipna=False` for a large object array of integers/floats - it likely still has to visit every element.
+
+Hmm, but we can't easily beat C code with Python code for array scanning.
+
+Wait - let me re-read the problem more carefully: "Optimize pandas.factorize for object columns not containing strings".
+
+Maybe the issue is that `factorize` itself does something suboptimal for object columns? Let me check if there's a path that bypasses the `lib.infer_dtype` or makes it faster.
+
+Actually, I think I found it. Look at `_check_object_for_strings`:
+
+```python
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+    return ndtype
+```
+
+The issue is that `lib.infer_dtype(values, skipna=False)` scans the ENTIRE array. But we only need to know if ALL non-null elements are strings. We can optimize this by doing a quick check: if there are any non-null, non-string elements, we can return "object" immediately.
+
+But from Python, scanning a large object array is slow. However, there's a numpy trick: we can't easily vectorize `isinstance(x, str)`, but we could potentially use `val.item()` or similar.
+
+Actually, I think there's a much simpler approach. Looking at the signature of `factorize_array`:
+
+```python
+def factorize_array(
+    values: np.ndarray,
+    use_na_sentinel: bool = True,
+    size_hint: int | None = None,
+    na_value: object = None,
+    mask: npt.NDArray[np.bool_] | None = None,
+) -> tuple[npt.NDArray[np.intp], np.ndarray]:
+```
+
+And `_get_hashtable_algo`:
+```python
+def _get_hashtable_algo(values: np.ndarray):
+    values = _ensure_data(values)
+    ndtype = _check_object_for_strings(values)
+    hashtable = _hashtables[ndtype]
+    return hashtable, values
+```
+
+What if we could avoid `_ensure_data` for object arrays? No, we need the object array.
+
+Hmm, let me think about what `ensure_object` does:
+
+```python
+return ensure_object(np.asarray(values))
+```
+
+This creates a copy/view of the array as object. For object columns, this is essentially a no-op (or close to it).
+
+OK, I think I need to look at this from a completely different angle. The problem must be that `lib.infer_dtype` is slow, and we need to either:
+1. Replace it with something faster
+2. Avoid calling it in some cases
+
+For option 2, when would we know we don't have strings? In `factorize`, we might have information from the caller. But `factorize_array` is a public API too.
+
+Actually, wait. Let me look at what happens in practice. For an object column with, say, all integers, `lib.infer_dtype` will return "integer" (or "mixed-integer" if there are NAs). For floats, "floating". For a mix, "mixed". Only when ALL elements are strings (or NAs) does it return "string".
+
+The expensive part is that `lib.infer_dtype` does a full classification. We only care about "is it string?".
+
+But from Cython, this might be hard to optimize further.
+
+Let me look at the actual pandas source to see if there have been recent changes... 
+
+Actually, I just realized I may be overcomplicating this. Let me check if there's a way to use a faster path in `_ensure_data` or if we can add a fastpath parameter.
+
+Wait - re-reading the code more carefully, I see that in `factorize`:
+
+```python
+    values = _ensure_arraylike(values)
+    original = values
+
+    if (
+        isinstance(values, (ABCDatetimeArray, ABCTimedeltaArray))
+        and values.freq is not None
+    ):
+        # The presence of 'freq' means we can fast-path sort and know there
+        #  aren't NAs
+        codes, uniques = values.factorize(sort=sort)
+        return codes, uniques
+
+    elif not isinstance(values.dtype, np.dtype):
+        codes, uniques = values.factorize(use_na_sentinel=use_na_sentinel)
+```
+
+For object dtype, `values.dtype` is `np.dtype('object')`, so it goes to the `else` branch.
+
+Hmm, let me look at `_ensure_data` again:
+
+```python
+def _ensure_data(values: ArrayLike) -> np.ndarray:
+    if not isinstance(values, ABCMultiIndex):
+        # extract_array would raise
+        values = extract_array(values, extract_numpy=True)
+
+    if is_object_dtype(values.dtype):
+        return ensure_object(np.asarray(values))
+```
+
+Actually, `ensure_object` might be doing a copy. For already-object arrays, this should be cheap.
+
+Let me think about what the actual optimization could be. Perhaps the issue is that `factorize_array` always calls `_get_hashtable_algo` which always calls `_check_object_for_strings` which always calls `lib.infer_dtype`. 
+
+What if we add a cache or memoization? No, that wouldn't help for new arrays.
+
+What if we modify `_check_object_for_strings` to do a faster preliminary check? For instance, if we can quickly determine that there are no strings by checking a sample, we might avoid the full scan. But that's heuristic and potentially incorrect.
+
+Actually, I just need to check: is `lib.infer_dtype` actually slow, or is there something else going on?
+
+Let me search for clues in the code. The comment in `_check_object_for_strings` says:
+> including nulls because that is the only difference between StringHashTable and ObjectHashtable
+
+This suggests that StringHashTable and ObjectHashTable handle nulls differently? No, the comment means that `skipna=False` is used because that's the only difference in behavior between the two hashtables.
+
+Wait, I think I may have been missing something obvious. Let me reread `lib.infer_dtype` behavior. When `skipna=False`, nulls are included in the inference. For object arrays with strings and None, `infer_dtype(..., skipna=False)` would include None in the inference, potentially changing the result.
+
+Actually, let me look at this from the performance angle once more. If we have an object array with 1 million integers and no strings, `lib.infer_dtype` will scan all 1 million elements to determine the type is "integer" (or "mixed-integer"). Then we check `in ["string"]` and it's False, so we use ObjectHashTable. The scan was essentially wasted work.
+
+If we could tell more quickly that there are no strings...
+
+But from Python, any loop over 1M elements will be slow. The C-level `lib.infer_dtype` is likely as fast as it gets for a full scan.
+
+Unless - can we use numpy's vectorization somehow? For object arrays, we can't directly check `isinstance(x, str)` with a ufunc. But we might use `np.vectorize` or check the type of each element using a structured approach.
+
+Actually, I think there might be a way using `np.frompyfunc` or by accessing the array's internal buffer. But that's complex and fragile.
+
+Let me think about this differently. What if the optimization is not in `_check_object_for_strings` but in avoiding it entirely?
+
+Look at the flow:
+1. `_get_hashtable_algo(values)` calls `_ensure_data(values)` then `_check_object_for_strings(values)`
+2. `_ensure_data` for object dtype calls `ensure_object(np.asarray(values))`
+3. The result is still object dtype
+4. `_check_object_for_strings` calls `lib.infer_dtype`
+
+What if we added a parameter to skip the string check? Or what if we cached the inference result?
+
+Actually, I wonder if `ensure_object` could somehow encode the information that this is definitively not a string array. But `np.ndarray` doesn't have that metadata.
+
+Hmm, let me look at another angle. The `factorize` function has `sort` parameter. What's the cost of `factorize` vs `factorize_array`?
+
+For object arrays, `factorize` does:
+```python
+        values = np.asarray(values)
+        # ... na sentinel handling ...
+        codes, uniques = factorize_array(...)
+```
+
+And `factorize_array` creates the hashtable and calls `table.factorize`.
+
+I wonder if the optimization is to use a different approach entirely for object arrays without strings. For instance, using `np.unique` with some preprocessing?
+
+Actually, `np.unique` on object arrays is also slow.
+
+Let me look at `ObjectHashTable.factorize` to understand what it does... But that's in Cython/C and not shown in the code.
+
+OK, I think I need to focus on what IS in the code and what CAN be optimized. The `lib.infer_dtype` call is definitely a candidate for optimization because:
+1. It's only used to decide between StringHashTable and ObjectHashTable
+2. For non-string object arrays, the call is "wasted"
+3. We can't avoid it in general, but we might optimize the common case
+
+Here's a key insight: what if many object arrays in pandas already carry type information? For instance, if the array came from a DataFrame column, we might know it's "mixed" or "integer" etc.
+
+But in the general `factorize` API, we don't have this information.
+
+Let me try yet another approach: look for places where we call `factorize` and might already know the answer. But the prompt says to optimize `pandas.factorize`, so it should be in the general function.
+
+Wait - I just re-read the prompt: "Optimize pandas.factorize for object columns not containing strings". 
+
+Maybe "object columns" here refers to DataFrame columns that are of object dtype but don't contain strings. And the optimization might be at a higher level, not in `factorize` itself?
+
+But the prompt says "Optimization function: pandas.factorize", so it must be in this function or its helpers.
+
+Let me look one more time at whether we can avoid `lib.infer_dtype` by using a property of the array. 
+
+Actually, here's an idea: what if we check `values.size == 0` first as a fast path? That wouldn't help much.
+
+Or: what if we use a probabilistic check? Sample a few elements, and if none are strings, assume it's not a string array. But that's incorrect.
+
+Hmm, let me just try to understand what `lib.infer_dtype` really does. From pandas documentation, `infer_dtype` returns a string indicating the inferred type of the array. For object arrays, it inspects elements to determine if they're all integers, all floats, all strings, mixed, etc.
+
+For large object arrays with no strings, this is O(n) work that doesn't need to be done for factorization purposes (we only care about "string" vs "not string").
+
+I wonder if we can use a faster check: "does the array contain any strings?" rather than "what is the inferred dtype?"
+
+From C/Cython, this could be done with a quick loop that stops at the first string. From Python, we can use `any()` with a generator.
+
+But for 1M elements, `any(isinstance(x, str) for x in arr)` in Python might be slower than `lib.infer_dtype` in C.
+
+Unless... we can use numpy tricks. For object arrays, we could potentially use `np.frompyfunc` or check object identity with known string instances.
+
+Actually, I just realized: `lib.infer_dtype` with `skipna=False` might already be doing efficient C-level processing. The real issue might not be the type inference itself, but rather that we're doing it at all for arrays where we could determine the answer more cheaply or where the answer is already known.
+
+Hmm, but the problem statement specifically asks us to optimize this case. Let me think about what pandas developers would do...
+
+One common optimization in pandas is to use `lib.is_string_array` or similar fast Cython functions. Let me check if there's something like that.
+
+Actually, looking more carefully at `pandas/_libs/lib.pyx`, there might be a `noarch.stype_is_str` or similar. But I don't have that source.
+
+Let me try a completely different approach. What if the optimization is in `factorize` rather than `_check_object_for_strings`?
+
+In `factorize`, for object dtype arrays, we do:
+```python
+        if not use_na_sentinel and is_object_dtype(values):
+            null_mask = isna(values)
+            if null_mask.any():
+                na_value = na_value_for_dtype(values.dtype, compat=False)
+                values = np.where(null_mask, na_value, values)
+```
+
+This `isna(values)` and `null_mask.any()` is extra work. But it's only for `use_na_sentinel=False`.
+
+Hmm, I also notice that in `factorize`, after `np.asarray(values)`, we call `factorize_array` which calls `_get_hashtable_algo` which calls `_ensure_data` which for object arrays does `ensure_object(np.asarray(values))`. So we might be doing `np.asarray` twice for object arrays!
+
+Wait, `np.asarray` on an already-array should be cheap (just returns itself if it's already an ndarray of the right dtype). But `ensure_object` might do more.
+
+Actually, looking at `ensure_object`:
+```python
+return ensure_object(np.asarray(values))
+```
+
+In pandas, `ensure_object` is imported from `pandas.core.dtypes.common`. It likely does `np.asarray(values, dtype=object)` or similar. For object arrays, this should be a no-op.
+
+OK, I think I need to just make a pragmatic optimization. Let me see if there's a way to avoid `lib.infer_dtype` when we can quickly tell there are no strings.
+
+Actually, re-reading the problem, I wonder if the optimization could be simpler than I thought. What if we just add a fast path in `_check_object_for_strings` for empty arrays? Or for arrays where the first non-null element is not a string?
+
+Actually, here's a clever idea: `lib.infer_dtype` returns "string" ONLY if all non-skipped elements are strings. So if we can find ANY element that is definitely not a string (and not NA), we know the answer is not "string". We could do a quick partial scan.
+
+But again, from Python, any scan is slow.
+
+Wait, I wonder if `lib` has a faster function. Looking at the imports:
+```python
+from pandas._libs import (
+    algos,
+    hashtable as htable,
+    iNaT,
+    lib,
+)
+```
+
+There's `lib.infer_dtype` but also potentially other useful functions. In pandas' Cython code, there might be functions like `lib.is_float_array`, `lib.is_integer_array`, etc., but I don't see them imported.
+
+Hmm, actually, let me look at whether `StringHashTable` is even significantly faster than `ObjectHashTable`. The comment says "it's cheaper to use a String Hash Table than Object". If the array doesn't contain strings, we won't use StringHashTable anyway. So the question is: can we determine "no strings" faster than `lib.infer_dtype`?
+
+For an object array that doesn't contain strings, `lib.infer_dtype` does unnecessary work classifying all the elements. If there was a function `lib.has_string_elements` that stopped at the first string, it might be faster in the common case where strings are absent ( stops at first string vs scans entire array).
+
+But we don't have such a function. And we can't add Cython code.
+
+Let me think about whether there's a numpy or Python trick... 
+
+Actually, for the specific case of "object columns not containing strings", maybe we can use the fact that in practice, object columns in pandas often contain either all strings or no strings. If we cache the result or use some heuristic...
+
+Wait! I just realized something. In `factorize_array`, the `values` parameter is already passed through `_ensure_data` which for object arrays is `ensure_object(np.asarray(values))`. But `ensure_object` is a Python function that may or may not preserve the "objectness".
+
+Let me look at whether we can optimize the calling sequence. Currently:
+1. `factorize` calls `values = np.asarray(values)` 
+2. Then `factorize_array(values, ...)` is called
+3. `factorize_array` doesn't call `_ensure_data` directly, but `_get_hashtable_algo` does
+4. `_get_hashtable_algo` calls `_ensure_data(values)` which calls `ensure_object(np.asarray(values))`
+
+For a numpy object array, `np.asarray(values)` in step 1 and step 4 is cheap (just returns the array). `ensure_object` might still do work.
+
+Hmm, I wonder if `ensure_object` always copies. That would be bad for large arrays.
+
+OK, I think I need to actually try to find where the real slowness is. Given the code, the most promising optimization for "object columns not containing strings" would be to avoid the `lib.infer_dtype` call by using a faster check or by passing information through.
+
+But wait - let me re-examine the actual flow more carefully. In `factorize_array`:
+
+```python
+def factorize_array(
+    values: np.ndarray,
+    ...
+):
+    original = values
+    if values.dtype.kind in ["m", "M"]:
+        na_value = iNaT
+
+    hash_klass, values = _get_hashtable_algo(values)
+```
+
+And `_get_hashtable_algo`:
+```python
+def _get_hashtable_algo(values: np.ndarray):
+    values = _ensure_data(values)
+    ndtype = _check_object_for_strings(values)
+    hashtable = _hashtables[ndtype]
+    return hashtable, values
+```
+
+So `values` goes through `_ensure_data`. For object dtype, `_ensure_data` returns `ensure_object(np.asarray(values))`. Let me check what `ensure_object` actually does...
+
+If `values` is already a numpy object array, `np.asarray(values)` returns itself (or a view). Then `ensure_object` likely does additional processing.
+
+Actually, I just realized I might be looking at the wrong place. Let me search for where `ensure_object` is imported from:
+
+```python
+from pandas.core.dtypes.common import (
+    ...
+    ensure_object,
+    ...
+)
+```
+
+And in `pandas/core/dtypes/common.py`, `ensure_object` is:
+```python
+def ensure_object(arr):
+    if isinstance(arr, np.ndarray) and arr.dtype == np.dtype('object'):
+        return arr
+    # ... convert to object
+```
+
+If this is the case, then `ensure_object` is already a no-op for object arrays! So `_ensure_data` is cheap for object arrays.
+
+This means the real cost must be `lib.infer_dtype` in `_check_object_for_strings`.
+
+So how do we optimize this? We need a faster way to determine "is this a string array?" for object arrays.
+
+Let me think... What if we could tell from the array's metadata? In numpy, object arrays don't track element types. But in pandas' ExtensionArray ecosystem, there might be more information.
+
+Wait - `values` at the point of `_check_object_for_strings` is a numpy ndarray, not a pandas-specific type. So no extra metadata.
+
+Hmm, I wonder if we can use `pd.api.types.infer_dtype` or if there's a vectorized approach.
+
+Actually, here's a thought: for very large arrays, calling ANY Python-level function per element is slow. But C-level `lib.infer_dtype` is already fast. Maybe the "slowness" is relative to an ideal where we don't need to call it at all.
+
+What if we add a parameter to `factorize` / `factorize_array` that allows the caller to specify the hashtable type? Then higher-level code that already knows it's not a string array can skip the check.
+
+But the prompt says "without altering its behavior, public APIs, or test expectations." So we can't add parameters to public APIs.
+
+Hmm, but we CAN add internal parameters or optimize the internals.
+
+Let me look at whether there's a way to infer "not string" more cheaply. For instance, if we check just the first non-null element:
+- If it's not a string, can we conclude the array is not all strings? No, because `[None, "hello"]` has first non-null as string but `[1, "hello"]` doesn't.
+- We need ALL non-null elements to be strings for `infer_dtype` to return "string".
+
+So we can't conclude "not string" from a single element (unless we know there are no NAs and the first element isn't a string, but even then, other elements could be strings).
+
+Wait, but we CAN conclude "string" if we see that the array is empty or all null! In that case, `lib.infer_dtype` with `skipna=False` returns what? For all-null or empty, it might return "empty" or "mixed" or something else, not "string".
+
+Let me check: for `pd.array([None, None], dtype=object)`, `lib.infer_dtype` with `skipna=False` returns... I think it returns "mixed" because None is not a string.
+
+And for `["a", None]`, with `skipna=False`, it might still return "string" if strings are detected, or "mixed" if None disrupts it. The documentation says `skipna` determines whether NA values are skipped in inference.
+
+Actually, let me look at this from a practical perspective. The most common case where object columns don't contain strings is when they contain integers, floats, or a mix (with NAs represented as NaN or None). 
+
+What if we could use a faster numpy-based check for "definitely no strings"? For instance:
+- If all elements are numeric (int, float, complex, np.nan, None), no strings
+- We could potentially use vectorized operations for this
+
+But numpy doesn't provide `isinstance(x, str)` vectorization for object arrays.
+
+Actually, Python has `map` and `filter` which are in C. And `any` on a generator expression can short-circuit. But even `any(isinstance(x, str) for x in arr)` for 1M elements where x is not a string involves 1M Python function calls (`isinstance`), which is slow.
+
+Wait, what about using `np.vectorize` or `np.frompyfunc`? These still call Python functions.
+
+What if there's a numpy internal we can exploit? For object arrays, numpy stores PyObject* pointers. We can't easily access the type without going through Python.
+
+Let me think about C extensions. pandas has `lib` which is a Cython module. Could `lib` have a function we can use?
+
+Actually, I realize I should check what `lib.noarch..." or related functions exist. But I don't have the Cython source.
+
+OK, let me try a completely different approach. What if the optimization is not about avoiding `lib.infer_dtype`, but about making `lib.infer_dtype` faster by reducing the array size? For instance, we could check a subset of elements?
+
+No, that's incorrect for correctness.
+
+Hmm, let me re-read the code one more time to make sure I understand...
+
+```python
+def _check_object_for_strings(values: np.ndarray) -> str:
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+    return ndtype
+```
+
+Wait, the comment says "it's cheaper to use a String Hash Table than Object". So when there ARE strings, using `StringHashTable` is cheaper. The infer is done to decide whether to use the optimization.
+
+For non-string arrays, we pay the cost of inference without getting the benefit.
+
+Now, what if we just... didn't do the inference and always used ObjectHashTable? The comment says StringHashTable is cheaper for strings, so we'd lose performance for string arrays. But the prompt specifically asks to optimize for non-string arrays.
+
+This seems like there might be a trade-off. But since the prompt says "optimize for object columns not containing strings", maybe we can add a fast path that avoids the check when it detects non-string elements quickly.
+
+Actually, I just realized there might be a way to use numpy's `object` dtype array operations more efficiently. What if we check the type of the first, say, 100 elements? If none are strings, we might guess it's not a string array. But this is heuristic.
+
+Hmm, or what if we use the fact that `lib.infer_dtype(..., skipna=True)` is faster (skips nulls)? But the comment explicitly says `skipna=False` is used "because that is the only difference between StringHashTable and ObjectHashtable".
+
+Let me think about what this means. `StringHashTable` and `ObjectHashTable` handle nulls differently? Or rather, the inference with `skipna=False` determines whether nulls affect the "string" classification.
+
+Actually, I think the key insight is: if we have an object array with `["a", None]`, `infer_dtype(..., skipna=True)` would say "string" (ignoring None), but `skipna=False` might say "mixed" (because None is not a string). But wait, would it? Let me think...
+
+Actually, `skipna=True` means "skip NA values when inferring". So `["a", None]` with `skipna=True` would infer from `"a"` only, giving "string". With `skipna=False`, it infers from all values, and since None is not a string, it might give "mixed" or maybe still "string" if None is treated specially.
+
+Hmm, I'm not sure about the exact behavior, but the code uses `skipna=False`, so there must be a reason.
+
+OK, let me try yet another approach. Maybe the optimization is not in `_check_object_for_strings` at all, but in avoiding the object path entirely?
+
+In `factorize`, we have:
+```python
+    values = _ensure_arraylike(values)
+    original = values
+
+    if (
+        isinstance(values, (ABCDatetimeArray, ABCTimedeltaArray))
+        and values.freq is not None
+    ):
+        codes, uniques = values.factorize(sort=sort)
+        return codes, uniques
+
+    elif not isinstance(values.dtype, np.dtype):
+        codes, uniques = values.factorize(use_na_sentinel=use_na_sentinel)
+```
+
+For object dtype (`np.dtype('object')`), neither condition is met, so we go to `else`.
+
+But wait - what if `values` is already an `ObjectArray` or some extension type that could factorize itself more efficiently? The code doesn't check for this because `np.dtype('object')` is a `np.dtype`.
+
+Hmm, I wonder if we could add a special case for object dtype that's backed by an ExtensionArray. But the prompt says `is_object_dtype(values.dtype)` in the code path, implying `values` is an ndarray.
+
+Let me try to think about what a real optimization would look like in practice. In pandas 2.x, there's been work on "string dtype" as a proper extension type. If object columns containing strings used StringDtype instead, then `lib.infer_dtype` wouldn't be needed because the dtype itself would tell us.
+
+But that's a larger change and might affect behavior.
+
+Wait, looking back at the code, I see `is_extension_array_dtype` and checks for `not isinstance(values.dtype, np.dtype)`. For pure numpy object arrays, we go to the else branch.
+
+Actually, I just realized something: the `values = np.asarray(values)` in the else branch might convert an ExtensionArray to a numpy array. But for object dtype ExtensionArrays, they should already be numpy-like.
+
+OK, I think I need to focus on a concrete optimization. Let me see if I can find an optimization that's mentioned in pandas issues or PRs.
+
+Actually, let me re-read the problem: "Optimize pandas.factorize for object columns not containing strings". The key phrase is "not containing strings". This is an important qualifier.
+
+What if we could optimize by NOT calling `lib.infer_dtype` and instead using a faster check that specifically looks for strings, stopping early when found?
+
+In Python, we can write:
+```python
+def _has_any_string(values):
+    for val in values:
+        if isinstance(val, str):
+            return True
+    return False
+```
+
+But this is slow due to Python loop overhead. However, for arrays with NO strings, we still have to iterate through all elements, which is O(n) Python overhead.
+
+Unless... we can push this to C/Cython. But we can't add new Cython code in this exercise.
+
+Hmm, what if `lib` already has a function we can use? Let me check the imports again...
+
+```python
+from pandas._libs import (
+    algos,
+    hashtable as htable,
+    iNaT,
+    lib,
+)
+```
+
+Maybe `lib` has other useful functions. In pandas, `lib` is a common Cython module with many utility functions. There might be something like `lib.is_string_array` or `lib.maybe_convert_objects` that we could leverage.
+
+Actually, wait - what about `lib.infer_dtype` itself? Is there a way to make it faster by using `skipna=True`?
+
+If the array has no NAs, `skipna=True` and `skipna=False` are equivalent. But we don't know if there are NAs without checking.
+
+What if we check for NAs first? `isna(values)` is vectorized via Cython. If there are no NAs, we could use `skipna=True` (if it's faster). But the code specifically uses `skipna=False`, so there must be a behavioral reason.
+
+Actually, let me re-read the comment:
+> including nulls because that is the only difference between StringHashTable and ObjectHashtable
+
+I think this means: if NAs are present, inferring with or without them might give different results, and the choice affects whether we use StringHashTable or ObjectHashTable. The specific choice of `skipna=False` is made to match the behavior of ObjectHashTable.
+
+So we can't simply change `skipna=False` to `skipna=True`.
+
+Alright, I'm going to take a different approach entirely. Let me see if there's a way to optimize by reordering or short-circuiting.
+
+Here's an idea: what if we check whether it's even possible for the array to be all strings? For instance:
+- If the array is large and heterogeneous, it's very unlikely to be all strings
+- We could do a cheap check first: are the first N elements all strings?
+
+Actually, here's a more robust idea: for `lib.infer_dtype` to return "string", ALL non-null elements must be strings. So if we find even ONE element that's not a string and not null, we know the answer.
+
+What if we do a quick Python-level check of a small sample, and only fall back to `lib.infer_dtype` if the sample suggests it might be all strings?
+
+For an array that doesn't contain strings, a sample of even 1 element that's not a string (and not null) would let us conclude "not string", as long as we also check that the array isn't all nulls.
+
+Wait, but if the array is `["a", 1, 2, 3, ...]`, checking just the first element `"a"` (a string) would suggest it might be all strings, so we'd fall back to `lib.infer_dtype`. But if the array is `[1, 2, 3, ...]`, we'd quickly conclude "not string".
+
+For the specific optimization target of "object columns not containing strings", this would help when such arrays start with non-strings. But if a non-string array starts with a string, we still fall back.
+
+This is a heuristic and might not help in all cases.
+
+Let me think about real-world object columns not containing strings:
+- Integer object columns: `[1, 2, 3, None, 5]` - first element is int, not string
+- Float object columns: `[1.0, 2.0, np.nan, 4.0]` - first element is float, not string
+- Mixed numeric: `[1, 1.0, np.nan, None]` - first element is int, not string
+- Boolean or mixed: `[True, False, None]` - first element is bool, not string
+
+For these, a first-element check would work! Only if someone constructed `["a", 1, 2]` would it fail.
+
+But for robustness, we shouldn't rely on a single element. Let me think about a small sample...
+
+Actually, for an array with no strings at all, ANY sample would work. The issue is false positives (sampling a string when the array isn't all strings).
+
+What about checking ALL elements but with early stopping?
+
+```python
+def _check_object_for_strings(values: np.ndarray) -> str:
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # Fast path: check if there are definitely no strings
+        # This avoids calling lib.infer_dtype for non-string object arrays
+        for i in range(min(len(values), 5)):  # Check first 5 elements
+            val = values[i]
+            if val is not None and val is not lib.no_default and not isinstance(val, str):
+                # Found a non-string, non-null element; can't be all strings
+                # But wait, lib.infer_dtype might still return "string" if 
+                # all other elements are strings and this is somehow not counted?
+                pass  # Actually this gets complicated...
+```
+
+Hmm, this approach gets messy because `lib.infer_dtype`'s logic for what counts as a string is complex (e.g., does `np.nan` count as null? Does `pd.NA`?).
+
+OK, I think I've been overthinking this. Let me look for a simpler, more guaranteed optimization.
+
+Looking back at `factorize_array`:
+
+```python
+def factorize_array(
+    values: np.ndarray,
+    use_na_sentinel: bool = True,
+    size_hint: int | None = None,
+    na_value: object = None,
+    mask: npt.NDArray[np.bool_] | None = None,
+) -> tuple[npt.NDArray[np.intp], np.ndarray]:
+```
+
+And its call to `_get_hashtable_algo(values)` which calls `_ensure_data(values)` then `_check_object_for_strings(values)`.
+
+For the case where `values` is already a result of `_ensure_data` or `np.asarray`, the `_ensure_data` in `_get_hashtable_algo` might be redundant.
+
+But more importantly, I notice that `factorize` calls `_ensure_arraylike(values)` and then `np.asarray(values)` before calling `factorize_array`. Then `factorize_array`'s helper calls `_ensure_data` again. For object arrays, `_ensure_data` calls `ensure_object(np.asarray(values))`.
+
+What if `ensure_object` is expensive? Let me trace: if `values` is already an `np.ndarray` with `dtype=object`, `np.asarray(values)` returns itself, and if `ensure_object` has a fast path for object arrays (returns as-is), then this is cheap.
+
+If the array is not an ndarray (e.g., a list), then there's conversion overhead, but that's unavoidable.
+
+Hmm, let me look at whether `factorize` does unnecessary work for the object path.
+
+Actually, I just noticed: in `factorize`, when `not use_na_sentinel and is_object_dtype(values)`:
+```python
+            null_mask = isna(values)
+            if null_mask.any():
+                na_value = na_value_for_dtype(values.dtype, compat=False)
+                values = np.where(null_mask, na_value, values)
+```
+
+This replaces nulls with a sentinel value. Then `factorize_array` is called. But in `factorize_array`, `use_na_sentinel` is still passed! If `use_na_sentinel=False`, and we've already replaced nulls, then the factorization might not need special NA handling.
+
+But this is probably correct behavior.
+
+Alright, I think I need to look at what specific change would make a measurable difference. The prompt mentions "speed and memory efficiency".
+
+For object columns not containing strings, the main costs are:
+1. `lib.infer_dtype(values, skipna=False)` - O(n) C function, but still a scan
+2. Object hashtable operations during factorization
+
+For memory efficiency, object arrays already use pointers to Python objects, which is memory-intensive but hard to change within `factorize`.
+
+What if the optimization is to use a more specific hash table or algorithm for known non-string object arrays?
+
+Actually, re-reading the code, I see `_hashtables`:
+```python
+_hashtables = {
+    "complex128": htable.Complex128HashTable,
+    "complex64": htable.Complex64HashTable,
+    "float64": htable.Float64HashTable,
+    "float32": htable.Float32HashTable,
+    "uint64": htable.UInt64HashTable,
+    "uint32": htable.UInt32HashTable,
+    "uint16": htable.UInt16HashTable,
+    "uint8": htable.UInt8HashTable,
+    "int64": htable.Int64HashTable,
+    "int32": htable.Int32HashTable,
+    "int16": htable.Int16HashTable,
+    "int8": htable.Int8HashTable,
+    "string": htable.StringHashTable,
+    "object": htable.PyObjectHashTable,
+}
+```
+
+So `"string"` maps to `StringHashTable` and `"object"` maps to `PyObjectHashTable`.
+
+From the comment, `StringHashTable` is "cheaper" than `PyObjectHashTable` for string data. This likely means it hashes and compares more efficiently (e.g., by looking at string content directly rather than going through Python's generic object hashing).
+
+For non-string data, `PyObjectHashTable` is what we must use.
+
+So the optimization must be in avoiding the call to `lib.infer_dtype` or making it cheaper.
+
+Let me look at this from yet another angle. What if we can determine faster that an array is "not string" by looking at the `__class__` or doing type checking on individual elements?
+
+In Python, we could do:
+```python
+def _is_all_string(values):
+    """Fast check if all non-null values are strings."""
+    for v in values:
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            continue  # Skip common null-like values
+        if not isinstance(v, str):
+            return False
+    return True
+```
+
+But this is in Python and might be slow for large arrays. However, if we use it as a quick pre-filter and it returns `False`, we can skip `lib.infer_dtype`.
+
+For arrays that are NOT all strings (which is the optimization target), this returns `False` after finding the first non-string. If the first element is a non-string, it returns immediately with essentially no cost.
+
+For arrays that ARE all strings, it scans the entire array, which is the same cost as `lib.infer_dtype`. But we optimize the target case.
+
+The question is: is the Python-level loop with `isinstance` calls faster or slower than `lib.infer_dtype` in C?
+
+For arrays that start with non-strings, the Python loop exits immediately, which is very fast. For arrays that are all strings, the Python loop is slower than C but gives the same answer.
+
+Actually, for a 1M element array with no strings where the first element is not a string, the Python loop does 1 iteration and returns. `lib.infer_dtype` does 1M iterations in C. So Python loop is much faster in this case!
+
+For an array with strings at the beginning and non-strings later (e.g., `["a", "b", "c", 1, 2, ...]`), the Python loop exits at the 4th element, still much faster than full scan.
+
+For an all-string array, Python loop does 1M iterations (slow), but `lib.infer_dtype` also does 1M iterations (fast in C). So we'd lose performance for all-string arrays.
+
+However, the optimization target is "object columns not containing strings", which is exactly the case where the Python loop would be faster (early exit on first non-string).
+
+But wait - for all-string arrays, we'd now be doing BOTH the Python loop (full scan, slow) AND `lib.infer_dtype` (if the loop returns True). That would be worse.
+
+Hmm, we need the opposite: if Python loop says "might be all strings", fall back to `lib.infer_dtype`. If it says "definitely not all strings", skip `lib.infer_dtype`.
+
+For non-string arrays, we win. For all-string arrays, we lose (do Python loop then C loop).
+
+Actually, for ALL-STRING arrays, the Python loop also does a full scan. But it's doing `isinstance(v, str)` in Python, which is slower than whatever `lib.infer_dtype` does in C.
+
+So this approach makes non-string arrays faster but all-string arrays slower. Is that a good trade-off?
+
+The prompt says "Optimize pandas.factorize for object columns not containing strings". This implies the primary concern is that case. But making string arrays worse might not be desirable.
+
+What if we use a hybrid approach: check a small sample first. If the sample has non-strings, we're done. If it might be all strings, fall back to `lib.infer_dtype`.
+
+For a sample of 10 elements:
+- Non-string array with non-string in first 10: fast
+- Non-string array with strings in first 10: falls back to `lib.infer_dtype` (no win, no loss for these 10)
+- All-string array: always falls back (no win, no loss)
+
+This is safe but doesn't help arrays that happen to start with strings.
+
+Actually, I think there's a better approach. Let me re-examine `lib.infer_dtype`. In pandas, this function is in `pandas/_libs/lib.pyx` which is Cython. Looking at the pandas source (which I know from memory), `infer_dtype` for object arrays does something like:
+
+1. Iterate through elements
+2. Classify each as integer, float, string, datetime, etc.
+3. Find the most specific common type
+
+For a non-string array, it still classifies every element to determine the overall type.
+
+The reason `StringHashTable` is faster is likely that it avoids Python object hashing overhead for strings, instead comparing C-level string content directly.
+
+For mixed-type object arrays, `PyObjectHashTable` uses Python's `hash()` and `==`, which are slower but necessary for mixed types.
+
+OK, I think I've been going in circles. Let me try a completely different, more practical approach.
+
+What if the optimization is simply to avoid calling `_check_object_for_strings` when we already know from context that we have non-string data?
+
+Actually, looking at where `_get_hashtable_algo` is called, it's only called from `factorize_array`. And `factorize_array` is called from `factorize`, `value_counts_arraylike`, and possibly other places.
+
+In the `value_counts` function:
+```python
+            values = _ensure_arraylike(values)
+            keys, counts = value_counts_arraylike(values, dropna)
+```
+
+And `value_counts_arraylike`:
+```python
+def value_counts_arraylike(
+    values: np.ndarray, dropna: bool, mask: npt.NDArray[np.bool_] | None = None
+) -> tuple[ArrayLike, npt.NDArray[np.int64]]:
+    original = values
+    values = _ensure_data(values)
+
+    keys, counts = htable.value_count(values, dropna, mask=mask)
+```
+
+Wait, `value_counts_arraylike` calls `_ensure_data` directly, then `htable.value_count`. It doesn't use `_get_hashtable_algo`! So it bypasses the string check entirely.
+
+Interesting! So `value_counts` on object arrays uses `PyObjectHashTable` directly, not `StringHashTable`.
+
+Let me re-examine: `htable.value_count` - this is a module-level function, not a class method. It likely dispatches based on dtype itself, or uses ObjectHashTable directly.
+
+Hmm, but `factorize_array` uses `_get_hashtable_algo` which does the string check.
+
+Actually, let me look at `unique` / `unique_with_mask`:
+```python
+def unique(values):
+    return unique_with_mask(values)
+
+def unique_with_mask(values, mask=None):
+    values = _ensure_arraylike(values)
+
+    if is_extension_array_dtype(values.dtype):
+        return values.unique()
+
+    original = values
+    hashtable, values = _get_hashtable_algo(values)
+    # ...
+```
+
+So `unique` also uses `_get_hashtable_algo`. But `value_counts_arraylike` doesn't? Let me re-check...
+
+```python
+def value_counts_arraylike(
+    values: np.ndarray, dropna: bool, mask: npt.NDArray[np.bool_] | None = None
+) -> tuple[ArrayLike, npt.NDArray[np.int64]]:
+    """
+    ...
+    """
+    original = values
+    values = _ensure_data(values)
+
+    keys, counts = htable.value_count(values, dropna, mask=mask)
+    # ...
+```
+
+`htable.value_count` is called with the `values` array. This is a Cython function that likely has its own dispatch logic.
+
+Looking at `pandas/_libs/hashtable.pyx`, `value_count` probably dispatches based on dtype. For object dtype, it would use `ObjectHashTable` or `StringHashTable`.
+
+If `value_count` does its own string check (likely using the same `lib.infer_dtype`), then there's no avoiding it there either.
+
+But wait - maybe `value_count` doesn't do the string optimization? Or maybe it does `_check_object_for_strings` internally.
+
+Actually, I think `value_count` might have different dispatch - it likely just uses the dtype to pick the hashtable, without the string special case. The "string" optimization in `_check_object_for_strings` might only exist for `factorize` and `unique`.
+
+Let me think about whether this matters. If `value_counts` and `unique` on string object arrays are slower than they could be, that's a separate issue. The prompt is about `factorize`.
+
+OK, let me try to formulate a concrete optimization.
+
+Idea: in `_check_object_for_strings`, add a fast path that detects arrays that are definitely not all strings without calling `lib.infer_dtype`.
+
+The safe fast path: if the array is empty or all elements are `None`/`np.nan`, it might still be ambiguous. But if we find ANY element that is definitely not a string and not null, we're done.
+
+Actually, `lib.infer_dtype` with `skipna=False` considers `None` and `np.nan` as elements that must be accounted for. If an array is `["a", None]`, does it return "string" or "mixed"? 
+
+I believe `infer_dtype(["a", None], skipna=False)` returns "mixed" because `None` is not a string. With `skipna=True`, it would return "string" (only looking at "a").
+
+So for `skipna=False`, even `[None, None, "a"]` might be "mixed" rather than "string" because of the `None`s.
+
+Actually, let me think about this more carefully. The comment says:
+> including nulls because that is the only difference between StringHashTable and ObjectHashtable
+
+This implies that `StringHashTable` and `ObjectHashTable` handle nulls the same way when the nulls are skipped in inference? No, it means that whether we infer strings with or without nulls affects which hashtable we choose, and we choose to include nulls because that's the correct matching with ObjectHashTable behavior.
+
+Hmm, I'm not fully following this logic, but the key point is: `skipna=False` is required for correctness in hashtable selection.
+
+Given all this analysis, what concrete change can I make?
+
+Option 1: Optimize `_check_object_for_strings` with a fast path
+Option 2: Optimize `factorize` / `factorize_array` to avoid the check for known types
+Option 3: Optimize `_ensure_data` or the calling sequence
+
+For Option 1, a fast path using early-exit on non-string elements:
+
+```python
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # Fast path: check a subset to avoid expensive lib.infer_dtype
+        # for arrays that are clearly not string arrays
+        if not _maybe_all_strings(values):
+            pass  # keep ndtype as "object"
+        elif lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+    return ndtype
+```
+
+Where `_maybe_all_strings` does a quick check. But as analyzed, this has false positives (says "might be strings" for non-string arrays that start with strings).
+
+Actually, for the OPTIMIZATION of "object columns not containing strings", what if we just return "object" immediately? The comment says StringHashTable is cheaper, so we'd lose performance for string arrays. But for non-string arrays, we avoid the `infer_dtype` call entirely.
+
+Wait, I re-read the prompt: "Optimize pandas.factorize for object columns not containing strings". This doesn't say "at the expense of string columns", but it does focus on this case.
+
+However, if we simply remove the string check, we slow down string columns. That's probably not acceptable.
+
+Let me think about whether there's a compromise. What if we add a parameter? But the prompt says "without altering its behavior, public APIs, or test expectations."
+
+Actually, we CAN change internal functions and add helper functions. We just can't change public APIs.
+
+What about a hybrid where we check a small prefix of the array?
+
+```python
+def _check_object_for_strings(values: np.ndarray) -> str:
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # Check first few elements as a fast path
+        for val in values[:100]:
+            if val is not None and not (isinstance(val, float) and np.isnan(val)):
+                if not isinstance(val, str):
+                    # Definitely not all strings
+                    break
+        else:
+            # All checked elements are strings or null-like
+            if lib.infer_dtype(values, skipna=False) in ["string"]:
+                ndtype = "string"
+    return ndtype
+```
+
+Hmm, but `values[:100]` creates a copy/slice for large arrays, and the Python loop is still slow.
+
+Actually, numpy object array slicing returns a view, which is cheap. But the Python loop over 100 elements is fine.
+
+Wait, the `else` on a `for` loop executes when the loop completes without `break`. So if we `break`, we skip the `else`. If we don't `break` (all 100 are strings or nulls), we fall back to `lib.infer_dtype`.
+
+This helps for non-string arrays where the first non-string appears early. It doesn't help if the first 100 are all strings or nulls but later elements are non-strings.
+
+But I think this is too hacky and doesn't really solve the problem.
+
+Let me think about whether `lib.infer_dtype` itself can be optimized or replaced.
+
+OH WAIT. I just realized something. Let me re-read the code more carefully:
+
+```python
+def _get_hashtable_algo(values: np.ndarray):
+    """
+    Parameters
+    ----------
+    values : np.ndarray
+
+    Returns
+    -------
+    htable : HashTable subclass
+    values : ndarray
+    """
+    values = _ensure_data(values)
+    ndtype = _check_object_for_strings(values)
+    hashtable = _hashtables[ndtype]
+    return hashtable, values
+```
+
+And in `factorize_array`:
+```python
+    hash_klass, values = _get_hashtable_algo(values)
+    # ...
+    table = hash_klass(size_hint or len(values))
+    uniques, codes = table.factorize(...)
+```
+
+So `_get_hashtable_algo` is called, and it returns a hash table CLASS, not an instance. The class is then instantiated.
+
+What if we cached the result based on array id or content? No, arrays can have different contents with the same id (after in-place modification).
+
+Actually, what if we checked `values.dtype.name` BEFORE calling `_check_object_for_strings` and only called it for object dtype? We already do this!
+
+I think I've been missing something fundamental. Let me re-read the `_check_object_for_strings` comment:
+
+> it's cheaper to use a String Hash Table than Object; we infer including nulls because that is the only difference between StringHashTable and ObjectHashtable
+
+So `StringHashTable` vs `ObjectHashTable` is the key. And we want to use `StringHashTable` when data is all strings because it's "cheaper" (faster/more memory efficient).
+
+For non-string data, using `ObjectHashTable` is correct. But we still pay the `lib.infer_dtype` cost to find out it's not strings.
+
+WHAT IF... the `lib.infer_dtype` cost is actually negligible compared to factorization for large arrays? I.e., scanning once to classify is cheap compared to hashing and comparing all elements.
+
+If so, the real optimization might be in the factorization algorithm itself, not in avoiding the type check.
+
+For object columns not containing strings, what makes factorization slow?
+- Python object overhead for each element (unavoidable without changing dtype)
+- Hash table resizes and collisions
+- Memory allocation for the hash table and uniques
+
+For memory efficiency, perhaps we can pre-size the hash table better. `size_hint=len(values)` is used. But for object arrays, the number of uniques could be much smaller.
+
+Actually, looking at `factorize_array`:
+```python
+    table = hash_klass(size_hint or len(values))
+```
+
+It creates a hash table with `size_hint` or `len(values)`. For large arrays with many duplicates, `len(values)` might be too large, causing memory waste. For arrays with all unique values, `len(values)` is just right.
+
+But this is true regardless of whether strings are present.
+
+Hmm, for "memory efficiency", perhaps we can use a better initial size or growth strategy. But the hash table implementation is in C and not shown in the code.
+
+Actually, I realize I should look at whether there's an obvious issue with how `factorize` handles object arrays.
+
+In `factorize`:
+```python
+    values = _ensure_arraylike(values)
+    original = values
+
+    if (
+        isinstance(values, (ABCDatetimeArray, ABCTimedeltaArray))
+        and values.freq is not None
+    ):
+        ...
+    elif not isinstance(values.dtype, np.dtype):
+        ...
+    else:
+        values = np.asarray(values)  # convert DTA/TDA/MultiIndex
+        # ...
+        codes, uniques = factorize_array(...)
+```
+
+For a large object array, `np.asarray(values)` when `values` is already an ndarray is cheap. Then we do `factorize_array`.
+
+Wait, what if `values` is a pandas `Index` or `Series`? `_ensure_arraylike` might extract the array, but for `Index`, it stays as `Index` until `np.asarray` is called.
+
+Actually, `_ensure_arraylike` on an `Index` returns the `Index`. Then `np.asarray(Index)` creates a numpy array. For object `Index`, this creates an object ndarray.
+
+Is there a way to avoid creating a new array? Well, `np.asarray` usually returns a view, not a copy, if the input is already an ndarray. But for `Index`, it might extract and create a new array.
+
+Hmm, but this seems like a minor optimization.
+
+Let me look at whether the `sort` parameter causes extra work. In `factorize`:
+```python
+    if sort and len(uniques) > 0:
+        uniques, codes = safe_sort(
+            uniques,
+            codes,
+            use_na_sentinel=use_na_sentinel,
+            assume_unique=True,
+            verify=False,
+        )
+```
+
+Sorting uniques is O(u log u) where u is the number of uniques. This is after factorization. The prompt asks to optimize `factorize`, so maybe skip sorting? But `sort` is a parameter, and when `sort=True`, we must sort.
+
+Actually, for object columns, `safe_sort` can be expensive due to comparison overhead. But this is only done when requested.
+
+OK, I'm going to take a step back and think about what the most likely intended optimization is.
+
+Given the focus on "object columns not containing strings", the clearest optimization is to avoid the `lib.infer_dtype` call when we know there are no strings. The pragmatic way to do this in Python without C extensions is to use a fast path based on sampling or early exit.
+
+But actually, I just remembered: in recent versions of pandas/numpy, there's a trick you can use with object arrays. You can call `np.vectorize(type)(arr)` or use array methods. But for object arrays, these still go element by element.
+
+Wait - I recall that pandas has a function `lib.is_list_like` and various Cython utilities. Is there one that checks for all strings?
+
+Looking in `pandas._libs.lib`, common functions include:
+- `infer_dtype`
+- `maybe_convert_objects`  
+- `is_float_array`, `is_integer_array`
+- `item_from_zerodim`
+- `noarch...`
+
+Hmm, there might be `lib.is_string_array` or similar. Let me think about what functions are typically in `lib.pyx`...
+
+Actually, pandas definitely has fast Cython path functions. `lib.is_float_array(values)` quickly checks if all non-null elements are floats, `lib.is_integer_array` for integers, etc.
+
+If `lib.is_string_array(values)` existed, we could use it. But I don't know if it does.
+
+Hmm, another approach: what if `ObjectHashTable` itself had a fast path for string elements? Then we wouldn't need `StringHashTable` at all, and we could skip the type check. But we can't modify the Cython hash table code.
+
+Let me try yet another angle. Looking at `StringHashTable` - does it actually only accept strings? If so, for a mixed array with some strings and some non-strings, `StringHashTable` would fail or produce wrong results. So the type check is necessary for correctness, not just optimization.
+
+Actually, that's an important point. If `StringHashTable` assumes all elements are strings, then passing a mixed array would be wrong. So `lib.infer_dtype` is necessary to ensure we only use `StringHashTable` when it's safe.
+
+But wait - for the specific case where we KNOW there are no strings, we don't need the check at all. We just use `ObjectHashTable`.
+
+OK so my best concrete optimization is:
+
+In `_check_object_for_strings`, add a fast path that avoids `lib.infer_dtype` when we can quickly determine the array is not a string array.
+
+However, the challenge is doing this quickly from Python. A pure Python loop will be slower than `lib.infer_dtype` for all-string arrays, but faster for non-string arrays if it exits early.
+
+Actually, I just realized: for non-string arrays that contain a mix including strings at the start, neither approach helps. But for non-string arrays where non-strings appear early, the fast path wins.
+
+What if we use a vectorized approach through numpy? We can't vectorize `isinstance`, but we might be able to use `np.frompyfunc(lambda x: isinstance(x, str), 1, 1)`. This creates a ufunc that applies `isinstance` to each element. The first non-string would still require calling the function for each element.
+
+BUT, numpy ufuncs have less overhead than Python generator loops because the iteration is in C (calling Python functions, but the loop itself is in C).
+
+Actually, `np.frompyfunc(lambda x: isinstance(x, str), 1, 1)(arr)` returns an object array. We could then check `np.any(...)` but this still calls the lambda for every element.
+
+What if we used `np.apply_along_axis` or similar? Same issue.
+
+I think the fundamental problem is that any Python-level check on an object array will be O(n) with Python function call overhead per element. `lib.infer_dtype` is O(n) in C, which is faster per element.
+
+The ONLY way a Python-level fast path helps is if it early-exits before processing all elements. For non-string arrays where the first element is a non-string, the fast path is O(1). For non-string arrays where all elements need checking, it's O(n) in Python, which is worse.
+
+So the fast path only helps when:
+1. Array is not all strings
+2. A non-string element appears early in the array
+
+For arrays where all elements at the start are strings (or nulls) but later elements are non-strings, the fast path is worse.
+
+Is there a better strategy? What if we sample elements from the array rather than scanning from the beginning? For instance, check elements at positions 0, n//2, n-1. If any is a non-string non-null, the array is not all strings.
+
+This helps for more arrays but is probabilistic. However, we fall back to `lib.infer_dtype` if all sampled elements are strings/nulls, maintaining correctness.
+
+For the specific case of "object columns not containing strings", if the array truly contains no strings, then any sample will find a non-string (unless all elements are null, which is rare). So this would be very effective!
+
+For all-string arrays, we do a small constant amount of work plus `lib.infer_dtype`, which is negligible overhead for large arrays.
+
+For mixed arrays with both strings and non-strings, we might detect the non-string in the sample or we might not. If not, we fall back to `lib.inire_dtype`.
+
+I think this is a reasonable optimization! Let me formulate it.
+
+Actually, a much simpler and more effective approach: numpy object arrays support `np.where` and direct indexing. We can check if the array is empty, or do a quick comprehensive check.
+
+But the BEST approach just occurred to me. Let me look at this from a completely different angle.
+
+What if the optimization is in `factorize` not `factorize_array`? Specifically, when `values` is an object-dtype `Index` or `Series`, it has already been through type inference. Could we check if it's known to be non-string?
+
+For `Series` with object dtype, `series.dtype` is `np.dtype('object')`, which doesn't tell us more. But maybe we can check if it's a `Categorical` or has some other metadata.
+
+Actually, looking at the `factorize` code path again:
+```python
+    values = _ensure_arraylike(values)
+    original = values
+
+    if (
+        isinstance(values, (ABCDatetimeArray, ABCTimedeltaArray))
+        and values.freq is not None
+    ):
+        ...
+    elif not isinstance(values.dtype, np.dtype):
+        ...
+```
+
+For a pandas object, `not isinstance(values.dtype, np.dtype)` catches ExtensionArrays. For plain numpy object arrays, neither condition applies.
+
+Wait, what about `Categorical` with object dtype? `Categorical.factorize()` would be called earlier? No, for `Categorical`, `not isinstance(values.dtype, np.dtype)` might be true (if `CategoricalDtype` is not a subclass of `np.dtype`).
+
+Actually, `CategoricalDtype` is not a `np.dtype`, so the `elif` branch would call `values.factorize(...)`.
+
+Hmm, I think there might be an even simpler optimization that I'm missing. Let me look at `factorize` one more time...
+
+```python
+    else:
+        values = np.asarray(values)  # convert DTA/TDA/MultiIndex
+
+        if not use_na_sentinel and is_object_dtype(values):
+            # factorize can now handle differentiating various types of null values.
+            # These can only occur when the array has object dtype.
+            # However, for backwards compatibility we only use the null for the
+            # provided dtype. This may be revisited in the future, see GH#48476.
+            null_mask = isna(values)
+            if null_mask.any():
+                na_value = na_value_for_dtype(values.dtype, compat=False)
+                # Don't modify (potentially user-provided) array
+                values = np.where(null_mask, na_value, values)
+```
+
+This replaces nulls when `use_na_sentinel=False`. But `isna(values)` on large object arrays is expensive. However, it's only done when `use_na_sentinel=False`.
+
+What if we cached or avoided repeated `isna` calls? Not relevant to the current optimization.
+
+Actually, I notice that `na_value_for_dtype(values.dtype, compat=False)` is potentially `np.nan` for object dtype. And `np.where(null_mask, np.nan, values)` creates a new array. This is a copy operation for large arrays.
+
+For memory efficiency, perhaps we could avoid this copy when it's not needed. But this path is only for `use_na_sentinel=False`.
+
+OK, I think I've explored enough. Let me try to formulate what I believe is the most likely intended optimization.
+
+Looking at the code, I notice that `factorize` goes through `factorize_array` which calls `_get_hashtable_algo`. The `_get_hashtable_algo` function calls `_ensure_data` which for object arrays returns `ensure_object(np.asarray(values))`.
+
+Wait - `ensure_object` is from `pandas.core.dtypes.common`. Let me think about what it does. In older pandas, `ensure_object` might have copied. In newer pandas, it likely has a fast path for object arrays.
+
+But what if we could avoid `ensure_object` when `values` is already a properly formatted object array? The `np.asarray(values)` inside `ensure_object` might be redundant if we already did `np.asarray(values)` in `factorize`.
+
+Actually, looking at the code in `_ensure_data`:
+```python
+    if is_object_dtype(values.dtype):
+        return ensure_object(np.asarray(values))
+```
+
+If `values` is already an ndarray, `np.asarray(values)` is cheap (returns itself). If `ensure_object` then checks `is_object_dtype` and returns as-is, then we're fine.
+
+But what if `values` came from `extract_array` and is some ExtensionArray? Then `np.asarray` converts it.
+
+Hmm, I think the most impactful and correct optimization for "object columns not containing strings" is to bypass the `lib.infer_dtype` call in `_check_object_for_strings` using a cheap preliminary test.
+
+Let me write a concrete implementation:
+
+```python
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # Fast path: check a few elements to avoid expensive lib.infer_dtype
+        # for arrays that are clearly not string arrays
+        for val in values.flat:
+            if val is not None and not (
+                isinstance(val, float) and np.isnan(val)
+            ):
+                if not isinstance(val, str):
+                    # Found a definite non-string element
+                    break
+        else:
+            # All non-null elements are strings, or array is all null
+            if lib.infer_dtype(values, skipna=False) in ["string"]:
+                ndtype = "string"
+    return ndtype
+```
+
+Wait, the `else` on a `for` loop is tricky. It executes if the loop completed without `break`. So if we `break` (found non-string), the `else` doesn't run. If we don't `break` (all strings or all null), the `else` runs and does `lib.infer_dtype`.
+
+But this still has the problem that for ALL-STRING arrays, we iterate through the entire array in Python, which is slow.
+
+Hmm, what if we limit the fast path to a fixed number of elements?
+
+```python
+        for val in values.flat:
+            if val is not None and not (
+                isinstance(val, float) and np.isnan(val)
+            ):
+                if not isinstance(val, str):
+                    break
+        else:
+            if lib.infer_dtype(values, skipna=False) in ["string"]:
+                ndtype = "string"
+```
+
+Same issue without limit - for all-null arrays, we scan everything.
+
+Let me add a limit:
+
+```python
+        # Sample first 100 elements to find non-strings quickly
+        for i in range(min(values.size, 100)):
+            val = values.flat[i]
+            if val is not None and not (
+                isinstance(val, float) and np.isnan(val)
+            ):
+                if not isinstance(val, str):
+                    break  # Non-string found, skip infer_dtype
+        else:
+            # Could not rule out string array in sample, use full inference
+            if lib.infer_dtype(values, skipna=False) in ["string"]:
+                ndtype = "string"
+```
+
+Wait, `values.size` for 1D is `len(values)`. `values.flat[i]` accesses the i-th element.
+
+But `range(min(values.size, 100))` is wrong for 1D arrays, should be `range(min(len(values), 100))` or just use `itertools.islice`.
+
+Also, using `val is not None and not (isinstance(val, float) and np.isnan(val))` misses `pd.NA`, `pd.NaT`, etc.
+
+Hmm, for robustness, maybe we should use `not isna(val)`? But `isna` on a single value might be slow.
+
+Actually, `isna` from `pandas.core.dtypes.missing` handles scalars. But we can't import it here easily (we already import `isna` at the top).
+
+But `isna(val)` for a scalar might return a scalar boolean. This should work.
+
+Let me revise:
+
+```python
+        for i in range(min(len(values), 100)):
+            val = values[i]
+            if not isna(val) and not isinstance(val, str):
+                # Found a non-string, non-null element - can't be all strings
+                break
+        else:
+            # Could be all strings, use full inference
+            if lib.infer_dtype(values, skipna=False) in ["string"]:
+                ndtype = "string"
+```
+
+This is cleaner. It checks up to 100 elements. If any is non-null and non-string, we conclude it's not a string array. Otherwise, we fall back to `lib.infer_dtype`.
+
+For arrays with no strings, a non-string typically appears early (the array is homogeneous or mixed but not all strings). So the sampling is effective.
+
+For all-string arrays, we do 100 checks then fall back to `lib.infer_dtype`. The overhead is minimal compared to a full `lib.infer_dtype` on a large array.
+
+Wait, but ALL-NULL arrays (e.g., [None, None, ...]) would also trigger the fallback. Is that correct? For an all-null array, `lib.infer_dtype(..., skipna=False)` would return ??? I think it returns "mixed" or "empty" rather than "string", so we'd correctly use ObjectHashTable.
+
+Actually, for [None, None], what does `lib.infer_dtype` return? Probably "mixed" since None is... hmm, or maybe "empty" or "mixed-integer"? I'm not sure. But it's likely not "string", so we still use ObjectHashTable.
+
+For ["a", None, None], with `skipna=False`, `infer_dtype` might return "mixed" because None disrupts the uniformity, or it might return "string" if None is treated specially. I'm not sure, but the existing code uses `skipna=False`, so whatever behavior it has is preserved by our fallback.
+
+Hmm, actually, I realize I should test my understanding. For `lib.infer_dtype(["a", None], skipna=False)`:
+- If skipna=True: ignores None, sees only "a", returns "string"
+- If skipna=False: considers None, which is not a string, so returns... probably "mixed"
+
+If our sampling sees `val = "a"`, `isna("a")` is False, `isinstance("a", str)` is True, so we continue sampling. Then `val = None`, `isna(None)` is True, so we skip (don't break). The loop ends, we fall back to `lib.infer_dtype`, which with `skipna=False` correctly handles None.
+
+This seems correct!
+
+But wait, what about `["a", "b", 1]`? We'd sample "a" (string, continue), "b" (string, continue), "1" (int, not string, break!). We'd conclude it's not a string array, which is correct.
+
+What about `["a", "b", "c"]`? We'd sample all, find only strings/nulls (none in this case), fall back to `lib.infer_dtype`, which returns "string", and we use `StringHashTable`. Correct!
+
+What about `[1, "a", "b", "c", ...]`? We check first element which is 1, immediately break, conclude not string. Correct!
+
+What about `[None, None, None, "a", "b", ...]` (mostly nulls)? We skip nulls, and if we hit a string, we continue. If 100 samples are all null, we fall back.
+
+This seems like a solid optimization for object columns not containing strings!
+
+Wait, but is it faster? For non-string arrays with early non-strings, yes, much faster (up to 100 element checks in Python vs full C scan). For string arrays, slightly slower (100 Python checks + C scan).
+
+Hmm, 100 Python checks could still be slow if each one is expensive. But compared to a full `lib.infer_dtype` on a large array, it's probably fine.
+
+Actually, let me reconsider whether we even need a limit. If we don't limit:
+
+```python
+        for val in values:
+            if not isna(val) and not isinstance(val, str):
+                break
+        else:
+            if lib.infer_dtype(values, skipna=False) in ["string"]:
+                ndtype = "string"
+```
+
+For non-string arrays, this could exit very quickly (first element). For all-string arrays, it's a full Python scan, which is worse than `lib.infer_dtype` in C.
+
+For all-null arrays, it's a full scan that falls back to `lib.infer_dtype`, which is the worst case.
+
+So a limit is important. But what limit? 100 might be arbitrary.
+
+What about using a limit proportional to array size, like `min(100, len(values))`? Same thing.
+
+Actually, I just realized: we could use a binary search-like approach or random sampling. But that's overcomplicating.
+
+Let me think about whether 10 elements might be enough. In practice, most non-string object arrays have non-strings early. But arrays that start with many strings are possible (e.g., a column with row labels where some are strings and later rows have integers).
+
+I think 100 is a reasonable heuristic, but it would be better to have data-driven tuning. Since we don't have profiling data, let's be conservative and make the limit small but effective.
+
+Actually, I want to re-check: is `isna(val)` fast for scalar val? `isna` is imported from `pandas.core.dtypes.missing`. Looking at that module, `isna` handles scalars by dispatching to `lib.no_scalar`, I believe. It's reasonably fast but not free.
+
+For maximum speed, we could inline the common cases:
+```python
+        for i in range(min(len(values), 100)):
+            val = values[i]
+            if val is None or val is np.nan:
+                continue
+            if not isinstance(val, str):
+                break
+        else:
+            ...
+```
+
+This only checks `None` and `np.nan` which are the most common null-like values. It doesn't catch `pd.NA`, `pd.NaT`, `float('nan')`, etc.
+
+For correctness, `isna` is better. For speed, the inline check is faster.
+
+Let me compromise: use a simple None check only, and anything else that's not a string triggers the break.
+
+Actually, `None` and `np.nan` are by far the most common. Let me use them.
+
+Hmm, but `np.nan` requires `np.isnan` which is expensive. `val is not np.nan` only catches the exact singleton, not all float NaNs.
+
+Let me use:
+```python
+            if val is None:
+                continue
+            if not isinstance(val, str):
+                break
+```
+
+This skips `None` only. For `np.nan`, `isinstance(np.nan, str)` is False, so we'd break. But `np.nan` is not a string, so breaking is correct! We want to detect non-strings.
+
+Wait, the only issue with nulls is: if the only non-string element is `np.nan`, and all other elements are strings, the array should still be considered a "string" array (with `skipna=False`, `lib.infer_dtype` might still return "string" if NaN is treated as a separate category?).
+
+Actually, `np.nan` is a float, not a string. For `["a", np.nan]`, `lib.infer_dtype(..., skipna=False)` considers `np.nan`. Is `np.nan` treated as null or as a float value? 
+
+In pandas, `np.nan` is considered NA. But `lib.infer_dtype(..., skipna=False)` still includes it. So `["a", np.nan]` might return "mixed" (string and float) rather than "string".
+
+If our check sees `np.nan`, `isinstance(np.nan, str)` is False, so we break and conclude "not string". If `lib.inider_dtype` would also conclude "not string", we're correct. If it would conclude "string", we're too aggressive.
+
+I'm not sure what `lib.infer_dtype(["a", np.nan], skipna=False)` returns. But to be safe, we should treat common null values as "skippable".
+
+Actually, for the purpose of this optimization, the key insight is: we want to know if `lib.infer_dtype` could possibly return "string". For that, all non-null elements must be strings. ANY non-string non-null element rules it out.
+
+For `np.nan`, is it null or non-null in this context? `skipna=False` means "don't skip NA", so `np.nan` is considered. But `np.nan` is not a string, so it prevents "string" inference.
+
+Wait, actually, let me reconsider. The `skipna=False` might mean "consider NAs as part of the type inference" but NAs might not have a type that blocks "string". For instance, `None` in Python has type `NoneType`, which might not be considered as conflicting with string.
+
+I'm really not sure about the exact semantics of `lib.infer_dtype` with various null types. To be maximally safe, we should only bypass `lib.infer_dtype` when we're CERTAIN the array can't be all strings.
+
+A conservative approach: only break when we see an element that is definitely not null and not a string. Common definitely-not-null, definitely-not-string elements: integers, booleans, lists, dicts, numpy arrays, etc.
+
+But checking for all these is slow. The simplest check: if `isinstance(val, str)` is False and `val is not None`, we might still be uncertain.
+
+Given the complexity, maybe the right optimization is different. Let me look one more time for alternative optimization points.
+
+Actually, I want to check: what if `factorize` is called with an `np.ndarray` that has object dtype and is already contiguous and properly formatted? Could we skip `_ensure_data` entirely?
+
+In `_get_hashtable_algo`, we always call `_ensure_data`. For object arrays, this calls `ensure_object(np.asarray(values))`. If `values` is already a numpy object array, this should be essentially free.
+
+So I don't think there's much optimization there.
+
+Let me look at whether the `original = values` in `factorize_array` and the `_reconstruct_data` at the end are necessary or efficient.
+
+```python
+    original = values
+    ...
+    # re-cast e.g. i8->dt64/td64, uint8->bool
+    uniques = _reconstruct_data(uniques, original.dtype, original)
+```
+
+For object arrays, `_reconstruct_data` checks various dtype properties and likely returns as-is. This seems efficient enough.
+
+Alright, I think the most plausible optimization given all this analysis is to optimize `_check_object_for_strings` to avoid calling `lib.infer_dtype` when possible. Even if the optimization isn't perfect, it should help the common case of non-string object arrays.
+
+But actually, I want to see if there's a different, better optimization I missed. Let me re-read the full code once more...
+
+Actually wait. Looking at this from a completely different angle.
+
+In `factorize`, the `values` goes through:
+1. `_ensure_arraylike(values)` - might convert list to array
+2. `np.asarray(values)` - for the else branch
+3. `_ensure_data(values)` inside `_get_hashtable_algo`
+
+For large object arrays, step 2 and step 3 both call `np.asarray`. If `values` is already a numpy array, step 2 returns itself, and step 3's `np.asarray` also returns itself.
+
+But what if `ensure_object` in step 3 creates a copy? Let me think...
+
+In pandas, `ensure_object` is typically:
+```python
+def ensure_object(arr):
+    arr = np.asarray(arr)
+    if arr.dtype != np.object_:
+        arr = arr.astype(np.object_)
+    return arr
+```
+
+Actually, I just checked my memory, and I think `ensure_object` in `pandas.core.dtypes.common` is:
+
+```python
+def ensure_object(arr):
+    if isinstance(arr, np.ndarray) and arr.dtype == np.dtype('object'):
+        return arr
+    return np.asarray(arr, dtype=object)
+```
+
+If so, it returns the same array for object dtype. Good.
+
+Hmm, what about `extract_array` in `_ensure_data`? It might convert Index to ndarray. But then `np.asarray` on the ndarray is a no-op.
+
+I think the array conversion is efficient.
+
+OK, let me think about what else could be optimized. Memory efficiency for object columns... 
+
+Object arrays store pointers to Python objects. Each pointer is 8 bytes, plus the Python object overhead (minimum ~16 bytes for simple objects, much more for strings). 
+
+For factorization, the hash table stores unique values. Memory is used for:
+1. The input array (already exists)
+2. The codes array (intp, 8 bytes per element)
+3. The hash table internal storage (varies)
+4. The uniques array (references to unique objects)
+
+For memory efficiency, could we reuse arrays or use more compact types? For object arrays, the uniques still need to be object dtype to hold arbitrary objects.
+
+One memory optimization: pre-size the codes array? In `factorize_array`, `table.factorize` returns `uniques, codes`. The `codes` array is allocated by the hashtable.
+
+Actually, looking at `factorize_array`:
+```python
+    table = hash_klass(size_hint or len(values))
+    uniques, codes = table.factorize(
+        values,
+        na_sentinel=-1,
+        na_value=na_value,
+        mask=mask,
+        ignore_na=use_na_sentinel,
+    )
+```
+
+`size_hint or len(values)` - if `size_hint` is None, we use `len(values)`. For large arrays, this might over-allocate. But for hash tables, over-allocation is common to reduce collisions.
+
+Wait, the `hash_klass` is a class. We pass `size_hint or len(values)` to the constructor. For `ObjectHashTable`, what does this do?
+
+In `pandas._libs.hashtable`, the hash table constructors typically pre-size the internal array. A size hint of `len(values)` means the table can hold `len(values)` unique values without rehashing.
+
+For a 1M element array with only 10 unique values, this greatly over-allocates. But without knowing the number of uniques, we can't do much better. We could use a smaller initial size, but that might cause more rehashing.
+
+Actually, for memory efficiency, using a smaller initial growth or a dynamic resize strategy might help. But this is deep in the Cython implementation and not something we can change here.
+
+Hmm, let me one more time look at whether there's a simple, impactful optimization in the Python code.
+
+Actually, I just spotted something. In `factorize`:
+
+```python
+        if not use_na_sentinel and is_object_dtype(values):
+            # factorize can now handle differentiating various types of null values.
+            # These can only occur when the array has object dtype.
+            # However, for backwards compatibility we only use the null for the
+            # provided dtype. This may be revisited in the future, see GH#48476.
+            null_mask = isna(values)
+            if null_mask.any():
+                na_value = na_value_for_dtype(values.dtype, compat=False)
+                # Don't modify (potentially user-provided) array
+                values = np.where(null_mask, na_value, values)
+```
+
+The `isna(values)` on a large object array is expensive. It needs to check each element. But this is only for `use_na_sentinel=False`, so it's not the default path.
+
+Wait, is there a corresponding check in `factorize_array`?
+
+No, `factorize_array` passes `use_na_sentinel` to the hash table. The hash table itself handles NAs.
+
+So the null replacement in `factorize` is for backwards compatibility. Maybe this could be optimized, but it's not the main issue.
+
+OK, I'm going to make a decision. The most concrete optimization I can identify is:
+
+**In `_check_object_for_strings`, add a fast path that avoids `lib.infer_dtype` for object arrays that clearly don't contain strings.**
+
+However, after my extensive analysis, I realize this is tricky to do perfectly from Python without risking regressions for string arrays.
+
+Let me look for ANOTHER optimization entirely. What if the issue is that `factorize` for object arrays goes through `np.asarray` and `ensure_object` unnecessarily when `values` is already suitable?
+
+Actually, what if we can skip `_ensure_data` in `_get_hashtable_algo` when `values` is already in the right format?
+
+Looking at `_ensure_data`:
+```python
+def _ensure_data(values: ArrayLike) -> np.ndarray:
+    if not isinstance(values, ABCMultiIndex):
+        # extract_array would raise
+        values = extract_array(values, extract_numpy=True)
+
+    if is_object_dtype(values.dtype):
+        return ensure_object(np.asarray(values))
+```
+
+For a plain `np.ndarray` with object dtype, `extract_array` might return it as-is. Then `is_object_dtype` is true, and we call `ensure_object(np.asarray(values))`, which should return as-is.
+
+So no extra work here.
+
+Let me think about `factorize_array` more carefully:
+
+```python
+def factorize_array(
+    values: np.ndarray,
+    use_na_sentinel: bool = True,
+    size_hint: int | None = None,
+    na_value: object = None,
+    mask: npt.NDArray[np.bool_] | None = None,
+) -> tuple[npt.NDArray[np.intp], np.ndarray]:
+    original = values
+    if values.dtype.kind in ["m", "M"]:
+        na_value = iNaT
+
+    hash_klass, values = _get_hashtable_algo(values)
+    ...
+```
+
+For object dtype, `values.dtype.kind` is 'O', not 'm' or 'M', so no special NA handling.
+
+What if we could special-case empty arrays or single-element arrays? These are fast anyway.
+
+What about using `np.unique` as a fast path? For small arrays or specific dtypes, `np.unique` might be faster.
+
+Actually, `np.unique` on object arrays uses a sort-based approach, which is O(n log n), while hash table is O(n). So `np.unique` is probably slower.
+
+But `np.unique` might have less overhead for very small arrays. However, this is a micro-optimization.
+
+Hmm, let me think about when `hash_klass` is `htable.PyObjectHashTable`. The `table.factorize` method is in Cython. Is there Python-level overhead we can reduce?
+
+In `factorize_array`, after getting the hash table class, we do:
+```python
+    table = hash_klass(size_hint or len(values))
+    uniques, codes = table.factorize(
+        values,
+        na_sentinel=-1,
+        na_value=na_value,
+        mask=mask,
+        ignore_na=use_na_sentinel,
+    )
+```
+
+For `PyObjectHashTable`, `factorize` takes the `values` array (numpy object array) and returns the uniques and codes.
+
+I wonder if we could pass a memory view or something more efficient. But `values` is already a numpy array, which is the most efficient Python object for this purpose.
+
+OK, I think I've exhausted my analysis without finding a silver bullet. Let me reconsider the prompt and what the expected answer might be.
+
+The prompt says: "Optimize pandas.factorize for object columns not containing strings" and "Optimization function: pandas.factorize."
+
+Given this specific focus, I strongly believe the intended optimization is in the type inference / hash table selection path. The most likely concrete change is to avoid `lib.infer_dtype` when we can determine the array is not a string array.
+
+Let me formulate a clean, working version of this optimization:
+
+```python
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # Fast path: check if there are definitely no strings without
+        # calling the expensive lib.infer_dtype. We only need to find
+        # one non-null, non-string element to rule out "string".
+        for val in values:
+            if val is None or isinstance(val, str):
+                # Continue checking - None is ambiguous, str is expected
+                # for a string array
+                continue
+            # Found a non-null, non-string element - can't be all strings
+            break
+        else:
+            # Either all elements are None, all are strings, or array is empty
+            if lib.infer_dtype(values, skipna=False) in ["string"]:
+                ndtype = "string"
+    return ndtype
+```
+
+But as I noted, this has a full Python scan for all-string or all-null arrays.
+
+Hmm, for a compromise, let me limit the scan:
+
+```python
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # Fast path: avoid expensive lib.infer_dtype for non-string arrays
+        # by checking a subset of elements.
+        for val in values:
+            if val is None:
+                continue
+            if not isinstance(val, str):
+                break
+        else:
+            if lib.infer_dtype(values, skipna=False) in ["string"]:
+                ndtype = "string"
+    return ndtype
+```
+
+Hmm, but the original code doesn't have the `for` loop, so my SEARCH block needs to match the original.
+
+Let me look at the original again:
+
+```python
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+    return ndtype
+```
+
+To optimize, I'll add the fast path. But wait - I need to think about whether this actually helps in practice. For a 1M element array of integers wrapped as Python objects, the `for val in values` Python loop would iterate through all million elements looking for a non-string because all elements are non-string! (Well, except `None` if present).
+
+Actually wait - the first element is an integer, which is not `None` and not a string. So we'd break on the first element! That IS fast.
+
+For `["a", "b", "c", ...]` (all strings), we'd scan through all elements, which in Python is much slower than `lib.infer_dtype` in C.
+
+For `[None, None, None, ...]` (all nulls), we'd also scan through all elements.
+
+So this optimization makes non-string arrays with early non-strings much faster, but makes all-string arrays slower.
+
+Given the prompt's focus on "object columns not containing strings", this trade-off seems aligned with the request. But it might not be acceptable for general use.
+
+Let me think about a balanced approach. What if we use a generator with `any()` and limit the check?
+
+No, I think a more robust approach is to keep the original behavior but use a cheaper heuristic when we can.
+
+Actually, I just realized something. The original code:
+```python
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+```
+
+This checks if `lib.infer_dtype` returns exactly "string". What if we could cache or memoize the inference result based on the array's content hash? For repeated calls with the same array, this would help. But for a single call, no.
+
+Hmm, another idea: what if `lib.infer_dtype` itself has a fast path for common cases? For instance, if the array is empty or all null, it might return quickly. But we can't modify `lib.infer_dtype`.
+
+Wait - I just realized I've been overlooking a potential source of overhead. In `factorize`, for object dtype, we clone or copy the array when doing `np.where(null_mask, na_value, values)` if `use_na_sentinel=False`. But more importantly, the `values = np.asarray(values)` might create unnecessary views or copies.
+
+Actually, let me trace this: 
+1. User passes a list: `values = [1, 2, 3, None]`
+2. `_ensure_arraylike` converts to a numpy object array
+3. `np.asarray(values)` on the ndarray returns the same array (no copy)
+4. `_ensure_data` -> `ensure_object(np.asarray(values))` also returns the same array (no copy for object dtype)
+
+So minimal copying.
+
+For `pd.Series` with object dtype:
+1. `_ensure_arraylike(series)` returns the Series (or extracts array?)
+2. `np.asarray(series)` creates a numpy array from the Series
+3. This IS a copy! Because Series stores data in a BlockManager, and `np.asarray` on a Series extracts and potentially copies.
+
+Wait, is that right? `np.asarray(pd.Series([1, 2, 3]))` does create a copy? Let me think...
+
+Actually, `np.asarray(series)` calls `series.__array__()`, which for pandas Series returns `self._values` or a copy depending on the dtype and internal state. For object dtype backed by a numpy array, it might return a view. For extension arrays, it converts.
+
+Hmm, but even if `np.asarray` creates a view or lightweight wrapper, it's still an array creation overhead.
+
+Actually, looking more carefully, if the input to `factorize` is a numpy array already, then `_ensure_arraylike` returns it, `np.asarray` returns it, and we proceed efficiently.
+
+So the overhead is mainly for pandas objects, which is expected.
+
+I think I need to just go with the `_check_object_for_strings` optimization as the most plausible answer, even if it's not perfect. Let me refine it to be as safe and effective as possible.
+
+Final approach: Use a Python-level loop with early exit for up to 100 elements. This is fast for non-string arrays (exits early on first non-string) and has bounded overhead for string arrays (100 Python iterations at most).
+
+```python
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # Fast path: avoid expensive lib.infer_dtype for arrays that
+        # are clearly not string arrays by sampling elements.
+        for val in values[:100]:
+            if val is not None and not isinstance(val, str):
+                break
+        else:
+            if lib.infer_dtype(values, skipna=False) in ["string"]:
+                ndtype = "string"
+    return ndtype
+```
+
+Wait, `values[:100]` creates a slice which is a view for numpy arrays. The `for val in` iterates over this view. If `values` has fewer than 100 elements, we iterate over all of them. If more, just the first 100.
+
+For `["a", "b", "c", ...]` (100+ strings), the loop completes without break, and we fall back to `lib.infer_dtype`.
+
+For `[1, 2, 3, ...]`, we break on the first element.
+
+For `[None, None, None, ...]` (100+ nulls), we complete without break and fall back.
+
+For `["a", "b", None, None, ...]` (2 strings then nulls), we also complete without break and fall back.
+
+This is a reasonable heuristic. It optimizes the common case of non-string object arrays while preserving correctness.
+
+But I just realized - `values[:100]` doesn't work well with generic ndarrays if they might be multi-dimensional. However, in this context, `values` from `_ensure_data` is flattened or 1D for factorization purposes. Looking at `factorize_array`, it receives `values` which is supposed to be 1D, but I should check.
+
+Actually, in `_ensure_data`, if `values` was a MultiIndex, it would have been handled. For `factorize`, the values should be 1D.
+
+Hmm, but `values[:100]` on a 1D array is fine. On a 2D array, it gets the first 100 rows, which is wrong. But factorize is for 1D data.
+
+Let me verify: in `factorize`, `values = _ensure_arraylike(values)` for a list or array. Then in the else branch, `values = np.asarray(values)` and `factorize_array` is called. For multi-dimensional input, `factorize_array` might fail or behave unexpectedly. So we can assume 1D.
+
+OK so my optimized `_check_object_for_strings` would be:
+
+Actually, I want to also make sure `isinstance(val, float) and np.isnan(val)` is handled. `np.nan` is a float with `np.nan`, and `isinstance(np.nan, str)` is False, so we'd break correctly. `None` is handled by the `val is None` check.
+
+But what about `pd.NA`? `isinstance(pd.NA, str)` is also False, so we'd break. Is `pd.NA` a valid "null" in this context? Yes, but if it's present in a string array, `lib.infer_dtype` might or might not consider it as null. With `skipna=False`, it would be included in inference.
+
+For ultimate safety, maybe we should just not skip the check for anything. Treat only `None` as ambiguous:
+
+Actually, thinking more about it, `pd.NA` and `np.nan` are both pandas-recognized null values. In `lib.infer_dtype(..., skipna=False)`, are they considered or not? If `skipna=False` means "don't skip NA values", then `np.nan` and `pd.NA` are included in the inference. But they are not strings, so an array `["a", np.nan]` would not be inferred as "string" (since `np.nan` is a float).
+
+Wait, but `lib.infer_dtype(["a", None], skipna=True)` might return "string" (skip None, see only "a"). With `skipna=False`, it considers None, which might make it "mixed" or "string" depending on None's treatment.
+
+I think the safest fast path is to not break on anything, just do a limited scan for obvious non-strings. `None` is probably treated specially by `infer_dtype`, so we should probably continue past it.
+
+Let me just use:
+```python
+        for val in values[:100]:
+            if val is None:
+                continue
+            if not isinstance(val, str):
+                break
+        else:
+            ...
+```
+
+This treats `None` as ambiguous. For `np.nan`, `pd.NA`, etc., they're not `None`, so we'd break on them. If an array is `["a", np.nan]`, we'd see "a" (continue), then `np.nan` (break, not string). We'd conclude "not string", which is correct because `np.nan` is not a string. But would `lib.infer_dtype` have returned "string"? Probably not, because `np.nan` is a float.
+
+Actually, what if `lib.infer_dtype(["a", None], skipna=False)` returns "string"? Then an array with `None` and strings would be considered "string" by inference, but our fast path would continue past `None` and might break on a non-string or fall back. That's fine because falling back is correct.
+
+OK, I'm now confident that a simple limited scan is an acceptable optimization. Let me write the final code.
+
+Actually, one more concern: `values[:100]` for a large 1D array creates a view, which is cheap, but then iterating in Python is still slow. 100 iterations is fine though.
+
+Hmm, actually, for an object array, `values[:100]` doesn't create a copy of the data, just a new view object. The iteration still goes through the same elements. So it's very cheap.
+
+Let me now write the actual search/replace block.
+
+Wait, I want to double check: does the original code actually have performance issues with large non-string object arrays? The `lib.infer_dtype` is in C and processes the whole array. For a 1M element array, it might take a few milliseconds. Is this really the bottleneck?
+
+Let me think about what's actually slow in `factorize` for large object arrays:
+1. Create hash table with `size_hint = len(values)` - might allocate a large array
+2. `table.factorize` - processes all elements, hashes them, checks for duplicates
+3. For `ObjectHashTable`, each hash and comparison involves Python object methods
+
+Step 2 in `table.factorize` is likely the slowest part because it involves Python-level hashing and equality for each element. The `lib.infer_dtype` is a one-time cost, likely much smaller than the factorization itself.
+
+So maybe optimizing `lib.infer_dtype` is not the right place!
+
+What if the issue is in `table.factorize` for `ObjectHashTable`? But we can't change that from Python.
+
+Or what if the issue is that for non-string object arrays, `ObjectHashTable` is much slower than it needs to be? For instance, if all elements are integers (wrapped as Python `int`), the Python `hash()` and `==` are relatively fast, but still much slower than C-level integer operations.
+
+Actually, that's an interesting point. For object arrays containing integers, `factorize` is slow because:
+1. Each element is a Python `int` object
+2. Hashing and comparing Python `int` objects is slower than C `int64`
+
+But `factorize` on an object array can't easily switch to a faster integer hash table because the array claims to be object dtype.
+
+Wait - what if we COULD switch? What if we detect that all elements are integers and use `Int64HashTable` instead?
+
+That would be a much bigger optimization! Let me check `lib.infer_dtype` again. It returns "integer" for object arrays of ints, "floating" for floats, etc. But currently, `_check_object_for_strings` only checks for "string".
+
+What if we extended the logic to use the inferred type to select a better hash table?
+
+Actually, for object arrays, `lib.infer_dtype` can return various types, but the hash table selection is binary: "string" or "object". There's no "integer" hash table for object arrays because the elements are boxed as Python objects.
+
+Hmm, but wait. If `lib.infer_dtype` returns "integer", we could potentially convert the array to int64 and use `Int64HashTable`. But that changes behavior for values that don't fit in int64.
+
+This is getting too complex. Let me refocus on what's actually in the code.
+
+Actually, I just realized something. Looking at `_hashtables`:
+```python
+_hashtables = {
+    ...
+    "string": htable.StringHashTable,
+    "object": htable.PyObjectHashTable,
+}
+```
+
+And `StringHashTable` is only for "string". There's no other type-specific hash table for object arrays.
+
+However, `lib.infer_dtype` returning "integer" could theoretically let us optimize, but we'd need to handle overflow, pass-through of objects that don't fit, etc.
+
+I think for the scope of this problem, the optimization is indeed about avoiding `lib.infer_dtype`.
+
+OK, I'll go with the limited sampling optimization. But let me also consider another approach: what if we just check the first non-null element?
+
+```python
+        for val in values:
+            if val is not None:
+                if isinstance(val, str):
+                    # Could be a string array, check with infer_dtype
+                    if lib.infer_dtype(values, skipna=False) in ["string"]:
+                        ndtype = "string"
+                break
+```
+
+This is O(1) in most cases! It looks at the first non-null element. If it's a string, we fall back to `lib.infer_dtype`. If it's not a string, we immediately know it's not an all-string array (assuming we're not in the degenerate case of all-nulls).
+
+Wait, what about an array like `[None, None, "a"]`? The first non-null is "a", which is a string. But the array is not all strings (there are nulls). With `skipna=False`, `lib.infer_dtype` might still return "mixed" rather than "string" because of the nulls.
+
+Hmm, so if the first non-null is a string, we must fall back to `lib.infer_dtype` to be sure. That's what the code above does.
+
+For `"a", "b", "c"`, first non-null is "a", we fall back, `infer_dtype` returns "string", we use `StringHashTable`. Correct.
+
+For `1, "a", "b"`, first non-null is 1, not a string. We conclude "not string". Correct, because it's not all strings.
+
+For `[None, None, None]`, we never find a non-null element. We'd finish the loop without break. We'd then NOT fall back to `infer_dtype`. This assumes that an all-null array is not a "string" array, which is correct (it should use ObjectHashTable).
+
+For `[None, "a"]`, first non-null is "a", we fall back. `infer_dtype` with `skipna=False` might return "string" or "mixed". With `skipna=True`, it would return "string". But the code uses `skipna=False`.
+
+I'm not fully confident about `infer_dtype`'s behavior with nulls, but the fallback should preserve existing behavior.
+
+Actually, this "first non-null" approach is very elegant! It's O(1) for most arrays and preserves behavior for edge cases.
+
+Let me refine:
+
+```python
+    if ndtype == "object":
+        # Fast path: check the first non-null element. If it's not a string,
+        # we can skip the expensive lib.infer_dtype call.
+        for val in values:
+            if val is not None:
+                if not isinstance(val, str):
+                    break
+                # First non-null is a string, need full inference
+                if lib.infer_dtype(values, skipna=False) in ["string"]:
+                    ndtype = "string"
+                break
+```
+
+This is much cleaner and more efficient than sampling 100 elements. It's O(k) where k is the position of the first non-null element, which is typically very small.
+
+But wait - `[None, None, ...]` (lots of nulls) would scan through all nulls to find a non-null or reach the end. For an all-null array of 1M elements, this is 1M Python iterations, which is slow!
+
+Hmm, so the worst case for this approach is all-null arrays, which are perhaps rare.
+
+A compromise: check first up to 10 elements for a non-null. If not found within 10, fall back to `infer_dtype` (which will also scan but in C).
+
+Actually, all-null arrays are often small in practice (e.g., a column with only missing values). But for safety:
+
+```python
+        for i, val in enumerate(values):
+            if i >= 10:
+                # Too many nulls at start, fall back to C inference
+                if lib.infer_dtype(values, skipna=False) in ["string"]:
+                    ndtype = "string"
+                break
+            if val is not None:
+                if not isinstance(val, str):
+                    break
+                if lib.infer_dtype(values, skipna=False) in ["string"]:
+                    ndtype = "string"
+                break
+        # else: all first 10 are None, fell back above
+```
+
+Hmm, this is getting complicated. Let me use a simpler hybrid:
+
+```python
+        for val in values[:10]:
+            if val is not None:
+                if not isinstance(val, str):
+                    break
+                if lib.infer_dtype(values, skipna=False) in ["string"]:
+                    ndtype = "string"
+                break
+        else:
+            # First 10 are all None, need full check
+            if lib.infer_dtype(values, skipna=False) in ["string"]:
+                ndtype = "string"
+```
+
+This checks first 10 elements. If any non-null non-string is found, we break and skip `infer_dtype`. If a non-null string is found, we do `infer_dtype`. If all 10 are None, we do `infer_dtype`.
+
+For a non-string array with non-string in first 10: fast.
+For a string array: does `infer_dtype` as before.
+For an all-null array: does `infer_dtype` as before.
+
+The overhead for string and all-null arrays is at most 10 Python iterations, which is negligible.
+
+Actually, I realize "first 10" is somewhat arbitrary. Let me think about whether we can do even better.
+
+For non-string arrays, we want to avoid `infer_dtype` almost always. The first element is usually non-null and non-string (for object columns of integers, floats, etc.). So just checking `values[0]` might be sufficient in many cases.
+
+For string arrays, `values[0]` is a string, so we'd need `infer_dtype`.
+For all-null arrays, `values[0]` is None, so we'd need more checks.
+
+Let me go with a slightly more robust check of the first few elements:
+
+Actually, you know what, the simplest and most effective might be to just check if the array has any non-null elements that are not strings. We can do this efficiently by using a generator with `next()`:
+
+```python
+        try:
+            next(v for v in values if v is not None and not isinstance(v, str))
+        except StopIteration:
+            # All non-null elements are strings (or array is all null)
+            if lib.infer_dtype(values, skipna=False) in ["string"]:
+                ndtype = "string"
+```
+
+This is elegant but might have performance issues for large arrays because the generator expression creates a new generator object. Actually, for Python, `next(gen)` with a generator expression is reasonably fast, and it handles early exit.
+
+For a non-string array, `next()` finds the first non-null non-string quickly (or returns quickly if the first element qualifies). For a string array, it scans the entire array in Python, which is slow.
+
+Hmm, for string arrays, this is a full Python scan, so it's bad.
+
+OK let me go with the limited sampling approach. It's the safest compromise.
+
+Actually wait, let me re-read the prompt once more: "Optimize pandas.factorize for object columns not containing strings".
+
+Could this mean: when the column is known to NOT contain strings, use a more efficient path? In other words, the optimization is conditional on the absence of strings, not on detecting their absence.
+
+In the context of `factorize`, we don't "know" the column doesn't contain strings unless we infer it. But maybe at a higher level, pandas sometimes has this information.
+
+For instance, if an object column comes from reading a CSV where all values parsed as integers, pandas might track this. But in general `factorize`, we don't have this metadata.
+
+Hmm, or maybe the issue is that `lib.infer_dtype` returns "mixed" or "integer" for non-string columns, and we should use this information. But currently, we only check for "string".
+
+I don't think there's a way around inferring for the general `factorize` API.
+
+Alright, let me settle on my answer. I'll optimize `_check_object_for_strings` with a fast path that avoids `lib.infer_dtype` for arrays that clearly aren't string arrays.
+
+Actually, I want to reconsider one more time. What if there's a completely different optimization, like avoiding the object path for columns that are actually homogeneously typed?
+
+For example, if an "object" column contains all integers, we could convert to `int64` and use the fast integer hash table. But this changes behavior if there are out-of-range values or if the user specifically wants object dtype.
+
+Actually, `lib.maybe_convert_objects` or `infer_dtype` could help here. But the factorize result for `int64` vs object array of ints might differ if Python ints and numpy int64 are treated differently. And this changes the return type of `uniques`.
+
+Given all constraints, I don't think we can change the behavior or return type. So the object path must be preserved.
+
+OK final decision: I'll provide an optimization in `_check_object_for_strings` that uses a bounded scan to avoid `lib.infer_dtype` for non-string arrays.
+
+Let me write the cleanest version:
+
+```python
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # Fast path: avoid expensive lib.infer_dtype call by checking
+        # if there are clearly non-string elements.
+        for val in values:
+            if val is None or isinstance(val, str):
+                continue
+            # Found a non-string, non-null element
+            break
+        else:
+            # All non-null elements are strings, or array is all null
+            if lib.infer_dtype(values, skipna=False) in ["string"]:
+                ndtype = "string"
+    return ndtype
+```
+
+Wait, in this version, the loop continues for string elements and None, and breaks on the first non-string non-None. The `else` runs if the loop completes without `break` (i.e., no non-string non-None found).
+
+For `["a", "b", None, "c"]`, the loop sees "a" (continue, str), "b" (continue, str), None (continue, None), "c" (continue, str), loop ends, `else` runs, `infer_dtype` called. Correct, might be all strings.
+
+For `[1, "a", "b"]`, the loop sees 1 (not None, not str, break), `else` skipped. Fast!
+
+For `[None, None, 1]`, sees None (continue), None (continue), 1 (break). Fast!
+
+For `[None, None, None]`, all None, loop ends, `else` runs, `infer_dtype` called. Correct.
+
+For `["a", "b", "c"]`, all str, loop ends, `else` runs, `infer_dtype` called. But if it's all strings, we want to check. However, for all-string arrays, this version does a full Python scan then `lib.infer_dtype` in C. This is SLOWER than just `lib.infer_dtype`, because we do an extra Python scan.
+
+So this version is bad for all-string arrays.
+
+To fix: limit the scan:
+
+```python
+        for val in values[:100]:
+            if val is None or isinstance(val, str):
+                continue
+            break
+        else:
+            # Could not rule out in first 100 elements
+            if lib.infer_dtype(values, skipna=False) in ["string"]:
+                ndtype = "string"
+```
+
+For `["a", "b", "c", ...]` (100+ strings), we scan 100 elements, then fall back. Slight overhead.
+For `[1, 2, 3]`, break on first element. Fast!
+For `[None, 1, 2]`, skip None, break on 1. Fast!
+For `[None, None, ...]` (100+ nulls), scan 100 elements, fall back. Slight overhead.
+
+This is the best compromise. But the limit is arbitrary. What about making it proportional or adaptive?
+
+Actually, I think 100 is fine. Let me verify: for a 1M element all-string array, we do 100 Python iterations + `lib.infer_dtype` (1M C iterations). The extra 100 Python iterations are negligible.
+
+For a 1M element non-string array with a non-string in the first 100 elements, we do at most 100 Python iterations instead of 1M C iterations. Much faster!
+
+For an all-null array of 1M elements, we do 100 Python iterations + `lib.infer_dtype` (which likely returns quickly for all-null arrays, perhaps even faster than for strings). Negligible overhead.
+
+I'm satisfied with this optimization.
+
+Wait, one more issue: `values[:100]` on a numpy array with < 100 elements returns a smaller slice, and `for val in slice` iterates correctly. Good.
+
+But what if `values` has 0 elements? Then `values[:100]` is empty, the loop body never runs, `else` runs, `lib.infer_dtype` is called on an empty array. This should be fast and correct.
+
+OK, one FINAL consideration. Does `lib.infer_dtype` on an empty array return "empty" or something else that is not "string"? Let me assume yes, so we don't accidentally set `ndtype = "string"` for empty arrays.
+
+Actually, if `lib.infer_dtype([]) == "empty"`, then `"empty" in ["string"]` is False, so `ndtype` stays "object". That's correct.
+
+Alright, I'm committing to this optimization. Let me write the search/replace block.
+
+Actually, let me also double-check that `isinstance(val, str)` is the right check. What about `np.str_` or byte strings?
+
+- `isinstance(np.str_("a"), str)` is True (numpy strings subclass Python str).
+- `isinstance(b"hello", str)` is False, but byte strings in object arrays are rare in pandas.
+
+So `isinstance(val, str)` should be fine.
+
+For `FutureWarning` or compatibility with Python 2, we don't need to worry since pandas is Python 3 only.
+
+Hmm, wait. I should also think about whether `None` is the only null we should skip. What about `np.nan`, `pd.NA`, `pd.NaT`, etc.?
+
+- `np.nan`: float type, not str, so we'd break. This is correct because `np.nan` is not a string. But would `lib.infer_dtype(["a", np.nan], skipna=False)` return "string"? Probably not, since `np.nan` is a float. So breaking is correct.
+
+- `pd.NA`: a special singleton, not str, so we'd break. Again, this is correct.
+
+- `pd.NaT`: datetime missing value, not str, so we'd break. Correct.
+
+- `float('nan')`: same as `np.nan`, not str, we'd break. Correct.
+
+So treating only `None` as ambiguous is conservative but might miss some cases where the first 100 elements are all `None`/`np.nan` but later there are non-strings. In that case, we'd fall back to `lib.infer_dtype`, which would correctly identify the array as not all strings.
+
+The optimization works as intended.
+
+Final answer: I'll provide the search/replace for `_check_object_for_strings`.
+
+Actually, I want to make one more check. Is there any case where we might have `values` as a multi-dimensional array in `_check_object_for_strings`? Looking at the usage, it's called from `_get_hashtable_algo`, which is called from `factorize_array`. `factorize_array` expects 1D arrays. And `_ensure_data` might flatten or handle the array.
+
+Actually, `_ensure_data` for object arrays does `ensure_object(np.asarray(values))`. If `values` was MultiIndex, it raises. Otherwise, `np.asarray` preserves shape. If the input is 2D object array, it stays 2D. Then `values[:100]` gets the first 100 rows, and we iterate over rows, not elements. This is wrong for 2D arrays.
+
+But does `factorize` support 2D arrays? Looking at the docstring and code, it seems to expect 1D sequences. The docstring says `values : sequence` and shows 1D examples.
+
+Actually, looking more carefully, `_ensure_arraylike` handles lists, and `np.asarray` on a list of lists gives a 2D array. But `factorize_array` would then fail or behave unexpectedly.
+
+Hmm, but `factorize` on a 2D list is probably not supported or tested. So we can assume 1D.
+
+Actually wait, let me re-check. In `_ensure_data`:
+```python
+    if is_object_dtype(values.dtype):
+        return ensure_object(np.asarray(values))
+```
+
+For a 2D object array, this returns a 2D object array. Then `_check_object_for_strings` checks `values.dtype.name == "object"`, and `values[:100]` gets first 100 rows.
+
+But this is all theoretical. In practice, `factorize` is for 1D data. If 2D input somehow reaches here, the behavior with `values[:100]` is at least bounded and won't crash.
+
+I'm now confident in my optimization. Let me write the final search/replace.
+
+Wait, actually, I want to also make sure I match the exact original code. Looking at the file:
+
+```python
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+    return ndtype
+```
+
+I'll replace with:
+
+```python
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # Fast path: avoid expensive lib.infer_dtype for arrays that
+        # are clearly not string arrays by checking a subset of elements.
+        for val in values[:100]:
+            if val is None or isinstance(val, str):
+                continue
+            break
+        else:
+            # Could not rule out in first 100 elements
+            if lib.infer_dtype(values, skipna=False) in ["string"]:
+                ndtype = "string"
+    return ndtype
+```
+
+Hmm, but I want to verify one thing: in the `for...else`, the `else` runs when the loop didn't `break`. In my code, the loop `break`s when we find a non-string. The `continue` skips strings and None. So the `else` runs when we either:
+1. Found only strings/None in the first 100 elements
+2. The array has < 100 elements and all are strings/None
+
+This is correct - we need `infer_dtype` to disambiguate.
+
+But what about arrays with exactly strings and no None? E.g., `["a", "b", "c"]` with 3 elements. We scan all 3, don't break, `else` runs, `infer_dtype` checks and returns "string". Correct.
+
+What about `["a", None]`? Scan "a" (continue, str), None (continue, None), end, `else` runs, `infer_dtype` decides. Correct.
+
+What about `[None, "a"]`? Same.
+
+What about `["a", "b", ..., non_string]` where non_string is at position 200? We scan 100 elements (all strings), `else` runs, `infer_dtype` scans all and finds the non-string at 200. Returns not "string". Correct, but not optimized.
+
+For `[None, None, ..., "a", "b", ...]` with 150 nulls then strings: we scan 100 nulls, `else` runs, `infer_dtype` determines. Not optimized but correct.
+
+I think this is the best we can do. The optimization significantly helps common cases (non-string arrays with early non-strings) while preserving correctness.
+
+One final thought: should the limit be 10 instead of 100? For typical data, the first non-string appears very early. 10 is enough for most cases and has even less overhead. But 100 is still tiny and provides more confidence.
+
+Actually, looking at pandas coding style, is there a precedent for magic numbers like this? I think 100 is arbitrary. Let me think about whether there's a principled choice...
+
+For object arrays with random data, the probability of having 100 strings at the start if strings are 50% of the data is very small (0.5^100 ≈ 8e-31). But for structured data, strings might cluster at the beginning.
+
+I think 10-100 is reasonable. Let me use 100 as it's a good balance.
+
+Actually, I realize I should check if `values` always has `.flat` or `.shape` and whether `values[:100]` always works. For 1D numpy arrays, yes. For 0D, `values[:100]` might not work, but `factorize` on 0D doesn't make sense.
+
+Actually, `np.array(1, dtype=object)[:100]` works and returns `array(1, dtype=object)`. Iterating over it gives a single element. So it works for 0D too (though 0D factorize is edge case).
+
+What about nested lists? `np.array([[1, 2], [3, 4]], dtype=object)[:100]` returns the same 2D array. Iterating gives rows `[1, 2]` and `[3, 4]`. `isinstance([1, 2], str)` is False, so we'd break. This is fine since nested arrays aren't really string arrays.
+
+OK, I'm confident. Let me provide the answer.
+
+Actually, one more thing. I want to make sure `values[:100]` doesn't create a copy for large arrays. For numpy arrays, slicing `[:100]` creates a view, which shares the underlying data. So it's memory efficient. Good.
+
+Final answer:
+
+```python
+pandas/core/algorithms.py
+[SEARCH]
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+    return ndtype
+[/SEARCH]
+[REPLACE]
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # Fast path: avoid expensive lib.infer_dtype for arrays that
+        # are clearly not string arrays by checking a subset of elements.
+        for val in values[:100]:
+            if val is None or isinstance(val, str):
+                continue
+            break
+        else:
+            # Could not rule out in first 100 elements
+            if lib.infer_dtype(values, skipna=False) in ["string"]:
+                ndtype = "string"
+    return ndtype
+[/REPLACE]
+```
+
+Wait, I just need to re-verify one thing. The original code's comment spans multiple lines. Let me make sure my SEARCH block matches exactly.
+
+Original:
+```python
+    if ndtype == "object":
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+```
+
+My replacement:
+```python
+    if ndtype == "object":
+        # Fast path: avoid expensive lib.infer_dtype for arrays that
+        # are clearly not string arrays by checking a subset of elements.
+        for val in values[:100]:
+            if val is None or isinstance(val, str):
+                continue
+            break
+        else:
+            # Could not rule out in first 100 elements
+            if lib.infer_dtype(values, skipna=False) in ["string"]:
+```
+
+The SEARCH needs to match exactly. Let me verify the original comment text:
+`# it's cheaper to use a String Hash Table than Object; we infer`
+`# including nulls because that is the only difference between`
+`# StringHashTable and ObjectHashtable`
+
+Yes, my SEARCH block includes these lines.
+
+Actually, let me double-check my own code. For an array like `[None, "a", "b", ...]` where the first 100 elements after None are all strings, we'd fall back to `infer_dtype`. But if the array is NOT all strings (e.g., `[None, "a", "b", ..., 1, ...]`), `infer_dtype` correctly says not "string". Good.
+
+What if `lib.infer_dtype` itself is the bottleneck even after this optimization, for arrays where the first 100 elements are all strings/None but it's not a string array? This edge case still exists but is less common.
+
+I think this optimization is valid and helpful. But let me reconsider: is there a case where checking only 100 elements is insufficient and leads to wrong results?
+
+No, because if we can't determine in 100 elements, we fall back to `lib.infer_dtype`, which is correct.
+
+Is there a case where the original code was faster? Yes, all-string arrays of >100 elements now have extra overhead. But the prompt specifically asks to optimize for non-string arrays.
+
+However, to be a responsible optimization, I should consider whether all-string arrays are common enough that the regression matters. In pandas, string object columns are quite common (names, categories as strings, etc.). A 100-element scan overhead is small but not zero.
+
+For a 1M element all-string array:
+- Before: `lib.infer_dtype` takes, say, 10ms
+- After: 100 Python iterations (say, 0.1ms) + `lib.infer_dtype` (10ms) = 10.1ms
+
+The overhead is 1%. Negligible.
+
+For a 1M element non-string array with non-string at position 0:
+- Before: `lib.infer_dtype` takes 10ms
+- After: 1 Python iteration (0.001ms), no `lib.infer_dtype`. Effectively free!
+
+For a 1M element non-string array with non-string at position 50:
+- Before: 10ms
+- After: ~50 Python iterations (0.05ms). Much faster.
+
+Great, the optimization is clearly beneficial with negligible downside.
+
+One more thing: I should verify that `values[:100]` works correctly when `values` is not a numpy array but an ExtensionArray or similar. In `factorize_array`, `values` comes from `_get_hashtable_algo` which calls `_ensure_data`. For object dtype, `_ensure_data` returns `ensure_object(np.asarray(values))`, which is a numpy array. So `values` in `_check_object_for_strings` is always a numpy array at this point. Good.
+
+Actually wait, let me re-verify. `_get_hashtable_algo` receives `values` from `factorize_array`. In `factorize_array`:
+
+```python
+    hash_klass, values = _get_hashtable_algo(values)
+```
+
+And `_get_hashtable_algo` does:
+```python
+def _get_hashtable_algo(values: np.ndarray):
+    values = _ensure_data(values)
+    ndtype = _check_object_for_strings(values)
+    hashtable = _hashtables[ndtype]
+    return hashtable, values
+```
+
+So `values` passed to `_check_object_for_strings` is the result of `_ensure_data(values)`. For object dtype, this is `ensure_object(np.asarray(values))`, a numpy ndarray.
+
+Thus `values[:100]` is numpy slicing, which is efficient. ✓
+
+Alright, I'm confident in my answer. Let me finalize.
+
+Actually, I want to re-read the original code one more time to ensure my SEARCH block is EXACT:
+
+```python
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+    return ndtype
+```
+
+Yup, my SEARCH matches exactly.
+
+My REPLACE:
+
+```python
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # Fast path: avoid expensive lib.infer_dtype for arrays that
+        # are clearly not string arrays by checking a subset of elements.
+        for val in values[:100]:
+            if val is None or isinstance(val, str):
+                continue
+            break
+        else:
+            # Could not rule out in first 100 elements
+            if lib.infer_dtype(values, skipna=False) in ["string"]:
+                ndtype = "string"
+    return ndtype
+```
+
+This looks correct. The only potential issue is whether the `for...else` syntax is clear. The `else` runs when the loop completes normally (no `break`). In our case, it runs when no non-string non-None element was found in the first 100 elements.
+
+The `break` inside the loop exits the loop when we find a non-string. The `continue` skips strings and None. So if we find a non-string, we break, the `else` doesn't run, and `ndtype` stays "object". Correct.
+
+If all 100 elements are strings or None, the loop completes, `else` runs, and we do `lib.infer_dtype`. If the array is actually all strings, `infer_dtype` returns "string" and we use `StringHashTable`. If the array has non-strings after 100, `infer_dtype` correctly returns non-string. Correct.
+
+I'm done. Here is the final answer.</think>pandas/core/algorithms.py
+[SEARCH]
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+    return ndtype
+[/SEARCH]
+[REPLACE]
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # Fast path: avoid expensive lib.infer_dtype for arrays that
+        # are clearly not string arrays by checking a subset of elements.
+        for val in values[:100]:
+            if val is None or isinstance(val, str):
+                continue
+            break
+        else:
+            # Could not rule out in first 100 elements
+            if lib.infer_dtype(values, skipna=False) in ["string"]:
+                ndtype = "string"
+    return ndtype
+[/REPLACE]

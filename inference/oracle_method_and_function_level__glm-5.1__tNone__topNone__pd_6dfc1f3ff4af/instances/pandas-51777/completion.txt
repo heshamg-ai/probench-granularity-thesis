@@ -1,0 +1,40 @@
+pandas/core/series.py
+[SEARCH]
+        new_index = self.index.union(other.index)
+        this = self.reindex(new_index, copy=False)
+        other = other.reindex(new_index, copy=False)
+        if this.dtype.kind == "M" and other.dtype.kind != "M":
+            other = to_datetime(other)
+
+        return this.where(notna(this), other)
+[/SEARCH]
+[REPLACE]
+        new_index = self.index.union(other.index)
+        this = self.reindex(new_index, copy=False)
+        other = other.reindex(new_index, copy=False)
+        if this.dtype.kind == "M" and other.dtype.kind != "M":
+            other = to_datetime(other)
+
+        # Optimized path: fill only positions where `this` is NA
+        mask = isna(this)
+        if not mask.any():
+            return this.copy()
+
+        this = this.copy()
+        other_values = other._values
+        this_values = this._values
+
+        if isinstance(this_values, np.ndarray):
+            if isinstance(other_values, np.ndarray):
+                this_values[mask] = other_values[mask]
+            else:
+                # other is an ExtensionArray (e.g., nullable); convert to numpy
+                # to safely fill into this_values
+                other_as_values = other.to_numpy(dtype=this_values.dtype, na_value=np.nan)
+                this_values[mask] = other_as_values[mask]
+        else:
+            # this is an ExtensionArray (e.g., nullable integer); rely on putmask
+            this_values.putmask(mask, other_values)
+
+        return this
+[/REPLACE]

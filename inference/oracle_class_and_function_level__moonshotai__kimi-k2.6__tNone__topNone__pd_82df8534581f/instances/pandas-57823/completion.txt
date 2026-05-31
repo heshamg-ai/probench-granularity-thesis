@@ -1,0 +1,76 @@
+ pandas/core/indexes/range.py
+[SEARCH]
+    def factorize(
+        self,
+        sort: bool = False,
+        use_na_sentinel: bool = True,
+    ) -> tuple[npt.NDArray[np.intp], RangeIndex]:
+        codes = np.arange(len(self), dtype=np.intp)
+        uniques = self
+        if sort and self.step < 0:
+            codes = codes[::-1]
+            uniques = uniques[::-1]
+        return codes, uniques
+[/SEARCH]
+[REPLACE]
+    def factorize(
+        self,
+        sort: bool = False,
+        use_na_sentinel: bool = True,
+    ) -> tuple[npt.NDArray[np.intp], RangeIndex]:
+        codes = np.arange(len(self), dtype=np.intp)
+        uniques = self
+        if sort and self.step < 0:
+            codes = codes[::-1]
+            uniques = uniques[::-1]
+        return codes, uniques
+
+    def argmin(self, axis=None, skipna: bool = True, *args, **kwargs) -> int:
+        """
+        Return int position of the smallest value in the Series.
+
+        If the minimum is achieved in multiple locations,
+        the first row position is returned.
+
+        Parameters
+        ----------
+        axis : {None}
+            Dummy argument for consistency with Series.
+        skipna : bool, default True
+            Whether to skip NA/null values.
+        *args, **kwargs
+            Arguments and keywords have no effect but might be accepted for
+            compatibility with NumPy.
+
+        Returns
+        -------
+        int
+            Row position of the minimum value.
+
+        See Also
+        --------
+        Series.argmin : Return position of the minimum value.
+        Series.argmax : Return position of the maximum value.
+        numpy.ndarray.argmin : Equivalent method for numpy arrays.
+
+        Examples
+        --------
+        Consider dataset containing cereal calories
+
+        >>> s = pd.Series({'Corn Flakes': 100.0, 'Almond Delight': 110.0,
+        ...                'Cinnamon Toast Crunch': 120.0, 'Cocoa Puff': 110.0})
+        >>> s.argmin()
+        0
+        >>> s.argmax()
+        2
+
+        The maximum cereal calories is the third element and
+        the minimum cereal calories is the first element.
+        """
+        if len(self) == 0:
+            raise ValueError("attempt to get argmin of an empty sequence")
+        if self.step > 0:
+            return 0
+        else:
+            return len(self) - 1
+[/REPLACE]

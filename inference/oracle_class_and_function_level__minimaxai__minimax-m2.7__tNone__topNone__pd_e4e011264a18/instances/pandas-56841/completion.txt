@@ -1,0 +1,27 @@
+
+
+Looking at the code, I need to find where `DataFrame.join` is implemented and optimize it for sorted joins with unique indexes. Let me search for the implementation.
+
+pandas/core/frame.py
+[SEARCH]
+    def join(
+        self,
+        other: DataFrame | Series,
+        on: Hashable | None = None,
+        how: JoinHow = "left",
+        lsuffix: Scalar = "",
+        rsuffix: Scalar = "",
+        sort: bool = False,
+    ) -> DataFrame:
+[/SEARCH]
+[REPLACE]
+    def join(
+        self,
+        other: DataFrame | Series,
+        on: Hashable | None = None,
+        how: JoinHow = "left",
+        lsuffix: Scalar = "",
+        rsuffix: Scalar = "",
+        sort: bool = False,
+    ) -> DataFrame:
+[/REPLACE]

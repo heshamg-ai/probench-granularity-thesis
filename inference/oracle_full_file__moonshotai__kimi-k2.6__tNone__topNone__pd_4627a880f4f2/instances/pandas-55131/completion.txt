@@ -1,0 +1,87 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _groupby_op(
+        self,
+        *,
+        how: str,
+        has_dropped_na: bool,
+        min_count: int,
+        ngroups: int,
+        ids: npt.NDArray[np.intp],
+        **kwargs,
+    ):
+        if isinstance(self.dtype, StringDtype):
+            return super()._groupby_op(
+                how=how,
+                has_dropped_na=has_dropped_na,
+                min_count=min_count,
+                ngroups=ngroups,
+                ids=ids,
+                **kwargs,
+            )
+
+        masked = self._to_masked()
+
+        result = masked._groupby_op(
+            how=how,
+            has_dropped_na=has_dropped_na,
+            min_count=min_count,
+            ngroups=ngroups,
+            ids=ids,
+            **kwargs,
+        )
+        if isinstance(result, np.ndarray):
+            return result
+        return type(self)._from_sequence(result, copy=False)
+[/SEARCH]
+[REPLACE]
+    def _groupby_op(
+        self,
+        *,
+        how: str,
+        has_dropped_na: bool,
+        min_count: int,
+        ngroups: int,
+        ids: npt.NDArray[np.intp],
+        **kwargs,
+    ):
+        if isinstance(self.dtype, StringDtype):
+            return super()._groupby_op(
+                how=how,
+                has_dropped_na=has_dropped_na,
+                min_count=min_count,
+                ngroups=ngroups,
+                ids=ids,
+                **kwargs,
+            )
+
+        # For PyArrow-backed timestamp/duration dtypes, use PyArrow's
+        # fast groupby aggregations directly instead of converting to masked.
+        pa_type = self._pa_array.type
+        if (
+            how in ("min", "max", "sum", "mean", "std", "sem", "var", "count")
+            and (pa.types.is_timestamp(pa_type) or pa.types.is_duration(pa_type))
+        ):
+            from pandas.core.arrays.arrow._groupby import ArrowGroupBy
+
+            return ArrowGroupBy(
+                values=self,
+                group_keys=ids,
+                ngroups=ngroups,
+                has_dropped_na=has_dropped_na,
+            ).aggregate(how=how, min_count=min_count, **kwargs)
+
+        masked = self._to_masked()
+
+        result = masked._groupby_op(
+            how=how,
+            has_dropped_na=has_dropped_na,
+            min_count=min_count,
+            ngroups=ngroups,
+            ids=ids,
+            **kwargs,
+        )
+        if isinstance(result, np.ndarray):
+            return result
+        return type(self)._from_sequence(result, copy=False)
+[/REPLACE]

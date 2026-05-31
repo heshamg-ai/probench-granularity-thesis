@@ -1,0 +1,79 @@
+pandas/core/arrays/numeric.py
+[SEARCH]
+    def _safe_cast(cls, values: np.ndarray, dtype: np.dtype, copy: bool) -> np.ndarray:
+        """
+        Safely cast the values to the given dtype.
+
+        "safe" in this context means the casting is lossless.
+        """
+        raise AbstractMethodError(cls)
+[/SEARCH]
+[REPLACE]
+    @classmethod
+    def _safe_cast(cls, values: np.ndarray, dtype: np.dtype, copy: bool) -> np.ndarray:
+        """
+        Safely cast the values to the given dtype.
+
+        "safe" in this context means the casting is lossless.
+        """
+        raise AbstractMethodError(cls)
+[/REPLACE]
+
+pandas/core/arrays/numeric.py
+[SEARCH]
+        if mask is None:
+        if values.dtype.kind in "iu":
+            # fastpath
+            mask = np.zeros(len(values), dtype=np.bool_)
+        else:
+            mask = libmissing.is_numeric_na(values)
+[/SEARCH]
+[REPLACE]
+        if mask is None:
+        if values.dtype.kind in "iu":
+            # fastpath
+            mask = np.zeros(len(values), dtype=np.bool_)
+        else:
+            mask = libmissing.is_numeric_na(values)
+[/REPLACE]
+
+pandas/core/arrays/numeric.py
+[SEARCH]
+    if is_integer_dtype(dtype) and values.dtype.kind == "f" and len(values) > 0:
+        if mask.all():
+            values = np.ones(values.shape, dtype=dtype)
+        else:
+            idx = np.nanargmax(values)
+            if int(values[idx]) != original[idx]:
+                # We have ints that lost precision during the cast.
+                inferred_type = lib.infer_dtype(original, skipna=True)
+                if (
+                    inferred_type not in ["floating", "mixed-integer-float"]
+                    and not mask.any()
+                ):
+                    values = np.asarray(original, dtype=dtype)
+                else:
+                    values = np.asarray(original, dtype="object")
+[/SEARCH]
+[REPLACE]
+    if is_integer_dtype(dtype) and values.dtype.kind == "f" and len(values) > 0:
+        if mask.all():
+            values = np.ones(values.shape, dtype=dtype)
+        else:
+            idx = np.nanargmax(values)
+            if int(values[idx]) != original[idx]:
+                # Fast-path: check if all finite values are whole numbers
+                finite_mask = ~np.isnan(values)
+                if not np.allclose(
+                    values[finite_mask], np.floor(values[finite_mask])
+                ):
+                    # We have ints that lost precision during the cast.
+                    inferred_type = lib.infer_dtype(original, skipna=True)
+                    if (
+                        inferred_type not in ["floating", "mixed-integer-float"]
+                        and not mask.any()
+                    ):
+                        values = np.asarray(original, dtype=dtype)
+                    else:
+                        values = np.asarray(original, dtype="object")
+[/REPLACE]

@@ -1,0 +1,27 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+            arrays, names = [], []
+            for i in range(self.nlevels):
+                label = self._get_level_values(i)
+                appended = [o._get_level_values(i) for o in other]
+                arrays.append(label.append(appended))
+                single_label_name = all(label.name == x.name for x in appended)
+                names.append(label.name if single_label_name else None)
+            return MultiIndex.from_arrays(arrays, names=names)
+[/SEARCH]
+[REPLACE]
+            arrays = []
+            names = []
+            appended_levels = [[] for _ in range(self.nlevels)]
+            for o in other:
+                levels = o._levels
+                for i in range(self.nlevels):
+                    appended_levels[i].append(levels[i][o._codes[i]])
+            for i in range(self.nlevels):
+                label = self._get_level_values(i)
+                appended = appended_levels[i]
+                arrays.append(label.append(appended))
+                single_label_name = all(label.name == x.name for x in appended)
+                names.append(label.name if single_label_name else None)
+            return MultiIndex.from_arrays(arrays, names=names)
+[/REPLACE]

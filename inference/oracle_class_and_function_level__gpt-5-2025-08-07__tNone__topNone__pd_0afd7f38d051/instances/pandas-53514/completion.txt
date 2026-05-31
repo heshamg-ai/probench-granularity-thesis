@@ -1,0 +1,58 @@
+pandas/core/frame.py
+[SEARCH]
+        else:
+            if not is_list_like(values):
+                raise TypeError(
+                    "only list-like or dict-like objects are allowed "
+                    "to be passed to DataFrame.isin(), "
+                    f"you passed a '{type(values).__name__}'"
+                )
+            # error: Argument 2 to "isin" has incompatible type "Union[Sequence[Any],
+            # Mapping[Any, Any]]"; expected "Union[Union[ExtensionArray,
+            # ndarray[Any, Any]], Index, Series]"
+            res_values = algorithms.isin(
+                self.values.ravel(),
+                values,  # type: ignore[arg-type]
+            )
+            result = self._constructor(
+                res_values.reshape(self.shape),
+                self.index,
+                self.columns,
+                copy=False,
+            )
+[/SEARCH]
+[REPLACE]
+        else:
+            if not is_list_like(values):
+                raise TypeError(
+                    "only list-like or dict-like objects are allowed "
+                    "to be passed to DataFrame.isin(), "
+                    f"you passed a '{type(values).__name__}'"
+                )
+            # Optimize for Arrow-backed extension dtypes by avoiding materializing
+            # the entire 2D array; perform column-wise isin instead.
+            use_columnwise = any(isinstance(dtype, ArrowDtype) for dtype in self.dtypes)
+            if use_columnwise:
+                if len(self.columns) == 0:
+                    result = self.copy(deep=None)
+                else:
+                    from pandas.core.reshape.concat import concat
+                    result = concat(
+                        (self.iloc[:, [i]].isin(values) for i in range(len(self.columns))),
+                        axis=1,
+                    )
+            else:
+                # error: Argument 2 to "isin" has incompatible type "Union[Sequence[Any],
+                # Mapping[Any, Any]]"; expected "Union[Union[ExtensionArray,
+                # ndarray[Any, Any]], Index, Series]"
+                res_values = algorithms.isin(
+                    self.values.ravel(),
+                    values,  # type: ignore[arg-type]
+                )
+                result = self._constructor(
+                    res_values.reshape(self.shape),
+                    self.index,
+                    self.columns,
+                    copy=False,
+                )
+[/REPLACE]

@@ -1,0 +1,40 @@
+xarray/core/groupby.py
+[SEARCH]
+from . import ops
+[/SEARCH]
+[REPLACE]
+from . import ops
+from .npcompat import ISTYPE
+[/REPLACE]
+
+xarray/core/groupby.py
+[SEARCH]
+    def _inserted_replace(self):
+        # This is a hack to make sure that the _inserted_replace method
+        # returns the correct value for cftime types
+        # https://github.com/pydata/xarray/issues/7126
+        if duck_array_ops.is_np_datetime_like(self.obj.data.dtype):
+            return self.obj.astype(float)
+        else:
+            return self.obj
+[/SEARCH]
+[REPLACE]
+    def _inserted_replace(self):
+        # This is a hack to make sure that the _inserted_replace method
+        # returns the correct value for cftime types
+        # https://github.com/pydata/xarray/issues/7126
+        if duck_array_ops.is_np_datetime_like(self.obj.data.dtype):
+            return self.obj.astype(float)
+        # Fast path for cftime object arrays: avoid expensive _ensure_numeric conversion
+        # by directly mapping cftime objects to integer codes via the already-computed group_indices.
+        if ISTYPE(self.obj.data.dtype, "cftime"):
+            codes = np.empty(self.obj.shape, dtype=np.intp)
+            for i, indices in enumerate(self.group_indices):
+                if isinstance(indices, slice):
+                    codes[indices] = i
+                else:
+                    codes[indices] = i
+            return self.obj.copy(data=codes)
+        else:
+            return self.obj
+[/REPLACE]

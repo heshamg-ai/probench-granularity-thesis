@@ -1,0 +1,148 @@
+pandas/core/groupby/groupby.py
+[SEARCH]
+        try:
+            if self.obj.ndim == 1:
+                result = self._op_via_apply(how, skipna=skipna)
+            else:
+
+                def func(df):
+                    method = getattr(df, how)
+                    return method(axis=axis, skipna=skipna, numeric_only=numeric_only)
+
+                func.__name__ = how
+                result = self._python_apply_general(
+                    func, self._obj_with_exclusions, not_indexed_same=True
+                )
+        except ValueError as err:
+            name = "argmax" if how == "idxmax" else "argmin"
+            if f"attempt to get {name} of an empty sequence" in str(err):
+                raise ValueError(
+                    f"Can't get {how} of an empty group due to unobserved categories. "
+                    "Specify observed=True in groupby instead."
+                ) from None
+            raise
+[/SEARCH]
+[REPLACE]
+        try:
+            if self.obj.ndim == 1:
+                result = self._op_via_apply(how, skipna=skipna)
+            else:
+                obj = self._obj_with_exclusions
+                if numeric_only:
+                    obj = obj._get_numeric_data()
+
+                if axis == 1:
+                    # Fall back to python apply for axis=1
+                    def func(df):
+                        method = getattr(df, how)
+                        return method(
+                            axis=axis, skipna=skipna, numeric_only=numeric_only
+                        )
+
+                    func.__name__ = how
+                    result = self._python_apply_general(
+                        func, self._obj_with_exclusions, not_indexed_same=True
+                    )
+                else:
+                    # Fastpath: compute idxmax/idxmin using Cython for axis=0
+                    data = obj
+                    if len(data.columns) == 0:
+                        # No columns to aggregate; construct an empty result
+                        result = type(data)(
+                            index=self.grouper.result_index, columns=data.columns
+                        )
+                        result = result.astype(self.obj.index.dtype)
+                    else:
+                        from pandas.core.groupby.ops import WrappedCythonOp
+
+                        ids, _, ngroups = self.grouper.group_info
+                        op_how = "idxmax" if how == "idxmax" else "idxmin"
+
+                        mgr = data._mgr
+                        if hasattr(mgr, "arrays"):
+                            arrays = list(mgr.arrays)
+                        else:
+                            arrays = [blk.values for blk in mgr.blocks]
+
+                        res_arrays = []
+                        for arr in arrays:
+                            if isinstance(arr.dtype, (pd.CategoricalDtype, pd.ArrowDtype)):
+                                # Fall back to python apply for unsupported dtypes
+                                def func(s):
+                                    return getattr(s, how)(
+                                        skipna=skipna
+                                    )
+
+                                func.__name__ = how
+                                result = self._python_apply_general(
+                                    func,
+                                    data[[arr.dtype.name]]
+                                    if arr.dtype.name in data.columns
+                                    else data,
+                                    not_indexed_same=True,
+                                )
+                                if len(res_arrays) == 0:
+                                    res_arrays = result
+                                break
+                            else:
+                                mask = None
+                                if isinstance(arr, pd.api.extensions.ExtensionArray):
+                                    mask = arr.isna()
+                                    if hasattr(arr, '_data'):
+                                        vals = arr._data
+                                        if hasattr(arr, '_mask') and isinstance(arr._mask, np.ndarray):
+                                            mask = arr._mask
+                                    else:
+                                        vals = np.asarray(arr)
+                                else:
+                                    vals = arr
+                                    if isinstance(vals.dtype, pd.api.types.pandas_dtype):
+                                        vals = np.asarray(vals)
+
+                                op = WrappedCythonOp(
+                                    kind="aggregate",
+                                    how=op_how,
+                                    has_dropped_na=self.grouper.has_dropped_na,
+                                )
+
+                                if mask is None:
+                                    mask = pd.isna(vals)
+                                result_mask = np.zeros(ngroups, dtype=bool)
+
+                                res = op._cython_op_ndim_compat(
+                                    vals,
+                                    min_count=-1,
+                                    ngroups=ngroups,
+                                    comp_ids=ids,
+                                    mask=mask,
+                                    result_mask=result_mask,
+                                    skipna=skipna,
+                                )
+
+                                # Map positional indices to actual index labels
+                                result_mask_bool = result_mask.astype(bool)
+                                idx_arr = np.empty(ngroups, dtype=object)
+                                idx_arr[result_mask_bool] = pd.NA
+                                valid = ~result_mask_bool
+                                idx_arr[valid] = data.index.take(res[valid])
+
+                                res_arrays.append(pd.array(idx_arr, dtype=object))
+
+                        if not isinstance(res_arrays, list):
+                            # Already computed via python fallback
+                            result = res_arrays
+                        else:
+                            result = type(data)(
+                                dict(zip(data.columns, res_arrays)),
+                                index=self.grouper.result_index,
+                            )
+                            result = result.astype(self.obj.index.dtype)
+        except ValueError as err:
+            name = "argmax" if how == "idxmax" else "argmin"
+            if f"attempt to get {name} of an empty sequence" in str(err):
+                raise ValueError(
+                    f"Can't get {how} of an empty group due to unobserved categories. "
+                    "Specify observed=True in groupby instead."
+                ) from None
+            raise
+[/REPLACE]

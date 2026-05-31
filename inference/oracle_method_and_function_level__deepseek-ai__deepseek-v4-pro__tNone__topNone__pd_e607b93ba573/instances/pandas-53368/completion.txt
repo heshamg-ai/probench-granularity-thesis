@@ -1,0 +1,21 @@
+pandas/core/indexes/base.py
+[SEARCH]
+            if isinstance(target_values, (BaseMaskedArray, ArrowExtensionArray)):
+                try:
+                    return _masked_engines[target_values.dtype.name](target_values)
+                except KeyError:
+                    # Not supported yet e.g. decimal
+                    pass
+            elif self._engine_type is libindex.ObjectEngine:
+                return libindex.ExtensionEngine(target_values)
+[/SEARCH]
+[REPLACE]
+            if isinstance(target_values, (BaseMaskedArray, ArrowExtensionArray)):
+                try:
+                    return _masked_engines[target_values.dtype.name](target_values)
+                except KeyError:
+                    # Not supported yet e.g. decimal
+                    pass
+            if self._engine_type is libindex.ObjectEngine:
+                return libindex.ExtensionEngine(target_values)
+[/REPLACE]

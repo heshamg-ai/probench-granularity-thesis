@@ -1,0 +1,78 @@
+ pandas/core/indexes/range.py [SEARCH]     def factorize(
+        self,
+        sort: bool = False,
+        use_na_sentinel: bool = True,
+    ) -> tuple[npt.NDArray[np.intp], RangeIndex]:
+        if sort and self.step < 0:
+            codes = np.arange(len(self) - 1, -1, -1, dtype=np.intp)
+            uniques = self[::-1]
+        else:
+            codes = np.arange(len(self), dtype=np.intp)
+            uniques = self
+        return codes, uniques [/SEARCH] [REPLACE]     def factorize(
+        self,
+        sort: bool = False,
+        use_na_sentinel: bool = True,
+    ) -> tuple[npt.NDArray[np.intp], RangeIndex]:
+        if sort and self.step < 0:
+            codes = np.arange(len(self) - 1, -1, -1, dtype=np.intp)
+            uniques = self[::-1]
+        else:
+            codes = np.arange(len(self), dtype=np.intp)
+            uniques = self
+        return codes, uniques
+
+    def value_counts(
+        self,
+        normalize: bool = False,
+        sort: bool = True,
+        ascending: bool = False,
+        bins=None,
+        dropna: bool = True,
+    ):
+        from pandas import Series
+
+        if bins is not None:
+            return super().value_counts(
+                normalize=normalize,
+                sort=sort,
+                ascending=ascending,
+                bins=bins,
+                dropna=dropna,
+            )
+
+        # RangeIndex has unique values by definition (no duplicates)
+        # So every value appears exactly once
+        if len(self) == 0:
+            return Series(
+                [],
+                dtype=np.int64,
+                index=self._constructor([]),
+                name="count" if not normalize else "proportion",
+            )
+
+        counts = np.ones(len(self), dtype=np.float64 if normalize else np.int64)
+        if normalize:
+            counts /= len(self)
+
+        result = Series(
+            counts,
+            index=self.copy(),
+            name="proportion" if normalize else "count",
+        )
+
+        if not sort:
+            return result
+
+        if ascending:
+            if self.step < 0:
+                # Already in ascending order if step < 0
+                return result
+            else:
+                return result.iloc[::-1]
+        else:
+            if self.step > 0:
+                # Already in descending order if step > 0
+                return result
+            else:
+                return result.iloc[::-1] [/REPLACE]

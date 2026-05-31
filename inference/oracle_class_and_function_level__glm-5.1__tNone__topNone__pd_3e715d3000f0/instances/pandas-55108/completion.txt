@@ -1,0 +1,65 @@
+Looking at the `difference` method in `pandas/core/indexes/base.py`, I can see that for the general case where `self` and `other` are not equal, `other` is not empty, and `self._should_compare(other)` is True, it calls `self._difference(other, sort=sort)`.
+
+The `_difference` method computes the set difference by:
+1. Getting the unique values of `self`: `this = self.unique()`
+2. Finding which elements of `other` exist in `this`: `indexer = this.get_indexer_for(other)`
+3. Computing which positions in `this` are NOT in `other` using `np.setdiff1d`
+
+When the two indexes are disjoint (have no elements in common), step 2 will return an array of all `-1`s. The `get_indexer_for` call is expensive, especially for `DatetimeIndex`, because it involves building a lookup engine and performing hash lookups. But for disjoint indexes, we don't actually need to know *which* elements match — we just need to know *whether any* elements match.
+
+By adding an early check using `isin` (which can short-circuit on the first match found), we can avoid the expensive `get_indexer_for` call entirely for disjoint indexes. If `isin` finds no matches, the difference is simply the unique values of `self`.
+
+Here's the optimization:
+
+pandas/core/indexes/base.py
+[SEARCH]
+    def _difference(self, other, sort):
+        # overridden by RangeIndex
+
+        this = self.unique()
+
+        indexer = this.get_indexer_for(other)
+        indexer = indexer.take((indexer != -1).nonzero()[0])
+
+        label_diff = np.setdiff1d(np.arange(this.size), indexer, assume_unique=True)
+
+        the_diff: MultiIndex | ArrayLike
+        if isinstance(this, ABCMultiIndex):
+            the_diff = this.take(label_diff)
+        else:
+            the_diff = this._values.take(label_diff)
+        the_diff = _maybe_try_sort(the_diff, sort)
+
+        return the_diff
+[/SEARCH]
+[REPLACE]
+    def _difference(self, other, sort):
+        # overridden by RangeIndex
+
+        this = self.unique()
+
+        # Fast path for disjoint indexes: if no elements of other
+        # are found in self, the difference is all of self's unique
+        # values. This avoids the expensive get_indexer_for call.
+        if not this.isin(other).any():
+            the_diff: MultiIndex | ArrayLike
+            if isinstance(this, ABCMultiIndex):
+                the_diff = this._values
+            else:
+                the_diff = this._values
+            the_diff = _maybe_try_sort(the_diff, sort)
+            return the_diff
+
+        indexer = this.get_indexer_for(other)
+        indexer = indexer.take((indexer != -1).nonzero()[0])
+
+        label_diff = np.setdiff1d(np.arange(this.size), indexer, assume_unique=True)
+
+        if isinstance(this, ABCMultiIndex):
+            the_diff = this.take(label_diff)
+        else:
+            the_diff = this._values.take(label_diff)
+        the_diff = _maybe_try_sort(the_diff, sort)
+
+        return the_diff
+[/REPLACE]

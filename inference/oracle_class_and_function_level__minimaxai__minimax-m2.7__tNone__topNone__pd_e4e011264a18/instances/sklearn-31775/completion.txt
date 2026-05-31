@@ -1,0 +1,98 @@
+
+
+Looking at the code, I can see that `_averaged_weighted_percentile` calls `_weighted_percentile` twice, and each call does its own sorting and CDF computation. Since both calls use the same array and weights (just one uses `-array`), we can optimize by computing the sorted indices and weight CDF only once.
+
+Let me implement this optimization in `sklearn/utils/stats.py`:
+
+sklearn/utils/stats.py
+[SEARCH]
+def _averaged_weighted_percentile(array, sample_weight, percentile_rank=50, xp=None):
+    return (
+        _weighted_percentile(array, sample_weight, percentile_rank, xp=xp)
+        - _weighted_percentile(-array, sample_weight, 100 - percentile_rank, xp=xp)
+    ) / 2
+[/SEARCH]
+[REPLACE]
+def _averaged_weighted_percentile(array, sample_weight, percentile_rank=50, xp=None):
+    xp, _, device = get_namespace_and_device(array)
+    # `sample_weight` should follow `array` for dtypes
+    floating_dtype = _find_matching_floating_dtype(array, xp=xp)
+    array = xp.asarray(array, dtype=floating_dtype, device=device)
+    sample_weight = xp.asarray(sample_weight, dtype=floating_dtype, device=device)
+
+    n_dim = array.ndim
+    if n_dim == 0:
+        return array
+    if array.ndim == 1:
+        array = xp.reshape(array, (-1, 1))
+        return_dim_1 = True
+    else:
+        return_dim_1 = False
+
+    # When sample_weight 1D, repeat for each array.shape[1]
+    if array.shape != sample_weight.shape and array.shape[0] == sample_weight.shape[0]:
+        sample_weight = xp.tile(sample_weight, (array.shape[1], 1)).T
+
+    # Sort `array` and `sample_weight` along axis=0:
+    sorted_idx = xp.argsort(array, axis=0)
+    sorted_weights = xp.take_along_axis(sample_weight, sorted_idx, axis=0)
+
+    # Set NaN values in `sample_weight` to 0. Only perform this operation if NaN
+    # values present to avoid temporary allocations of size `(n_samples, n_features)`.
+    n_features = array.shape[1]
+    largest_value_per_column = array[
+        sorted_idx[-1, ...], xp.arange(n_features, device=device)
+    ]
+    # NaN values get sorted to end (largest value)
+    if xp.any(xp.isnan(largest_value_per_column)):
+        sorted_nan_mask = xp.take_along_axis(xp.isnan(array), sorted_idx, axis=0)
+        sorted_weights[sorted_nan_mask] = 0
+
+    # Compute the weighted cumulative distribution function (CDF) based on
+    # `sample_weight` and scale `percentile_rank` along it.
+    #
+    # Note: we call `xp.cumulative_sum` on the transposed `sorted_weights` to
+    # ensure that the result is of shape `(n_features, n_samples)` so
+    # `xp.searchsorted` calls take contiguous inputs as a result (for
+    # performance reasons).
+    weight_cdf = xp.cumulative_sum(sorted_weights.T, axis=1)
+
+    # Compute both p and (100-p) percentiles in a single pass
+    adjusted_percentile_ranks = xp.stack(
+        [
+            percentile_rank / 100 * weight_cdf[..., -1],
+            (100 - percentile_rank) / 100 * weight_cdf[..., -1],
+        ],
+        axis=0,
+    )
+
+    # Ignore leading `sample_weight=0` observations when `percentile_rank=0`
+    # For (100-p), we don't need this adjustment since p < 100 implies 100-p > 0
+    mask = adjusted_percentile_ranks[0] == 0
+    adjusted_percentile_ranks[0, mask] = xp.nextafter(
+        adjusted_percentile_ranks[0, mask], adjusted_percentile_ranks[0, mask] + 1
+    )
+
+    # For each feature, find sample index i for both percentile ranks
+    percentile_indices = xp.empty((2, weight_cdf.shape[0]), dtype=xp.int64)
+    for feature_idx in range(weight_cdf.shape[0]):
+        percentile_indices[0, feature_idx] = xp.searchsorted(
+            weight_cdf[feature_idx, ...], adjusted_percentile_ranks[0, feature_idx]
+        )
+        percentile_indices[1, feature_idx] = xp.searchsorted(
+            weight_cdf[feature_idx, ...], adjusted_percentile_ranks[1, feature_idx]
+        )
+
+    max_idx = sorted_idx.shape[0] - 1
+    percentile_indices = xp.clip(percentile_indices, 0, max_idx)
+
+    col_indices = xp.arange(array.shape[1], device=device)
+    percentile_in_sorted = sorted_idx[percentile_indices, col_indices]
+
+    result = array[percentile_in_sorted, col_indices]
+
+    if return_dim_1:
+        return (result[0, 0] - result[1, 0]) / 2
+    else:
+        return (result[0, :] - result[1, :]) / 2
+[/REPLACE]

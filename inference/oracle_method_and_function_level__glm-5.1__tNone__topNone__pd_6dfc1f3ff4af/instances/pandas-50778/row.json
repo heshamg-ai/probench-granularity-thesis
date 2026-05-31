@@ -1,0 +1,55 @@
+{
+  "id": 1,
+  "scenario_id": "pandas-50778",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 50778,
+  "baseline_sha": "ac70f230995aa1bbee97b5db7bfdc28e5c5ed14b",
+  "reference_sha": "fe7e6425dd4909d500dd666a452b072cfa10287b",
+  "task": "Optimize Series.replace when using a large dict for to_replace",
+  "entry_point": "pandas.Series.replace",
+  "whats_new": "Performance improvement in DataFrame.replace and Series.replace when using a large dict for ``to_replace``",
+  "optimization_target": "Runtime, Memory",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-50778:baseline",
+      "digest": "sha256:5dee3cd333c7a9645666fb2b6b5b9d0c0b5e4e395a7073b676bc2fa9e0ad9fc2"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-50778:reference",
+      "digest": "sha256:1366c0f8990d019e6dc4aff301324506895467640e8563446d3ac0efe34dd37f"
+    }
+  },
+  "params": [
+    {
+      "name": "Series Length",
+      "short_indicator": "N",
+      "values": [
+        "100000",
+        "500000",
+        "1000000"
+      ],
+      "explanation": "Number of elements in the Series being replaced"
+    },
+    {
+      "name": "Number to replace",
+      "short_indicator": "R",
+      "values": [
+        "1000",
+        "5000"
+      ],
+      "explanation": "Number of elements to replace in the Series"
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/series/methods/test_replace.py::TestSeriesReplace::test_replace",
+    "pandas/tests/series/methods/test_replace.py::TestSeriesReplace::test_replace2",
+    "pandas/tests/series/methods/test_replace.py::TestSeriesReplace::test_replace_commutative",
+    "pandas/tests/series/methods/test_replace.py::TestSeriesReplace::test_replace_mixed_types",
+    "pandas/tests/series/methods/test_replace.py::TestSeriesReplace::test_replace_with_dictlike_and_string_dtype",
+    "pandas/tests/series/methods/test_replace.py::TestSeriesReplace::test_replace_replacer_equals_replacement",
+    "pandas/tests/series/methods/test_replace.py::TestSeriesReplace::test_replace_different_int_types",
+    "pandas/tests/series/methods/test_replace.py::TestSeriesReplace::test_replace_dtype",
+    "pandas/tests/series/methods/test_replace.py::TestSeriesReplace::test_replace_listlike_value_listlike_target"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.Series.replace for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n- Only change what directly improves the optimization target.\n\nOPTIMIZATION REQUEST:\nOptimize Series.replace when using a large dict for to_replace\nOptimization function: pandas.Series.replace\n\n\n[start of pandas/core/internals/blocks.py]\n### Relevant context\n#### Class `pandas.core.internals.blocks.Block`\n**Class Signature**\n```python\nclass Block(PandasObject):\n```\n**Class Attributes**\n```python\n    values: np.ndarray | ExtensionArray\n    ndim: int\n    refs: BlockValuesRefs\n    __init__: Callable\n    __slots__ = ()\n    is_numeric = False\n    is_object = False\n    is_extension = False\n    _can_consolidate = True\n    _validate_ndim = True\n```\n##### Method `pandas.core.internals.blocks.Block.replace_list`\n```python\n@final\n    def replace_list(\n        self,\n        src_list: Iterable[Any],\n        dest_list: Sequence[Any],\n        inplace: bool = False,\n        regex: bool = False,\n        using_cow: bool = False,\n    ) -> list[Block]:\n        \"\"\"\n        See BlockManager.replace_list docstring.\n        \"\"\"\n        values = self.values\n\n        if isinstance(values, Categorical):\n            # TODO: avoid special-casing\n            # GH49404\n            if using_cow and inplace:\n                # TODO(CoW): Optimize\n                blk = self.copy()\n            else:\n                blk = self if inplace else self.copy()\n            values = cast(Categorical, blk.values)\n            values._replace(to_replace=src_list, value=dest_list, inplace=True)\n            return [blk]\n\n        # Exclude anything that we know we won't contain\n        pairs = [\n            (x, y) for x, y in zip(src_list, dest_list) if self._can_hold_element(x)\n        ]\n        if not len(pairs):\n            # shortcut, nothing to replace\n            return [self] if inplace else [self.copy()]\n\n        src_len = len(pairs) - 1\n\n        if is_string_dtype(values.dtype):\n            # Calculate the mask once, prior to the call of comp\n            # in order to avoid repeating the same computations\n            mask = ~isna(values)\n            masks = [\n                compare_or_regex_search(values, s[0], regex=regex, mask=mask)\n                for s in pairs\n            ]\n        else:\n            # GH#38086 faster if we know we dont need to check for regex\n            masks = [missing.mask_missing(values, s[0]) for s in pairs]\n\n        masks = [extract_bool_array(x) for x in masks]\n\n        if using_cow and inplace:\n            # TODO(CoW): Optimize\n            rb = [self.copy()]\n        else:\n            rb = [self if inplace else self.copy()]\n        for i, (src, dest) in enumerate(pairs):\n            convert = i == src_len  # only convert once at the end\n            new_rb: list[Block] = []\n\n            # GH-39338: _replace_coerce can split a block into\n            # single-column blocks, so track the index so we know\n            # where to index into the mask\n            for blk_num, blk in enumerate(rb):\n                if len(rb) == 1:\n                    m = masks[i]\n                else:\n                    mib = masks[i]\n                    assert not isinstance(mib, bool)\n                    m = mib[blk_num : blk_num + 1]\n\n                # error: Argument \"mask\" to \"_replace_coerce\" of \"Block\" has\n                # incompatible type \"Union[ExtensionArray, ndarray[Any, Any], bool]\";\n                # expected \"ndarray[Any, dtype[bool_]]\"\n                result = blk._replace_coerce(\n                    to_replace=src,\n                    value=dest,\n                    mask=m,  # type: ignore[arg-type]\n                    inplace=inplace,\n                    regex=regex,\n                )\n                if convert and blk.is_object and not all(x is None for x in dest_list):\n                    # GH#44498 avoid unwanted cast-back\n                    result = extend_blocks([b.convert(copy=True) for b in result])\n                new_rb.extend(result)\n            rb = new_rb\n        return rb\n```\n[end of pandas/core/internals/blocks.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

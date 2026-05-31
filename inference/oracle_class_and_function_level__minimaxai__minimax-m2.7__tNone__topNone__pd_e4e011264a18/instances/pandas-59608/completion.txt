@@ -1,0 +1,49 @@
+
+
+Looking at the code, when `index=False` is used with MultiIndex DataFrames, unnecessary work is still being done:
+
+1. In `_save_chunk`, `ix` is always computed via `_get_values_for_csv` even when `nlevels=0` (index=False)
+2. In `data_index` property, `remove_unused_levels()` is called for MultiIndex even when index won't be written
+
+The optimization skips index processing when `index=False`.
+
+pandas/io/formats/csvs.py
+[SEARCH]
+    def _save_chunk(self, start_i: int, end_i: int) -> None:
+        # create the data for a chunk
+        slicer = slice(start_i, end_i)
+        df = self.obj.iloc[slicer]
+
+        res = df._get_values_for_csv(**self._number_format)
+        data = list(res._iter_column_arrays())
+
+        ix = self.data_index[slicer]._get_values_for_csv(**self._number_format)
+        libwriters.write_csv_rows(
+            data,
+            ix,
+            self.nlevels,
+            self.cols,
+            self.writer,
+        )
+[/SEARCH]
+[REPLACE]
+    def _save_chunk(self, start_i: int, end_i: int) -> None:
+        # create the data for a chunk
+        slicer = slice(start_i, end_i)
+        df = self.obj.iloc[slicer]
+
+        res = df._get_values_for_csv(**self._number_format)
+        data = list(res._iter_column_arrays())
+
+        if self.index:
+            ix = self.data_index[slicer]._get_values_for_csv(**self._number_format)
+        else:
+            ix = None
+        libwriters.write_csv_rows(
+            data,
+            ix,
+            self.nlevels,
+            self.cols,
+            self.writer,
+        )
+[/REPLACE]

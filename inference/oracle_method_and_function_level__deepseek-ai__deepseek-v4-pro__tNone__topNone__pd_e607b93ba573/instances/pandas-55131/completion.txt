@@ -1,0 +1,151 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _groupby_op(
+        self,
+        *,
+        how: str,
+        has_dropped_na: bool,
+        min_count: int,
+        ngroups: int,
+        ids: npt.NDArray[np.intp],
+        **kwargs,
+    ):
+        if isinstance(self.dtype, StringDtype):
+            return super()._groupby_op(
+                how=how,
+                has_dropped_na=has_dropped_na,
+                min_count=min_count,
+                ngroups=ngroups,
+                ids=ids,
+                **kwargs,
+            )
+
+        masked = self._to_masked()
+
+        result = masked._groupby_op(
+            how=how,
+            has_dropped_na=has_dropped_na,
+            min_count=min_count,
+            ngroups=ngroups,
+            ids=ids,
+            **kwargs,
+        )
+        if isinstance(result, np.ndarray):
+            return result
+        return type(self)._from_sequence(result, copy=False)
+[/SEARCH]
+[REPLACE]
+    def _groupby_op(
+        self,
+        *,
+        how: str,
+        has_dropped_na: bool,
+        min_count: int,
+        ngroups: int,
+        ids: npt.NDArray[np.intp],
+        **kwargs,
+    ):
+        from pandas.core.dtypes.common import is_datetime64_dtype, is_timedelta64_dtype
+
+        if isinstance(self.dtype, StringDtype):
+            return super()._groupby_op(
+                how=how,
+                has_dropped_na=has_dropped_na,
+                min_count=min_count,
+                ngroups=ngroups,
+                ids=ids,
+                **kwargs,
+            )
+
+        if how == "max" and (
+                is_datetime64_dtype(self.dtype) or is_timedelta64_dtype(self.dtype)
+        ):
+            return self._groupby_max(
+                has_dropped_na=has_dropped_na,
+                ngroups=ngroups,
+                ids=ids,
+                min_count=min_count,
+                **kwargs,
+            )
+
+        masked = self._to_masked()
+
+        result = masked._groupby_op(
+            how=how,
+            has_dropped_na=has_dropped_na,
+            min_count=min_count,
+            ngroups=ngroups,
+            ids=ids,
+            **kwargs,
+        )
+        if isinstance(result, np.ndarray):
+            return result
+        return type(self)._from_sequence(result, copy=False)
+
+    def _groupby_max(
+        self,
+        has_dropped_na: bool,
+        ngroups: int,
+        ids: npt.NDArray[np.intp],
+        min_count: int,
+        **kwargs,
+    ):
+        import pyarrow as pa
+        import pyarrow.compute as pc
+
+        pa_array = self._pa_array
+        chunked = isinstance(pa_array, pa.ChunkedArray)
+
+        if chunked:
+            combined = pa_array.combine_chunks()
+        else:
+            combined = pa_array
+
+        chunks = [combined]
+
+        if has_dropped_na:
+            mask = pc.is_null(combined)
+            null_filtered = pc.filter(combined, pc.invert(mask))
+            chunks = [combined, null_filtered]
+
+        table = pa.table({"val": chunks[0]})
+        if len(chunks) > 1:
+            table = table.append_column("val_null_filtered", chunks[1])
+
+        table = table.append_column("ids", pa.array(ids, type=pa.int64()))
+
+        columns_to_agg = ["val"]
+        if len(chunks) > 1:
+            columns_to_agg.append("val_null_filtered")
+
+        agg_exprs = []
+        for col in columns_to_agg:
+            agg_exprs.append((col, "max"))
+
+        result_table = table.group_by("ids").aggregate(agg_exprs)
+
+        # Combine results based on null filtering.
+        col_name = "val_max"
+        if has_dropped_na:
+            result_col = result_table.column("val_null_filtered_max")
+        else:
+            result_col = result_table.column(col_name)
+
+        out_arr = result_col.combine_chunks()
+        if chunked:
+            out_arr = pa.chunked_array([out_arr])
+
+        out_arr = out_arr.cast(combined.type)
+
+        # Ensure the result has exactly ngroups elements.
+        indices = result_table.column("ids").combine_chunks().to_pylist()
+        full_results = [None] * ngroups
+        for i, idx in enumerate(indices):
+            full_results[idx] = out_arr[i]
+
+        result_vals = pa.array(full_results, type=out_arr.type)
+        if chunked:
+            result_vals = pa.chunked_array([result_vals])
+
+        return type(self)._from_sequence(result_vals, copy=False)
+[/REPLACE]

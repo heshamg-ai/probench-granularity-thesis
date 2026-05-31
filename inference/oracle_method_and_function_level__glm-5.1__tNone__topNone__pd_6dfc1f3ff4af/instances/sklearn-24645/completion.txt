@@ -1,0 +1,57 @@
+sklearn/neighbors/_nearest_centroid.py
+[SEARCH]
+        check_is_fitted(self)
+
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        return self.classes_[
+            pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)
+        ]
+[/SEARCH]
+[REPLACE]
+        check_is_fitted(self)
+
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+
+        if self.metric == "euclidean":
+            # Optimized path for Euclidean distance to avoid full pairwise matrix.
+            # ||X - C||^2 = ||X||^2 - 2 * X @ C.T + ||C||^2
+            X_sq_norms = _sqeuclidean_row_norms(X)
+            centroids_sq_norms = _sqeuclidean_row_norms(self.centroids_)
+            distances = X_sq_norms[:, None] - 2 * X @ self.centroids_.T
+            distances += centroids_sq_norms[None, :]
+            # Ensure no negative values due to floating point errors
+            np.maximum(distances, 0, out=distances)
+            np.sqrt(distances, out=distances)
+            return self.classes_[distances.argmin(axis=1)]
+
+        return self.classes_[
+            pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)
+        ]
+[/REPLACE]
+
+sklearn/neighbors/_nearest_centroid.py
+[SEARCH]
+class NearestCentroid(ClassifierMixin, BaseEstimator):
+[/SEARCH]
+[REPLACE]
+def _sqeuclidean_row_norms(X):
+    """Compute the squared Euclidean norm for each row of X."""
+    if sp.issparse(X):
+        return np.asarray(X.multiply(X).sum(axis=1)).ravel()
+    return np.einsum("ij,ij->i", X, X)
+
+
+class NearestCentroid(ClassifierMixin, BaseEstimator):
+[/REPLACE]
+
+sklearn/neighbors/_nearest_centroid.py
+[SEARCH]
+from ..utils.sparsefuncs import min_max_axis
+from ..utils.validation import check_is_fitted
+[/SEARCH]
+[REPLACE]
+from ..utils.sparsefuncs import min_max_axis
+from ..utils.validation import check_is_fitted
+from ..utils import check_array
+import scipy.sparse as sp
+[/REPLACE]

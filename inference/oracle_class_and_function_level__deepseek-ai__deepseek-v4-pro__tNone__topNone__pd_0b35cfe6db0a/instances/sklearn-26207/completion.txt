@@ -1,0 +1,25 @@
+sklearn/linear_model/_base.py
+[SEARCH]
+        X, y, X_offset, y_offset, X_scale = _preprocess_data(
+            X,
+            y,
+            fit_intercept=self.fit_intercept,
+            copy=self.copy_X,
+            sample_weight=sample_weight,
+        )
+
+        # Sample weight can be implemented via a simple rescaling.
+        X, y, sample_weight_sqrt = _rescale_data(X, y, sample_weight)
+[/SEARCH]
+[REPLACE]
+        # Sample weight can be implemented via a simple rescaling.
+        X, y, sample_weight_sqrt = _rescale_data(X, y, sample_weight)
+
+        X, y, X_offset, y_offset, X_scale = _preprocess_data(
+            X,
+            y,
+            fit_intercept=self.fit_intercept,
+            copy=self.copy_X,
+            sample_weight=None,  # sample_weight already applied via rescaling
+        )
+[/REPLACE]

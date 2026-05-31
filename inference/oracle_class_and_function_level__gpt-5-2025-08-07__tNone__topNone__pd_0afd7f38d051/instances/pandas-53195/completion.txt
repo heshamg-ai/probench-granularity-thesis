@@ -1,0 +1,37 @@
+pandas/core/reshape/concat.py
+[SEARCH]
+        for hlevel, level in zip(zipped, levels):
+            to_concat = []
+            for key, index in zip(hlevel, indexes):
+                # Find matching codes, include matching nan values as equal.
+                mask = (isna(level) & isna(key)) | (level == key)
+                if not mask.any():
+                    raise ValueError(f"Key {key} not in level {level}")
+                i = np.nonzero(mask)[0][0]
+
+                to_concat.append(np.repeat(i, len(index)))
+            codes_list.append(np.concatenate(to_concat))
+
+        concat_index = _concat_indexes(indexes)
+[/SEARCH]
+[REPLACE]
+        lengths = np.fromiter((len(idx) for idx in indexes), dtype=np.intp, count=len(indexes))
+        for hlevel, level in zip(zipped, levels):
+            hlevel_index = ensure_index(hlevel)
+            # Vectorized mapping of keys to codes; NaNs handled separately
+            mapped = level.get_indexer(hlevel_index)
+            if (mapped == -1).any():
+                lvl_values = level._values if hasattr(level, "_values") else np.asarray(level)
+                lvl_isna = isna(lvl_values)
+                nan_pos = int(np.nonzero(lvl_isna)[0][0]) if lvl_isna.any() else -1
+                need_fix = np.nonzero(mapped == -1)[0]
+                for pos in need_fix:
+                    key = hlevel_index[pos]
+                    if isna(key) and nan_pos != -1:
+                        mapped[pos] = nan_pos
+                    else:
+                        raise ValueError(f"Key {key} not in level {level}")
+            codes_list.append(np.repeat(mapped.astype(np.intp, copy=False), lengths))
+
+        concat_index = _concat_indexes(indexes)
+[/REPLACE]

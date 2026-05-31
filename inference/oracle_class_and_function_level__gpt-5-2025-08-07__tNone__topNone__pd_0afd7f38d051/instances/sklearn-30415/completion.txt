@@ -1,0 +1,81 @@
+sklearn/mixture/_base.py
+[SEARCH]
+        weighted_log_prob = self._estimate_weighted_log_prob(X)
+        log_prob_norm = logsumexp(weighted_log_prob, axis=1)
+        with np.errstate(under="ignore"):
+            # ignore underflow
+            log_resp = weighted_log_prob - log_prob_norm[:, np.newaxis]
+        return log_prob_norm, log_resp
+[/SEARCH]
+[REPLACE]
+        weighted_log_prob = self._estimate_weighted_log_prob(X)
+        log_prob_norm = logsumexp(weighted_log_prob, axis=1)
+        with np.errstate(under="ignore"):
+            # ignore underflow
+            weighted_log_prob -= log_prob_norm[:, np.newaxis]
+        return log_prob_norm, weighted_log_prob
+[/REPLACE]
+
+sklearn/mixture/_gaussian_mixture.py
+[SEARCH]
+        precisions_chol = np.empty((n_components, n_features, n_features))
+        for k, covariance in enumerate(covariances):
+            try:
+                cov_chol = linalg.cholesky(covariance, lower=True)
+            except linalg.LinAlgError:
+                raise ValueError(estimate_precision_error_message)
+            precisions_chol[k] = linalg.solve_triangular(
+                cov_chol, np.eye(n_features), lower=True
+            ).T
+[/SEARCH]
+[REPLACE]
+        precisions_chol = np.empty((n_components, n_features, n_features))
+        eye = np.eye(n_features)
+        for k, covariance in enumerate(covariances):
+            try:
+                cov_chol = linalg.cholesky(covariance, lower=True)
+            except linalg.LinAlgError:
+                raise ValueError(estimate_precision_error_message)
+            precisions_chol[k] = linalg.solve_triangular(
+                cov_chol, eye, lower=True
+            ).T
+[/REPLACE]
+
+sklearn/mixture/_gaussian_mixture.py
+[SEARCH]
+        precisions_chol = linalg.solve_triangular(
+            cov_chol, np.eye(n_features), lower=True
+        ).T
+[/SEARCH]
+[REPLACE]
+        eye = np.eye(n_features)
+        precisions_chol = linalg.solve_triangular(
+            cov_chol, eye, lower=True
+        ).T
+[/REPLACE]
+
+sklearn/mixture/_gaussian_mixture.py
+[SEARCH]
+        for k, (mu, prec_chol) in enumerate(zip(means, precisions_chol)):
+            y = np.dot(X, prec_chol) - np.dot(mu, prec_chol)
+            log_prob[:, k] = np.sum(np.square(y), axis=1)
+[/SEARCH]
+[REPLACE]
+        for k, (mu, prec_chol) in enumerate(zip(means, precisions_chol)):
+            y = np.dot(X, prec_chol) - np.dot(mu, prec_chol)
+            np.square(y, out=y)
+            log_prob[:, k] = np.sum(y, axis=1)
+[/REPLACE]
+
+sklearn/mixture/_gaussian_mixture.py
+[SEARCH]
+        for k, mu in enumerate(means):
+            y = np.dot(X, precisions_chol) - np.dot(mu, precisions_chol)
+            log_prob[:, k] = np.sum(np.square(y), axis=1)
+[/SEARCH]
+[REPLACE]
+        for k, mu in enumerate(means):
+            y = np.dot(X, precisions_chol) - np.dot(mu, precisions_chol)
+            np.square(y, out=y)
+            log_prob[:, k] = np.sum(y, axis=1)
+[/REPLACE]

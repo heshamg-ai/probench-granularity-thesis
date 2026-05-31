@@ -1,0 +1,45 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+[/SEARCH]
+[REPLACE]
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+
+    def value_counts(
+        self,
+        normalize: bool = False,
+        sort: bool = True,
+        ascending: bool = False,
+        bins=None,
+        dropna: bool = True,
+    ) -> Series:
+        # Delegate to generic implementation when binning is requested
+        if bins is not None:
+            return super().value_counts(
+                normalize=normalize,
+                sort=sort,
+                ascending=ascending,
+                bins=bins,
+                dropna=dropna,
+            )
+
+        # RangeIndex has no NA and all values are unique
+        # Sorting by frequency is a no-op since all counts are equal
+        from pandas import Series as _Series
+
+        n = len(self)
+        name = "proportion" if normalize else "count"
+
+        if n == 0:
+            dtype = np.float64 if normalize else np.int64
+            return _Series(np.array([], dtype=dtype), index=self, name=name)
+
+        if normalize:
+            values = np.full(n, 1.0 / n, dtype=np.float64)
+        else:
+            values = np.ones(n, dtype=np.int64)
+
+        return _Series(values, index=self, name=name)
+[/REPLACE]

@@ -1,0 +1,55 @@
+
+
+pandas/core/methods/selectn.py
+[SEARCH]
+        if len(arr) > 0:
+            kth_val = libalgos.kth_smallest(arr.copy(order="C"), n - 1)
+        else:
+            kth_val = np.nan
+        (ns,) = np.nonzero(arr <= kth_val)
+        inds = ns[arr[ns].argsort(kind="mergesort")]
+
+        if self.keep != "all":
+            inds = inds[:n]
+            findex = nbase
+        else:
+            if len(inds) < nbase <= len(nan_index) + len(inds):
+                findex = len(nan_index) + len(inds)
+            else:
+                findex = len(inds)
+
+        if self.keep == "last":
+            # reverse indices
+            inds = narr - 1 - inds
+
+        return concat([dropped.iloc[inds], nan_index]).iloc[:findex]
+[/SEARCH]
+[REPLACE]
+        if len(arr) > 0:
+            # Use np.argpartition for O(n) partitioning, which is faster
+            # than kth_smallest + argsort for getting top-n elements
+            # We partition at index n-1 (0-indexed), so elements before it
+            # are <= kth value and elements after are >= kth value
+            ndx = np.argpartition(arr, n - 1)
+            # Get indices where element <= kth value (the top-n candidates)
+            kth_val = arr[ndx[n - 1]]
+            (ns,) = np.nonzero(arr <= kth_val)
+            inds = ns[arr[ns].argsort(kind="mergesort")]
+        else:
+            inds = np.array([], dtype=np.intp)
+
+        if self.keep != "all":
+            inds = inds[:n]
+            findex = nbase
+        else:
+            if len(inds) < nbase <= len(nan_index) + len(inds):
+                findex = len(nan_index) + len(inds)
+            else:
+                findex = len(inds)
+
+        if self.keep == "last":
+            # reverse indices
+            inds = narr - 1 - inds
+
+        return concat([dropped.iloc[inds], nan_index]).iloc[:findex]
+[/REPLACE]

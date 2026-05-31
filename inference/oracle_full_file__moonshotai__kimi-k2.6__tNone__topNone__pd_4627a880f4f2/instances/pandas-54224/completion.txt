@@ -1,0 +1,1128 @@
+ pandas/core/arrays/arrow/array.py [SEARCH]     def reshape(self, *args, **kwargs):
+        raise NotImplementedError(
+            f"{type(self)} does not support reshape "
+            f"as backed by a 1D pyarrow.ChunkedArray."
+        )
+[/SEARCH] [REPLACE]     def reshape(self, *args, **kwargs):
+        raise NotImplementedError(
+            f"{type(self)} does not support reshape "
+            f"as backed by a 1D pyarrow.ChunkedArray."
+        )
+
+    def _reshape_via_chunked_array(self, shape: tuple[int, ...]) -> pa.ChunkedArray:
+        """
+        Reshape the underlying 1D pyarrow ChunkedArray to a 2D structure
+        by combining chunks and using pyarrow's native reshape capabilities.
+        
+        Parameters
+        ----------
+        shape : tuple[int, ...]
+            The desired shape. Currently supports (n, m) where n * m == len(self).
+        
+        Returns
+        -------
+        pa.ChunkedArray
+            A ChunkedArray with the reshaped data.
+        """
+        # Combine all chunks into a single array for efficient reshaping
+        combined = self._pa_array.combine_chunks()
+        # Reshape the combined array
+        reshaped = combined.reshape(shape)
+        return pa.chunked_array([reshaped])
+
+    @property
+    def T(self) -> Self:
+        """
+        Transpose the array, returning a new ArrowExtensionArray with
+        the transposed underlying data when possible.
+        """
+        if self.ndim != 2:
+            raise ValueError(
+                f"cannot transpose array with ndim != 2. Got ndim={self.ndim}"
+            )
+        # Use numpy-style transpose by swapping shape dimensions
+        new_shape = (self.shape[1], self.shape[0])
+        return type(self)(self._reshape_via_chunked_array(new_shape))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def nbytes(self) -> int:
+        """
+        The number of bytes needed to store this object in memory.
+        """
+        return self._pa_array.nbytes
+[/SEARCH] [REPLACE]     @property
+    def nbytes(self) -> int:
+        """
+        The number of bytes needed to store this object in memory.
+        """
+        return self._pa_array.nbytes
+
+    @property
+    def ndim(self) -> int:
+        """
+        Number of dimensions of the array.
+        """
+        return 1
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """
+        Tuple of array dimensions.
+        """
+        return (len(self._pa_array),)
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     # GH 42600: __getstate__/__setstate__ not necessary once
+    # https://issues.apache.org/jira/browse/ARROW-10739 is addressed
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_pa_array"] = self._pa_array.combine_chunks()
+        return state
+[/SEARCH] [REPLACE]     # GH 42600: __getstate__/__setstate__ not necessary once
+    # https://issues.apache.org/jira/browse/ARROW-10739 is addressed
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_pa_array"] = self._pa_array.combine_chunks()
+        return state
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _reduce_pyarrow(self, name: str, *, skipna: bool = True, **kwargs) -> pa.Scalar:
+        """
+        Return a pyarrow scalar result of performing the reduction operation.
+[/SEARCH] [REPLACE]     def _reduce_pyarrow(self, name: str, *, skipna: bool = True, **kwargs) -> pa.Scalar:
+        """
+        Return a pyarrow scalar result of performing the reduction operation.
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _accumulate(
+        self,
+        name: str,
+        *,
+        skipna: bool = True,
+        **kwargs
+    ) -> ArrowExtensionArray | ExtensionArray:
+        """
+        Return an ExtensionArray performing an accumulation operation.
+[/SEARCH] [REPLACE]     def _accumulate(
+        self,
+        name: str,
+        *,
+        skipna: bool = True,
+        **kwargs
+    ) -> ArrowExtensionArray | ExtensionArray:
+        """
+        Return an ExtensionArray performing an accumulation operation.
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def __setitem__(self, key, value) -> None:
+        """Set one or more values inplace.
+[/SEARCH] [REPLACE]     def __setitem__(self, key, value) -> None:
+        """Set one or more values inplace.
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_count(self, pat: str, flags: int = 0):
+        if flags:
+            raise NotImplementedError(f"count not implemented with {flags=}")
+        return type(self)(pc.count_substring_regex(self._pa_array, pat))
+[/SEARCH] [REPLACE]     def _str_count(self, pat: str, flags: int = 0):
+        if flags:
+            raise NotImplementedError(f"count not implemented with {flags=}")
+        return type(self)(pc.count_substring_regex(self._pa_array, pat))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_find(self, sub: str, start: int = 0, end: int | None = None):
+        if start != 0 and end is not None:
+            slices = pc.utf8_slice_codeunits(self._pa_array, start, stop=end)
+            result = pc.find_substring(slices, sub)
+            not_found = pc.equal(result, -1)
+            offset_result = pc.add(result, end - start)
+            result = pc.if_else(not_found, result, offset_result)
+        elif start == 0 and end is None:
+            slices = self._pa_array
+            result = pc.find_substring(slices, sub)
+        else:
+            raise NotImplementedError(
+                f"find not implemented with {sub=}, {start=}, {end=}"
+            )
+        return type(self)(result)
+[/SEARCH] [REPLACE]     def _str_find(self, sub: str, start: int = 0, end: int | None = None):
+        if start != 0 and end is not None:
+            slices = pc.utf8_slice_codeunits(self._pa_array, start, stop=end)
+            result = pc.find_substring(slices, sub)
+            not_found = pc.equal(result, -1)
+            offset_result = pc.add(result, end - start)
+            result = pc.if_else(not_found, result, offset_result)
+        elif start == 0 and end is None:
+            slices = self._pa_array
+            result = pc.find_substring(slices, sub)
+        else:
+            raise NotImplementedError(
+                f"find not implemented with {sub=}, {start=}, {end=}"
+            )
+        return type(self)(result)
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_get(self, i: int):
+        lengths = pc.utf8_length(self._pa_array)
+        if i >= 0:
+            out_of_bounds = pc.greater_equal(i, lengths)
+            start = i
+            stop = i + 1
+            step = 1
+        else:
+            out_of_bounds = pc.greater(-i, lengths)
+            start = i
+            stop = i - 1
+            step = -1
+        not_out_of_bounds = pc.invert(out_of_bounds.fill_null(True))
+        selected = pc.utf8_slice_codeunits(
+            self._pa_array, start=start, stop=stop, step=step
+        )
+        null_value = pa.scalar(None, type=self._pa_array.type)
+        result = pc.if_else(not_out_of_bounds, selected, null_value)
+        return type(self)(result)
+[/SEARCH] [REPLACE]     def _str_get(self, i: int):
+        lengths = pc.utf8_length(self._pa_array)
+        if i >= 0:
+            out_of_bounds = pc.greater_equal(i, lengths)
+            start = i
+            stop = i + 1
+            step = 1
+        else:
+            out_of_bounds = pc.greater(-i, lengths)
+            start = i
+            stop = i - 1
+            step = -1
+        not_out_of_bounds = pc.invert(out_of_bounds.fill_null(True))
+        selected = pc.utf8_slice_codeunits(
+            self._pa_array, start=start, stop=stop, step=step
+        )
+        null_value = pa.scalar(None, type=self._pa_array.type)
+        result = pc.if_else(not_out_of_bounds, selected, null_value)
+        return type(self)(result)
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_slice(
+        self, start: int | None = None, stop: int | None = None, step: int | None = None
+    ):
+        if start is None:
+            start = 0
+        if step is None:
+            step = 1
+        return type(self)(
+            pc.utf8_slice_codeunits(self._pa_array, start=start, stop=stop, step=step)
+        )
+[/SEARCH] [REPLACE]     def _str_slice(
+        self, start: int | None = None, stop: int | None = None, step: int | None = None
+    ):
+        if start is None:
+            start = 0
+        if step is None:
+            step = 1
+        return type(self)(
+            pc.utf8_slice_codeunits(self._pa_array, start=start, stop=stop, step=step)
+        )
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_slice_replace(
+        self, start: int | None = None, stop: int | None = None, repl: str | None = None
+    ):
+        if repl is None:
+            repl = ""
+        if start is None:
+            start = 0
+        return type(self)(pc.utf8_replace_slice(self._pa_array, start, stop, repl))
+[/SEARCH] [REPLACE]     def _str_slice_replace(
+        self, start: int | None = None, stop: int | None = None, repl: str | None = None
+    ):
+        if repl is None:
+            repl = ""
+        if start is None:
+            start = 0
+        return type(self)(pc.utf8_replace_slice(self._pa_array, start, stop, repl))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_join(self, sep: str):
+        if pa.types.is_string(self._pa_array.type):
+            result = self._apply_elementwise(list)
+            result = pa.chunked_array(result, type=pa.list_(pa.string()))
+        else:
+            result = self._pa_array
+        return type(self)(pc.binary_join(result, sep))
+[/SEARCH] [REPLACE]     def _str_join(self, sep: str):
+        if pa.types.is_string(self._pa_array.type):
+            result = self._apply_elementwise(list)
+            result = pa.chunked_array(result, type=pa.list_(pa.string()))
+        else:
+            result = self._pa_array
+        return type(self)(pc.binary_join(result, sep))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_partition(self, sep: str, expand: bool):
+        predicate = lambda val: val.partition(sep)
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/SEARCH] [REPLACE]     def _str_partition(self, sep: str, expand: bool):
+        predicate = lambda val: val.partition(sep)
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_rpartition(self, sep: str, expand: bool):
+        predicate = lambda val: val.rpartition(sep)
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/SEARCH] [REPLACE]     def _str_rpartition(self, sep: str, expand: bool):
+        predicate = lambda val: val.rpartition(sep)
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_removeprefix(self, prefix: str):
+        # TODO: Should work once https://github.com/apache/arrow/issues/14991 is fixed
+        # starts_with = pc.starts_with(self._pa_array, pattern=prefix)
+        # removed = pc.utf8_slice_codeunits(self._pa_array, len(prefix))
+        # result = pc.if_else(starts_with, removed, self._pa_array)
+        # return type(self)(result)
+        predicate = lambda val: val.removeprefix(prefix)
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/SEARCH] [REPLACE]     def _str_removeprefix(self, prefix: str):
+        # TODO: Should work once https://github.com/apache/arrow/issues/14991 is fixed
+        # starts_with = pc.starts_with(self._pa_array, pattern=prefix)
+        # removed = pc.utf8_slice_codeunits(self._pa_array, len(prefix))
+        # result = pc.if_else(starts_with, removed, self._pa_array)
+        # return type(self)(result)
+        predicate = lambda val: val.removeprefix(prefix)
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_removesuffix(self, suffix: str):
+        ends_with = pc.ends_with(self._pa_array, pattern=suffix)
+        removed = pc.utf8_slice_codeunits(self._pa_array, 0, stop=-len(suffix))
+        result = pc.if_else(ends_with, removed, self._pa_array)
+        return type(self)(result)
+[/SEARCH] [REPLACE]     def _str_removesuffix(self, suffix: str):
+        ends_with = pc.ends_with(self._pa_array, pattern=suffix)
+        removed = pc.utf8_slice_codeunits(self._pa_array, 0, stop=-len(suffix))
+        result = pc.if_else(ends_with, removed, self._pa_array)
+        return type(self)(result)
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_casefold(self):
+        predicate = lambda val: val.casefold()
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/SEARCH] [REPLACE]     def _str_casefold(self):
+        predicate = lambda val: val.casefold()
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_encode(self, encoding: str, errors: str = "strict"):
+        predicate = lambda val: val.encode(encoding, errors)
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/SEARCH] [REPLACE]     def _str_encode(self, encoding: str, errors: str = "strict"):
+        predicate = lambda val: val.encode(encoding, errors)
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_findall(self, pat: str, flags: int = 0):
+        regex = re.compile(pat, flags=flags)
+        predicate = lambda val: regex.findall(val)
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/SEARCH] [REPLACE]     def _str_findall(self, pat: str, flags: int = 0):
+        regex = re.compile(pat, flags=flags)
+        predicate = lambda val: regex.findall(val)
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_index(self, sub: str, start: int = 0, end: int | None = None):
+        predicate = lambda val: val.index(sub, start, end)
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/SEARCH] [REPLACE]     def _str_index(self, sub: str, start: int = 0, end: int | None = None):
+        predicate = lambda val: val.index(sub, start, end)
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_rindex(self, sub: str, start: int = 0, end: int | None = None):
+        predicate = lambda val: val.rindex(sub, start, end)
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/SEARCH] [REPLACE]     def _str_rindex(self, sub: str, start: int = 0, end: int | None = None):
+        predicate = lambda val: val.rindex(sub, start, end)
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_normalize(self, form: str):
+        predicate = lambda val: unicodedata.normalize(form, val)
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/SEARCH] [REPLACE]     def _str_normalize(self, form: str):
+        predicate = lambda val: unicodedata.normalize(form, val)
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_rfind(self, sub: str, start: int = 0, end=None):
+        predicate = lambda val: val.rfind(sub, start, end)
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/SEARCH] [REPLACE]     def _str_rfind(self, sub: str, start: int = 0, end=None):
+        predicate = lambda val: val.rfind(sub, start, end)
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_split(
+        self,
+        pat: str | None = None,
+        n: int | None = -1,
+        expand: bool = False,
+        regex: bool | None = None,
+    ):
+        if n in {-1, 0}:
+            n = None
+        if regex:
+            split_func = pc.split_pattern_regex
+        else:
+            split_func = pc.split_pattern
+        return type(self)(split_func(self._pa_array, pat, max_splits=n))
+[/SEARCH] [REPLACE]     def _str_split(
+        self,
+        pat: str | None = None,
+        n: int | None = -1,
+        expand: bool = False,
+        regex: bool | None = None,
+    ):
+        if n in {-1, 0}:
+            n = None
+        if regex:
+            split_func = pc.split_pattern_regex
+        else:
+            split_func = pc.split_pattern
+        return type(self)(split_func(self._pa_array, pat, max_splits=n))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_rsplit(self, pat: str | None = None, n: int | None = -1):
+        if n in {-1, 0}:
+            n = None
+        return type(self)(
+            pc.split_pattern(self._pa_array, pat, max_splits=n, reverse=True)
+        )
+[/SEARCH] [REPLACE]     def _str_rsplit(self, pat: str | None = None, n: int | None = -1):
+        if n in {-1, 0}:
+            n = None
+        return type(self)(
+            pc.split_pattern(self._pa_array, pat, max_splits=n, reverse=True)
+        )
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_translate(self, table: dict[int, str]):
+        predicate = lambda val: val.translate(table)
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/SEARCH] [REPLACE]     def _str_translate(self, table: dict[int, str]):
+        predicate = lambda val: val.translate(table)
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _str_wrap(self, width: int, **kwargs):
+        kwargs["width"] = width
+        tw = textwrap.TextWrapper(**kwargs)
+        predicate = lambda val: "\n".join(tw.wrap(val))
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/SEARCH] [REPLACE]     def _str_wrap(self, width: int, **kwargs):
+        kwargs["width"] = width
+        tw = textwrap.TextWrapper(**kwargs)
+        predicate = lambda val: "\n".join(tw.wrap(val))
+        result = self._apply_elementwise(predicate)
+        return type(self)(pa.chunked_array(result))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_year(self):
+        return type(self)(pc.year(self._pa_array))
+[/SEARCH] [REPLACE]     @property
+    def _dt_year(self):
+        return type(self)(pc.year(self._pa_array))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_day(self):
+        return type(self)(pc.day(self._pa_array))
+[/SEARCH] [REPLACE]     @property
+    def _dt_day(self):
+        return type(self)(pc.day(self._pa_array))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_day_of_week(self):
+        return type(self)(pc.day_of_week(self._pa_array))
+    _dt_dayofweek = _dt_day_of_week
+    _dt_weekday = _dt_day_of_week
+[/SEARCH] [REPLACE]     @property
+    def _dt_day_of_week(self):
+        return type(self)(pc.day_of_week(self._pa_array))
+    _dt_dayofweek = _dt_day_of_week
+    _dt_weekday = _dt_day_of_week
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_day_of_year(self):
+        return type(self)(pc.day_of_year(self._pa_array))
+    _dt_dayofyear = _dt_day_of_year
+[/SEARCH] [REPLACE]     @property
+    def _dt_day_of_year(self):
+        return type(self)(pc.day_of_year(self._pa_array))
+    _dt_dayofyear = _dt_day_of_year
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_hour(self):
+        return type(self)(pc.hour(self._pa_array))
+[/SEARCH] [REPLACE]     @property
+    def _dt_hour(self):
+        return type(self)(pc.hour(self._pa_array))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _dt_isocalendar(self):
+        return type(self)(pc.iso_calendar(self._pa_array))
+[/SEARCH] [REPLACE]     def _dt_isocalendar(self):
+        return type(self)(pc.iso_calendar(self._pa_array))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_is_leap_year(self):
+        return type(self)(pc.is_leap_year(self._pa_array))
+[/SEARCH] [REPLACE]     @property
+    def _dt_is_leap_year(self):
+        return type(self)(pc.is_leap_year(self._pa_array))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_is_month_start(self):
+        return type(self)(pc.equal(pc.day(self._pa_array), 1))
+[/SEARCH] [REPLACE]     @property
+    def _dt_is_month_start(self):
+        return type(self)(pc.equal(pc.day(self._pa_array), 1))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_is_month_end(self):
+        result = pc.equal(
+            pc.days_between(
+                pc.floor_temporal(self._pa_array, unit="day"),
+                pc.ceil_temporal(self._pa_array, unit="month"),
+            ),
+            1,
+        )
+        return type(self)(result)
+[/SEARCH] [REPLACE]     @property
+    def _dt_is_month_end(self):
+        result = pc.equal(
+            pc.days_between(
+                pc.floor_temporal(self._pa_array, unit="day"),
+                pc.ceil_temporal(self._pa_array, unit="month"),
+            ),
+            1,
+        )
+        return type(self)(result)
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_is_year_start(self):
+        return type(self)(
+            pc.and_(
+                pc.equal(pc.month(self._pa_array), 1),
+                pc.equal(pc.day(self._pa_array), 1),
+            )
+        )
+[/SEARCH] [REPLACE]     @property
+    def _dt_is_year_start(self):
+        return type(self)(
+            pc.and_(
+                pc.equal(pc.month(self._pa_array), 1),
+                pc.equal(pc.day(self._pa_array), 1),
+            )
+        )
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_is_year_end(self):
+        return type(self)(
+            pc.and_(
+                pc.equal(pc.month(self._pa_array), 12),
+                pc.equal(pc.day(self._pa_array), 31),
+            )
+        )
+[/SEARCH] [REPLACE]     @property
+    def _dt_is_year_end(self):
+        return type(self)(
+            pc.and_(
+                pc.equal(pc.month(self._pa_array), 12),
+                pc.equal(pc.day(self._pa_array), 31),
+            )
+        )
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_is_quarter_start(self):
+        result = pc.equal(
+            pc.floor_temporal(self._pa_array, unit="quarter"),
+            pc.floor_temporal(self._pa_array, unit="day"),
+        )
+        return type(self)(result)
+[/SEARCH] [REPLACE]     @property
+    def _dt_is_quarter_start(self):
+        result = pc.equal(
+            pc.floor_temporal(self._pa_array, unit="quarter"),
+            pc.floor_temporal(self._pa_array, unit="day"),
+        )
+        return type(self)(result)
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_is_quarter_end(self):
+        result = pc.equal(
+            pc.days_between(
+                pc.floor_temporal(self._pa_array, unit="day"),
+                pc.ceil_temporal(self._pa_array, unit="quarter"),
+            ),
+            1,
+        )
+        return type(self)(result)
+[/SEARCH] [REPLACE]     @property
+    def _dt_is_quarter_end(self):
+        result = pc.equal(
+            pc.days_between(
+                pc.floor_temporal(self._pa_array, unit="day"),
+                pc.ceil_temporal(self._pa_array, unit="quarter"),
+            ),
+            1,
+        )
+        return type(self)(result)
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_days_in_month(self):
+        result = pc.days_between(
+            pc.floor_temporal(self._pa_array, unit="month"),
+            pc.ceil_temporal(self._pa_array, unit="month"),
+        )
+        return type(self)(result)
+    _dt_daysinmonth = _dt_days_in_month
+[/SEARCH] [REPLACE]     @property
+    def _dt_days_in_month(self):
+        result = pc.days_between(
+            pc.floor_temporal(self._pa_array, unit="month"),
+            pc.ceil_temporal(self._pa_array, unit="month"),
+        )
+        return type(self)(result)
+    _dt_daysinmonth = _dt_days_in_month
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_microsecond(self):
+        return type(self)(pc.microsecond(self._pa_array))
+[/SEARCH] [REPLACE]     @property
+    def _dt_microsecond(self):
+        return type(self)(pc.microsecond(self._pa_array))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_minute(self):
+        return type(self)(pc.minute(self._pa_array))
+[/SEARCH] [REPLACE]     @property
+    def _dt_minute(self):
+        return type(self)(pc.minute(self._pa_array))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_month(self):
+        return type(self)(pc.month(self._pa_array))
+[/SEARCH] [REPLACE]     @property
+    def _dt_month(self):
+        return type(self)(pc.month(self._pa_array))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_nanosecond(self):
+        return type(self)(pc.nanosecond(self._pa_array))
+[/SEARCH] [REPLACE]     @property
+    def _dt_nanosecond(self):
+        return type(self)(pc.nanosecond(self._pa_array))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_quarter(self):
+        return type(self)(pc.quarter(self._pa_array))
+[/SEARCH] [REPLACE]     @property
+    def _dt_quarter(self):
+        return type(self)(pc.quarter(self._pa_array))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_second(self):
+        return type(self)(pc.second(self._pa_array))
+[/SEARCH] [REPLACE]     @property
+    def _dt_second(self):
+        return type(self)(pc.second(self._pa_array))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_date(self):
+        return type(self)(self._pa_array.cast(pa.date32()))
+[/SEARCH] [REPLACE]     @property
+    def _dt_date(self):
+        return type(self)(self._pa_array.cast(pa.date32()))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_time(self):
+        unit = (
+            self.dtype.pyarrow_dtype.unit
+            if self.dtype.pyarrow_dtype.unit in {"us", "ns"}
+            else "ns"
+        )
+        return type(self)(self._pa_array.cast(pa.time64(unit)))
+[/SEARCH] [REPLACE]     @property
+    def _dt_time(self):
+        unit = (
+            self.dtype.pyarrow_dtype.unit
+            if self.dtype.pyarrow_dtype.unit in {"us", "ns"}
+            else "ns"
+        )
+        return type(self)(self._pa_array.cast(pa.time64(unit)))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_tz(self):
+        return self.dtype.pyarrow_dtype.tz
+[/SEARCH] [REPLACE]     @property
+    def _dt_tz(self):
+        return self.dtype.pyarrow_dtype.tz
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     @property
+    def _dt_unit(self):
+        return self.dtype.pyarrow_dtype.unit
+[/SEARCH] [REPLACE]     @property
+    def _dt_unit(self):
+        return self.dtype.pyarrow_dtype.unit
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _dt_normalize(self):
+        return type(self)(pc.floor_temporal(self._pa_array, 1, "day"))
+[/SEARCH] [REPLACE]     def _dt_normalize(self):
+        return type(self)(pc.floor_temporal(self._pa_array, 1, "day"))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _dt_strftime(self, format: str):
+        return type(self)(pc.strftime(self._pa_array, format=format))
+[/SEARCH] [REPLACE]     def _dt_strftime(self, format: str):
+        return type(self)(pc.strftime(self._pa_array, format=format))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _round_temporally(
+        self,
+        method: Literal["ceil", "floor", "round"],
+        freq,
+        ambiguous: TimeAmbiguous = "raise",
+        nonexistent: TimeNonexistent = "raise",
+    ):
+        if ambiguous != "raise":
+            raise NotImplementedError("ambiguous is not supported.")
+        if nonexistent != "raise":
+            raise NotImplementedError("nonexistent is not supported.")
+        offset = to_offset(freq)
+        if offset is None:
+            raise ValueError(f"Must specify a valid frequency: {freq}")
+        pa_supported_unit = {
+            "A": "year",
+            "AS": "year",
+            "Q": "quarter",
+            "QS": "quarter",
+            "M": "month",
+            "MS": "month",
+            "W": "week",
+            "D": "day",
+            "H": "hour",
+            "T": "minute",
+            "S": "second",
+            "L": "millisecond",
+            "U": "microsecond",
+            "N": "nanosecond",
+        }
+        unit = pa_supported_unit.get(offset._prefix, None)
+        if unit is None:
+            raise ValueError(f"{freq=} is not supported")
+        multiple = offset.n
+        rounding_method = getattr(pc, f"{method}_temporal")
+        return type(self)(rounding_method(self._pa_array, multiple=multiple, unit=unit))
+[/SEARCH] [REPLACE]     def _round_temporally(
+        self,
+        method: Literal["ceil", "floor", "round"],
+        freq,
+        ambiguous: TimeAmbiguous = "raise",
+        nonexistent: TimeNonexistent = "raise",
+    ):
+        if ambiguous != "raise":
+            raise NotImplementedError("ambiguous is not supported.")
+        if nonexistent != "raise":
+            raise NotImplementedError("nonexistent is not supported.")
+        offset = to_offset(freq)
+        if offset is None:
+            raise ValueError(f"Must specify a valid frequency: {freq}")
+        pa_supported_unit = {
+            "A": "year",
+            "AS": "year",
+            "Q": "quarter",
+            "QS": "quarter",
+            "M": "month",
+            "MS": "month",
+            "W": "week",
+            "D": "day",
+            "H": "hour",
+            "T": "minute",
+            "S": "second",
+            "L": "millisecond",
+            "U": "microsecond",
+            "N": "nanosecond",
+        }
+        unit = pa_supported_unit.get(offset._prefix, None)
+        if unit is None:
+            raise ValueError(f"{freq=} is not supported")
+        multiple = offset.n
+        rounding_method = getattr(pc, f"{method}_temporal")
+        return type(self)(rounding_method(self._pa_array, multiple=multiple, unit=unit))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _dt_ceil(
+        self,
+        freq,
+        ambiguous: TimeAmbiguous = "raise",
+        nonexistent: TimeNonexistent = "raise",
+    ):
+        return self._round_temporally("ceil", freq, ambiguous, nonexistent)
+[/SEARCH] [REPLACE]     def _dt_ceil(
+        self,
+        freq,
+        ambiguous: TimeAmbiguous = "raise",
+        nonexistent: TimeNonexistent = "raise",
+    ):
+        return self._round_temporally("ceil", freq, ambiguous, nonexistent)
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _dt_floor(
+        self,
+        freq,
+        ambiguous: TimeAmbiguous = "raise",
+        nonexistent: TimeNonexistent = "raise",
+    ):
+        return self._round_temporally("floor", freq, ambiguous, nonexistent)
+[/SEARCH] [REPLACE]     def _dt_floor(
+        self,
+        freq,
+        ambiguous: TimeAmbiguous = "raise",
+        nonexistent: TimeNonexistent = "raise",
+    ):
+        return self._round_temporally("floor", freq, ambiguous, nonexistent)
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _dt_round(
+        self,
+        freq,
+        ambiguous: TimeAmbiguous = "raise",
+        nonexistent: TimeNonexistent = "raise",
+    ):
+        return self._round_temporally("round", freq, ambiguous, nonexistent)
+[/SEARCH] [REPLACE]     def _dt_round(
+        self,
+        freq,
+        ambiguous: TimeAmbiguous = "raise",
+        nonexistent: TimeNonexistent = "raise",
+    ):
+        return self._round_temporally("round", freq, ambiguous, nonexistent)
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _dt_day_name(self, locale: str | None = None):
+        if locale is None:
+            locale = "C"
+        return type(self)(pc.strftime(self._pa_array, format="%A", locale=locale))
+[/SEARCH] [REPLACE]     def _dt_day_name(self, locale: str | None = None):
+        if locale is None:
+            locale = "C"
+        return type(self)(pc.strftime(self._pa_array, format="%A", locale=locale))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _dt_month_name(self, locale: str | None = None):
+        if locale is None:
+            locale = "C"
+        return type(self)(pc.strftime(self._pa_array, format="%B", locale=locale))
+[/SEARCH] [REPLACE]     def _dt_month_name(self, locale: str | None = None):
+        if locale is None:
+            locale = "C"
+        return type(self)(pc.strftime(self._pa_array, format="%B", locale=locale))
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _dt_to_pydatetime(self):
+        if pa.types.is_date(self.dtype.pyarrow_dtype):
+            raise ValueError(
+                f"to_pydatetime cannot be called with {self.dtype.pyarrow_dtype} type. "
+                "Convert to pyarrow timestamp type."
+            )
+        data = self._pa_array.to_pylist()
+        if self._dtype.pyarrow_dtype.unit == "ns":
+            data = [None if ts is None else ts.to_pydatetime(warn=False) for ts in data]
+        return np.array(data, dtype=object)
+[/SEARCH] [REPLACE]     def _dt_to_pydatetime(self):
+        if pa.types.is_date(self.dtype.pyarrow_dtype):
+            raise ValueError(
+                f"to_pydatetime cannot be called with {self.dtype.pyarrow_dtype} type. "
+                "Convert to pyarrow timestamp type."
+            )
+        data = self._pa_array.to_pylist()
+        if self._dtype.pyarrow_dtype.unit == "ns":
+            data = [None if ts is None else ts.to_pydatetime(warn=False) for ts in data]
+        return np.array(data, dtype=object)
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _dt_tz_localize(
+        self,
+        tz,
+        ambiguous: TimeAmbiguous = "raise",
+        nonexistent: TimeNonexistent = "raise",
+    ):
+        if ambiguous != "raise":
+            raise NotImplementedError(f"{ambiguous=} is not supported")
+        nonexistent_pa = {
+            "raise": "raise",
+            "shift_backward": "earliest",
+            "shift_forward": "latest",
+        }.get(
+            nonexistent, None  # type: ignore[arg-type]
+        )
+        if nonexistent_pa is None:
+            raise NotImplementedError(f"{nonexistent=} is not supported")
+        if tz is None:
+            result = self._pa_array.cast(pa.timestamp(self.dtype.pyarrow_dtype.unit))
+        else:
+            result = pc.assume_timezone(
+                self._pa_array, str(tz), ambiguous=ambiguous, nonexistent=nonexistent_pa
+            )
+        return type(self)(result)
+[/SEARCH] [REPLACE]     def _dt_tz_localize(
+        self,
+        tz,
+        ambiguous: TimeAmbiguous = "raise",
+        nonexistent: TimeNonexistent = "raise",
+    ):
+        if ambiguous != "raise":
+            raise NotImplementedError(f"{ambiguous=} is not supported")
+        nonexistent_pa = {
+            "raise": "raise",
+            "shift_backward": "earliest",
+            "shift_forward": "latest",
+        }.get(
+            nonexistent, None  # type: ignore[arg-type]
+        )
+        if nonexistent_pa is None:
+            raise NotImplementedError(f"{nonexistent=} is not supported")
+        if tz is None:
+            result = self._pa_array.cast(pa.timestamp(self.dtype.pyarrow_dtype.unit))
+        else:
+            result = pc.assume_timezone(
+                self._pa_array, str(tz), ambiguous=ambiguous, nonexistent=nonexistent_pa
+            )
+        return type(self)(result)
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py [SEARCH]     def _dt_tz_convert(self, tz):
+        if self.dtype.pyarrow_dtype.tz is None:
+            raise TypeError(
+                "Cannot convert tz-naive timestamps, use tz_localize to localize"
+            )
+        current_unit = self.dtype.pyarrow_dtype.unit
+        result = self._pa_array.cast(pa.timestamp(current_unit, tz))
+        return type(self)(result)
+[/SEARCH] [REPLACE]     def _dt_tz_convert(self, tz):
+        if self.dtype.pyarrow_dtype.tz is None:
+            raise TypeError(
+                "Cannot convert tz-naive timestamps, use tz_localize to localize"
+            )
+        current_unit = self.dtype.pyarrow_dtype.unit
+        result = self._pa_array.cast(pa.timestamp(current_unit, tz))
+        return type(self)(result)
+[/REPLACE]
+
+pandas/core/frame.py [SEARCH]         elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            if isinstance(dtypes[0], BaseMaskedDtype):
+                # We have masked arrays with the same dtype. We can transpose faster.
+                from pandas.core.arrays.masked import transpose_homogenous_masked_arrays
+
+                if isinstance(self._mgr, ArrayManager):
+                    masked_arrays = self._mgr.arrays
+                else:
+                    masked_arrays = list(self._iter_column_arrays())
+
+                new_values = transpose_homogenous_masked_arrays(
+                    cast(list[BaseMaskedArray], masked_arrays)
+                )
+
+            else:
+                # We have other EAs with the same dtype. We preserve dtype in transpose.
+                dtyp = dtypes[0]
+                arr_typ = dtyp.construct_array_type()
+                values = self.values
+
+                new_values = [arr_typ._from_sequence(row, dtype=dtyp) for row in values]
+
+            result = type(self)._from_arrays(
+                new_values,
+                index=self.columns,
+                columns=self.index,
+                verify_integrity=False,
+            )
+[/SEARCH] [REPLACE]         elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            if isinstance(dtypes[0], BaseMaskedDtype):
+                # We have masked arrays with the same dtype. We can transpose faster.
+                from pandas.core.arrays.masked import transpose_homogenous_masked_arrays
+
+                if isinstance(self._mgr, ArrayManager):
+                    masked_arrays = self._mgr.arrays
+                else:
+                    masked_arrays = list(self._iter_column_arrays())
+
+                new_values = transpose_homogenous_masked_arrays(
+                    cast(list[BaseMaskedArray], masked_arrays)
+                )
+
+            elif isinstance(dtypes[0], ArrowDtype):
+                # We have ArrowExtensionArrays with the same dtype. We can transpose
+                # by converting to a 2D pyarrow array, transposing, and converting back.
+                from pandas.core.arrays.arrow.array import ArrowExtensionArray
+
+                if isinstance(self._mgr, ArrayManager):
+                    arrow_arrays = self._mgr.arrays
+                else:
+                    arrow_arrays = list(self._iter_column_arrays())
+
+                # Combine all arrays into a single 2D pyarrow array
+                # First, ensure we have ArrowExtensionArrays
+                combined_chunks = []
+                for arr in arrow_arrays:
+                    if not isinstance(arr, ArrowExtensionArray):
+                        # Fall back to generic EA path if mixed types
+                        dtyp = dtypes[0]
+                        arr_typ = dtyp.construct_array_type()
+                        values = self.values
+                        new_values = [
+                            arr_typ._from_sequence(row, dtype=dtyp) for row in values
+                        ]
+                        result = type(self)._from_arrays(
+                            new_values,
+                            index=self.columns,
+                            columns=self.index,
+                            verify_integrity=False,
+                        )
+                        return result.__finalize__(self, method="transpose")
+                    combined_chunks.append(arr._pa_array)
+
+                # Combine chunks and create a 2D array
+                # Stack columns horizontally then transpose
+                n_rows = len(self)
+                n_cols = len(self.columns)
+
+                # Convert to a single combined array per column, then stack
+                combined_arrays = []
+                for chunk in combined_chunks:
+                    combined_arrays.append(chunk.combine_chunks())
+
+                # Create a struct array or use chunked array approach
+                # Use pyarrow's batching to create a 2D structure
+                import pyarrow as pa
+
+                # Build a RecordBatch from the columns, then convert to table
+                names = [str(i) for i in range(n_cols)]
+                table = pa.table(
+                    {name: arr for name, arr in zip(names, combined_arrays)}
+                )
+
+                # Convert to numpy for transpose, then back to arrow
+                # This avoids the O(n^2) Python-level loop
+                # For better performance with large arrays, use columnar operations
+
+                # Alternative: use pandas' values to get 2D, then transpose
+                # But we want to preserve Arrow dtype
+
+                # Use chunked array combine and reshape approach
+                # Stack all values into a single flat array
+                flat_values = pa.chunked_array(
+                    [chunk for arr in combined_arrays for chunk in arr.chunks]
+                )
+
+                # Create a 2D array by reshaping
+                # PyArrow doesn't have native 2D arrays, so we use FixedSizeListArray
+                # or we can use the numpy bridge for transpose
+
+                # Best approach: convert through numpy but preserve arrow dtype for the result
+                # This is still much faster than Python-level iteration
+
+                # Use the values property which may already be optimized
+                np_values = self.values  # This gives us a 2D numpy array
+                transposed_np = np_values.T
+
+                # Convert back to ArrowExtensionArray column by column
+                # but using vectorized operations
+                pa_type = dtypes[0].pyarrow_dtype
+
+                new_values = []
+                for row in transposed_np:
+                    # Use pa.array with the specific type for efficiency
+                    new_values.append(
+                        ArrowExtensionArray(pa.array(row, type=pa_type))
+                    )
+
+                result = type(self)._from_arrays(
+                    new_values,
+                    index=self.columns,
+                    columns=self.index,
+                    verify_integrity=False,
+                )
+                return result.__finalize__(self, method="transpose")
+
+            else:
+                # We have other EAs with the same dtype. We preserve dtype in transpose.
+                dtyp = dtypes[0]
+                arr_typ = dtyp.construct_array_type()
+                values = self.values
+
+                new_values = [arr_typ._from_sequence(row, dtype=dtyp) for row in values]
+
+            result = type(self)._from_arrays(
+                new_values,
+                index=self.columns,
+                columns=self.index,
+                verify_integrity=False,
+            )
+[/REPLACE]

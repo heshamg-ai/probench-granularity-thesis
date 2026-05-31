@@ -1,0 +1,71 @@
+pandas/core/methods/selectn.py
+[SEARCH]
+        if self.keep == "last":
+            arr = arr[::-1]
+
+        nbase = n
+        narr = len(arr)
+        n = min(n, narr)
+
+        # arr passed into kth_smallest must be contiguous. We copy
+        # here because kth_smallest will modify its input
+        # avoid OOB access with kth_smallest_c when n <= 0
+        if len(arr) > 0:
+            kth_val = libalgos.kth_smallest(arr.copy(order="C"), n - 1)
+        else:
+            kth_val = np.nan
+        (ns,) = np.nonzero(arr <= kth_val)
+        inds = ns[arr[ns].argsort(kind="mergesort")]
+
+        if self.keep != "all":
+            inds = inds[:n]
+            findex = nbase
+        else:
+            if len(inds) < nbase <= len(nan_index) + len(inds):
+                findex = len(nan_index) + len(inds)
+            else:
+                findex = len(inds)
+
+        if self.keep == "last":
+            # reverse indices
+            inds = narr - 1 - inds
+
+        return concat([dropped.iloc[inds], nan_index]).iloc[:findex]
+[/SEARCH]
+[REPLACE]
+        narr = len(arr)
+        n = min(n, narr)
+
+        # arr passed into kth_smallest must be contiguous. We copy
+        # here because kth_smallest will modify its input
+        # avoid OOB access with kth_smallest_c when n <= 0
+        if narr > 0:
+            kth_val = libalgos.kth_smallest(arr.copy(order="C"), n - 1)
+        else:
+            kth_val = np.nan
+
+        if self.keep != "all":
+            # Fast path: use np.argpartition to find the n smallest indices
+            # without fully sorting the array.
+            (ns,) = np.nonzero(arr <= kth_val)
+            # To handle duplicate values at the boundary (where > n items
+            # might be <= kth_val), we partition and take the first n.
+            if len(ns) > n:
+                ns = ns[np.argpartition(arr[ns], n - 1)[:n]]
+            # Stable sort only the n items to get correct positional order.
+            inds = ns[arr[ns].argsort(kind="mergesort")]
+            findex = self.n
+        else:
+            (ns,) = np.nonzero(arr <= kth_val)
+            inds = ns[arr[ns].argsort(kind="mergesort")]
+            if len(inds) < self.n <= len(nan_index) + len(inds):
+                findex = len(nan_index) + len(inds)
+            else:
+                findex = len(inds)
+
+        if self.keep == "last":
+            # reverse indices
+            inds = narr - 1 - inds
+
+        return concat([dropped.iloc[inds], nan_index]).iloc[:findex]
+[/REPLACE]

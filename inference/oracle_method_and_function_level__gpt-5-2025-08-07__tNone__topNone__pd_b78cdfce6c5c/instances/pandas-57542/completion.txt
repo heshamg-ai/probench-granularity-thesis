@@ -1,0 +1,12 @@
+pandas/core/strings/accessor.py
+[SEARCH]
+    names = {v: k for k, v in regex.groupindex.items()}
+    return [names.get(1 + i, i) for i in range(regex.groups)]
+[/SEARCH]
+[REPLACE]
+    names = {v: k for k, v in regex.groupindex.items()}
+    if not names:
+        # All groups are unnamed; return a range to allow constructing a RangeIndex
+        return range(regex.groups)
+    return [names.get(1 + i, i) for i in range(regex.groups)]
+[/REPLACE]

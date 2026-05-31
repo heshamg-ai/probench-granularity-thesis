@@ -1,0 +1,75 @@
+pandas/core/indexes/base.py
+[SEARCH]
+    def get_indexer_for(self, target) -> npt.NDArray[np.intp]:
+        """
+        Guaranteed return of an indexer even when non-unique.
+
+        This dispatches to get_indexer or get_indexer_non_unique
+        as appropriate.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+            List of indices.
+
+        Examples
+        --------
+        >>> idx = pd.Index([np.nan, 'var1', np.nan])
+        >>> idx.get_indexer_for([np.nan])
+        array([0, 2])
+        """
+        if self._index_as_unique:
+            return self.get_indexer(target)
+        indexer, _ = self.get_indexer_non_unique(target)
+        return indexer
+[/SEARCH]
+[REPLACE]
+    def get_indexer_for(self, target) -> npt.NDArray[np.intp]:
+        """
+        Guaranteed return of an indexer even when non-unique.
+
+        This dispatches to get_indexer or get_indexer_non_unique
+        as appropriate.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+            List of indices.
+
+        Examples
+        --------
+        >>> idx = pd.Index([np.nan, 'var1', np.nan])
+        >>> idx.get_indexer_for([np.nan])
+        array([0, 2])
+        """
+        # Fastpath for Arrow-backed timestamp/duration dtypes when the index is unique.
+        # We compare using the underlying numpy datetime64/timedelta64 int64 view,
+        # avoiding object-dtype engines.
+        if self._index_as_unique:
+            values = self._values
+            if isinstance(values, ArrowExtensionArray):
+                try:
+                    np_self = values.to_numpy()
+                except Exception:
+                    np_self = None
+                if isinstance(np_self, np.ndarray) and np_self.dtype.kind in "mM":
+                    tgt_index = ensure_index(target)
+                    tgt_vals = tgt_index._values
+                    if isinstance(tgt_vals, ArrowExtensionArray):
+                        try:
+                            np_tgt = tgt_vals.to_numpy()
+                        except Exception:
+                            np_tgt = None
+                    else:
+                        # If target is an Index, its _values may be an EA or ndarray.
+                        # Coerce to ndarray for comparison.
+                        np_tgt = np.asarray(tgt_index._values)
+                    if isinstance(np_tgt, np.ndarray) and np_tgt.dtype == np_self.dtype:
+                        # Use int64 views for exact equality matching, including NaT.
+                        indexer = algos.match(np_tgt.view("i8"), np_self.view("i8"))
+                        return ensure_platform_int(indexer)
+
+            return self.get_indexer(target)
+        indexer, _ = self.get_indexer_non_unique(target)
+        return indexer
+[/REPLACE]

@@ -1,0 +1,18 @@
+
+
+Let me search for the `is_unique` method in the pandas codebase to understand its current implementation.
+
+pandas/core/indexes/base.py
+[SEARCH]
+    @cache_readonly
+    def is_unique(self) -> bool:
+        return self._index._engine.is_unique
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def is_unique(self) -> bool:
+        # For RangeIndex, the result is always True since RangeIndex cannot have duplicates
+        if isinstance(self, RangeIndex):
+            return True
+        return self._index._engine.is_unique
+[/REPLACE]

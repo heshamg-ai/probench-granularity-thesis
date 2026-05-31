@@ -1,0 +1,32 @@
+pandas/core/series.py
+[SEARCH]
+        new_index = self.index.union(other.index)
+        this = self.reindex(new_index, copy=False)
+        other = other.reindex(new_index, copy=False)
+        if this.dtype.kind == "M" and other.dtype.kind != "M":
+            other = to_datetime(other)
+
+        return this.where(notna(this), other)
+[/SEARCH]
+[REPLACE]
+        # Fastpath when indexes are identical: avoid union/reindex
+        if self.index.equals(other.index):
+            this = self
+            oth = other
+            if this.dtype.kind == "M" and oth.dtype.kind != "M":
+                oth = to_datetime(oth)
+            return this.where(notna(this), oth)
+
+        new_index = self.index.union(other.index)
+        this = self.reindex(new_index, copy=False)
+
+        # If 'other' has a non-unique index, preserve existing reindexing
+        # behavior (which raises) by explicitly reindexing it.
+        if not other.index.is_unique:
+            other = other.reindex(new_index, copy=False)
+
+        if this.dtype.kind == "M" and other.dtype.kind != "M":
+            other = to_datetime(other)
+
+        return this.where(notna(this), other)
+[/REPLACE]

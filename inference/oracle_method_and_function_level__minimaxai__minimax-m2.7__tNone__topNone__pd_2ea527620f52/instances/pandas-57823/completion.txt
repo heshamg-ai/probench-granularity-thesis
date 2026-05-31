@@ -1,0 +1,36 @@
+
+
+Looking at the provided context, I see `RangeIndex` has a `_minmax` method for `min`/`max` operations but there's no override for `argmin`. The optimization would add an efficient `argmin` implementation that leverages the range structure.
+
+Let me find the appropriate location to add this method in the file.
+
+pandas/core/indexes/range.py
+[SEARCH]
+    def _minmax(self, meth: str) -> int | float:
+        no_steps = len(self) - 1
+        if no_steps == -1:
+            return np.nan
+        elif (meth == "min" and self.step > 0) or (meth == "max" and self.step < 0):
+            return self.start
+
+        return self.start + self.step * no_steps
+[/SEARCH]
+[REPLACE]
+    def _minmax(self, meth: str) -> int | float:
+        no_steps = len(self) - 1
+        if no_steps == -1:
+            return np.nan
+        elif (meth == "min" and self.step > 0) or (meth == "max" and self.step < 0):
+            return self.start
+
+        return self.start + self.step * no_steps
+
+    def argmin(self, skipna: bool = True) -> int:
+        nv.validate_argmin((), locals())
+        self._maybe_logical_disallowed()
+        if len(self) == 0:
+            return -1
+        if self.step > 0:
+            return 0
+        return len(self) - 1
+[/REPLACE]

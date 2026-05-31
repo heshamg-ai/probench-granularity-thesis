@@ -1,0 +1,38 @@
+ sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py [SEARCH]     def predict(self, X):
+        """Predict classes for X.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            The input samples.
+
+        Returns
+        -------
+        y : ndarray, shape (n_samples,)
+            The predicted classes.
+        """
+        # TODO: This could be done in parallel
+        encoded_classes = np.argmax(self.predict_proba(X), axis=1)
+        return self.classes_[encoded_classes] [/SEARCH] [REPLACE]     def predict(self, X):
+        """Predict classes for X.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            The input samples.
+
+        Returns
+        -------
+        y : ndarray, shape (n_samples,)
+            The predicted classes.
+        """
+        # For binary classification, avoid computing full probabilities
+        # and use raw predictions directly for better speed and memory efficiency
+        if self.n_trees_per_iteration_ == 1:
+            raw_predictions = self._raw_predict(X)
+            # raw_predictions is shape (n_samples, 1)
+            encoded_classes = (raw_predictions[:, 0] > 0).astype(int)
+            return self.classes_[encoded_classes]
+        # TODO: This could be done in parallel
+        encoded_classes = np.argmax(self.predict_proba(X), axis=1)
+        return self.classes_[encoded_classes] [/REPLACE]

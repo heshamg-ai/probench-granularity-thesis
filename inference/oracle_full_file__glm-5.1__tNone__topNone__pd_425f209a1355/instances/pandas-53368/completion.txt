@@ -1,0 +1,125 @@
+Looking at the `get_indexer_for` method, I can see it calls `get_indexer` when the index is unique. For PyArrow-backed timestamp/duration dtypes, `get_indexer` will go through `_get_indexer` which calls `target._get_engine_target()`. 
+
+For PyArrow-backed types, `_get_engine_target()` (inherited from `IndexOpsMixin`) returns `self._values` (the `ArrowExtensionArray`), but the engine's `get_indexer` method cannot directly handle `ArrowExtensionArray` objects — it needs the underlying ndarray. This causes expensive conversions or fallbacks.
+
+The optimization is to add a fast path in `get_indexer_for` that, for unique ArrowExtensionArray-backed datetime/timedelta indexes, directly converts the target's engine target to a numpy array before passing it to the engine, similar to how `_get_engine_target` handles other types.
+
+Additionally, `_get_engine_target` already handles `ArrowExtensionArray` with numeric dtypes, but doesn't handle PyArrow timestamp/duration dtypes. Let me add that support.
+
+pandas/core/indexes/base.py
+[SEARCH]
+    def _get_engine_target(self) -> ArrayLike:
+        """
+        Get the ndarray or ExtensionArray that we can pass to the IndexEngine
+        constructor.
+        """
+        vals = self._values
+        if isinstance(vals, StringArray):
+            # GH#45652 much more performant than ExtensionEngine
+            return vals._ndarray
+        if (
+            type(self) is Index
+            and isinstance(self._values, ExtensionArray)
+            and not isinstance(self._values, BaseMaskedArray)
+            and not (
+                isinstance(self._values, ArrowExtensionArray)
+                and is_numeric_dtype(self.dtype)
+                # Exclude decimal
+                and self.dtype.kind != "O"
+            )
+        ):
+            # TODO(ExtensionIndex): remove special-case, just use self._values
+            return self._values.astype(object)
+        return vals
+[/SEARCH]
+[REPLACE]
+    def _get_engine_target(self) -> ArrayLike:
+        """
+        Get the ndarray or ExtensionArray that we can pass to the IndexEngine
+        constructor.
+        """
+        vals = self._values
+        if isinstance(vals, StringArray):
+            # GH#45652 much more performant than ExtensionEngine
+            return vals._ndarray
+        if (
+            type(self) is Index
+            and isinstance(self._values, ExtensionArray)
+            and not isinstance(self._values, BaseMaskedArray)
+            and not (
+                isinstance(self._values, ArrowExtensionArray)
+                and (
+                    is_numeric_dtype(self.dtype)
+                    # Exclude decimal
+                    and self.dtype.kind != "O"
+                    or needs_i8_conversion(self.dtype)
+                )
+            )
+        ):
+            # TODO(ExtensionIndex): remove special-case, just use self._values
+            return self._values.astype(object)
+        return vals
+[/REPLACE]
+
+pandas/core/indexes/base.py
+[SEARCH]
+    @final
+    def get_indexer_for(self, target) -> npt.NDArray[np.intp]:
+        """
+        Guaranteed return of an indexer even when non-unique.
+
+        This dispatches to get_indexer or get_indexer_non_unique
+        as appropriate.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+            List of indices.
+
+        Examples
+        --------
+        >>> idx = pd.Index([np.nan, 'var1', np.nan])
+        >>> idx.get_indexer_for([np.nan])
+        array([0, 2])
+        """
+        if self._index_as_unique:
+            return self.get_indexer(target)
+        indexer, _ = self.get_indexer_non_unique(target)
+        return indexer
+[/SEARCH]
+[REPLACE]
+    @final
+    def get_indexer_for(self, target) -> npt.NDArray[np.intp]:
+        """
+        Guaranteed return of an indexer even when non-unique.
+
+        This dispatches to get_indexer or get_indexer_non_unique
+        as appropriate.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+            List of indices.
+
+        Examples
+        --------
+        >>> idx = pd.Index([np.nan, 'var1', np.nan])
+        >>> idx.get_indexer_for([np.nan])
+        array([0, 2])
+        """
+        if self._index_as_unique:
+            # Fast path for PyArrow-backed timestamp/duration dtypes:
+            # Avoid expensive dispatch through get_indexer by directly
+            # converting the engine target to ndarray and calling the engine.
+            if isinstance(self._values, ArrowExtensionArray) and needs_i8_conversion(
+                self.dtype
+            ):
+                target_idx = self._maybe_cast_listlike_indexer(target)
+                tgt_values = target_idx._get_engine_target()
+                if isinstance(tgt_values, ArrowExtensionArray):
+                    tgt_values = tgt_values.to_numpy(dtype=object)
+                return ensure_platform_int(self._engine.get_indexer(tgt_values))
+            return self.get_indexer(target)
+        indexer, _ = self.get_indexer_non_unique(target)
+        return indexer
+[/REPLACE]

@@ -1,0 +1,102 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+    def intersection(
+        self, other: MultiIndex, sort: bool | None = None
+    ) -> MultiIndex:
+        self._validate_sort_keyword(sort)
+        self._assert_can_do_setop(other)
+        result = super().intersection(other, sort=sort)
+        return result
+[/SEARCH]
+[REPLACE]
+    def _recode_for_new_levels(self, other: MultiIndex):
+        self_codes = self.codes
+        other_codes = other.codes
+        nlevels = self.nlevels
+        new_self_codes = list(self_codes)
+        new_other_codes = list(other_codes)
+        new_levels = list(self.levels)
+
+        for i in range(nlevels):
+            if not self.levels[i].is_(other.levels[i]):
+                if self.levels[i].equals(other.levels[i]):
+                    new_other_codes[i] = recode_for_categories(
+                        other_codes[i], other.levels[i], self.levels[i]
+                    )
+                else:
+                    combined = self.levels[i].union(other.levels[i])
+                    new_self_codes[i] = recode_for_categories(
+                        self_codes[i], self.levels[i], combined
+                    )
+                    new_other_codes[i] = recode_for_categories(
+                        other_codes[i], other.levels[i], combined
+                    )
+                    new_levels[i] = combined
+
+        return new_self_codes, new_other_codes, new_levels
+
+    def intersection(
+        self, other: MultiIndex, sort: bool | None = None
+    ) -> MultiIndex:
+        self._validate_sort_keyword(sort)
+        self._assert_can_do_setop(other)
+
+        if self._is_unique and other._is_unique and self.nlevels == other.nlevels:
+            try:
+                lidx, ridx = self._left_indexer_unique(other)
+            except (TypeError, IncompatibleFrequency):
+                pass
+            else:
+                indexer = lidx[ridx != -1]
+                result = self._preserve_names(
+                    self[indexer], names=self.names, name=self.names
+                )
+                if sort is None:
+                    return result.sort()
+                return result
+
+        if self.nlevels == other.nlevels:
+            try:
+                self_codes, other_codes, new_levels = self._recode_for_new_levels(
+                    other
+                )
+            except (TypeError, IncompatibleFrequency):
+                pass
+            else:
+                self_values = lib.fast_zip([np.asarray(c) for c in self_codes])
+                other_values = lib.fast_zip([np.asarray(c) for c in other_codes])
+                indexer, _ = setops.outer_join_index_array(
+                    self_values, other_values, sort=sort, return_indexers=False
+                )
+                if isinstance(indexer, np.ndarray):
+                    indexer = indexer.astype("intp", copy=False)
+
+                result = self._preserve_names(
+                    self[indexer], names=self.names, name=self.names
+                )
+                if len(result.codes) != nlevels:
+                    new_codes = [result.codes[i] for i in range(nlevels)]
+                else:
+                    new_codes = list(result.codes)
+
+                for i in range(nlevels):
+                    if not self.levels[i].is_(other.levels[i]):
+                        new_codes[i] = self_codes[i][indexer]
+
+                if sort is None:
+                    sorter = result.argsort()
+                    new_codes = [c[sorter] for c in new_codes]
+                    new_levels_sorted = new_levels
+                else:
+                    new_levels_sorted = new_levels
+
+                return MultiIndex(
+                    levels=new_levels_sorted,
+                    codes=new_codes,
+                    names=self.names,
+                    verify_integrity=False,
+                )
+
+        result = super().intersection(other, sort=sort)
+        return result
+[/REPLACE]

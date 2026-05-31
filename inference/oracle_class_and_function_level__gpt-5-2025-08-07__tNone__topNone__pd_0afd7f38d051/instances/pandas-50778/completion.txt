@@ -1,0 +1,43 @@
+pandas/core/internals/blocks.py
+[SEARCH]
+        src_len = len(pairs) - 1
+[/SEARCH]
+[REPLACE]
+        src_len = len(pairs) - 1
+
+        # Fast path: for non-regex large replacements, exit early if no keys present
+        if not regex and len(pairs) >= 32:
+            try:
+                arr = self.values
+                if isinstance(arr, np.ndarray):
+                    flat = arr.ravel()
+                    # Determine if any key is NA
+                    na_key = False
+                    for k, _ in pairs:
+                        if isna(k):
+                            na_key = True
+                            break
+                    # Build set of non-NA keys
+                    if not na_key:
+                        key_set = {k for k, _ in pairs}
+                    else:
+                        key_set = {k for k, _ in pairs if not isna(k)}
+                    found = False
+                    if key_set or na_key:
+                        for v in flat:
+                            if isna(v):
+                                if na_key:
+                                    found = True
+                                    break
+                            elif v in key_set:
+                                found = True
+                                break
+                    if not found:
+                        if using_cow and inplace:
+                            return [self.copy()]
+                        else:
+                            return [self] if inplace else [self.copy()]
+            except Exception:
+                # Fallback to the standard path on any unexpected issue
+                pass
+[/REPLACE]

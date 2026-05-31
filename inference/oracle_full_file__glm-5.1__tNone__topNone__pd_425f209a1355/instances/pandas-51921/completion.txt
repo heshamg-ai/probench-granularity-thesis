@@ -1,0 +1,62 @@
+pandas/core/algorithms.py
+[SEARCH]
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+    return ndtype
+[/SEARCH]
+[REPLACE]
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        inferred = lib.infer_dtype(values, skipna=False)
+        if inferred == "string":
+            ndtype = "string"
+        elif inferred not in (
+            "mixed",
+            "mixed-integer",
+            "mixed-integer-float",
+        ):
+            # For object arrays with non-string, non-mixed types (e.g. all ints),
+            # avoid the expensive PyObjectHashTable by using a type-specific
+            # integer or float hashtable on the inferred values.
+            if inferred in (
+                "integer",
+                "signed integer",
+                "unsigned integer",
+            ):
+                ndtype = "int64"
+            elif inferred in ("floating", "mixed-integer-float"):
+                ndtype = "float64"
+    return ndtype
+[/REPLACE]

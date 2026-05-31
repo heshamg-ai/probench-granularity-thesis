@@ -1,0 +1,10 @@
+{
+  "scenario_id": "xarray-4742",
+  "repo": "pydata/xarray",
+  "seconds": 10.993947744369507,
+  "provider": "nvidia_nim",
+  "model": "moonshotai/kimi-k2.6",
+  "temperature": null,
+  "top_p": null,
+  "prompt_dataset_path": "LLMs thesis/dataset/dataset__gran=full_file__tok=kimik2.6__max=256000__imports=False__globals=False__sigs=False__changes=False.json"
+}

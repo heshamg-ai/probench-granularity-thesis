@@ -1,0 +1,76 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+        if self.nlevels != other.nlevels:
+            return False
+
+        for i in range(self.nlevels):
+[/SEARCH]
+[REPLACE]
+        if self.nlevels != other.nlevels:
+            return False
+
+        # Fast path: if codes are exactly equal for all levels, only need to
+        # verify that the level values for the used codes map to equal values.
+        all_codes_equal = True
+        for i in range(self.nlevels):
+            if not np.array_equal(self.codes[i], other.codes[i]):
+                all_codes_equal = False
+                break
+        if all_codes_equal:
+            for i in range(self.nlevels):
+                codes_i = self.codes[i]
+                # consider only non-missing positions
+                arr = np.asarray(codes_i)
+                mask = arr != -1
+                if not mask.any():
+                    continue
+                u_codes = np.unique(arr[mask])
+
+                self_vals = self.levels[i]._values.take(u_codes)
+                other_vals = other.levels[i]._values.take(u_codes)
+
+                if not isinstance(self_vals, np.ndarray):
+                    if not self_vals.equals(other_vals):
+                        return False
+                elif not isinstance(other_vals, np.ndarray):
+                    if not other_vals.equals(self_vals):
+                        return False
+                else:
+                    if not array_equivalent(self_vals, other_vals):
+                        return False
+            return True
+
+        for i in range(self.nlevels):
+[/REPLACE]
+
+pandas/core/indexes/multi.py
+[SEARCH]
+            self_codes = self_codes[~self_mask]
+            self_values = self.levels[i]._values.take(self_codes)
+
+            other_codes = other_codes[~other_mask]
+            other_values = other.levels[i]._values.take(other_codes)
+
+            # since we use NaT both datetime64 and timedelta64 we can have a
+            # situation where a level is typed say timedelta64 in self (IOW it
+            # has other values than NaT) but types datetime64 in other (where
+            # its all NaT) but these are equivalent
+            if len(self_values) == 0 and len(other_values) == 0:
+                continue
+[/SEARCH]
+[REPLACE]
+            if self_mask.all():
+                continue
+            self_codes = self_codes[~self_mask]
+            self_values = self.levels[i]._values.take(self_codes)
+
+            other_codes = other_codes[~other_mask]
+            other_values = other.levels[i]._values.take(other_codes)
+
+            # since we use NaT both datetime64 and timedelta64 we can have a
+            # situation where a level is typed say timedelta64 in self (IOW it
+            # has other values than NaT) but types datetime64 in other (where
+            # its all NaT) but these are equivalent
+            if len(self_values) == 0 and len(other_values) == 0:
+                continue
+[/REPLACE]

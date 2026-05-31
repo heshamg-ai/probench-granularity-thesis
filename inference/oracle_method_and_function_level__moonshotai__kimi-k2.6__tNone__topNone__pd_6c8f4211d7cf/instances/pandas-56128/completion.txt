@@ -1,0 +1,56 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        # GH 35584. Sort missing values according to na_position kwarg
+        # ignore na_position for MultiIndex
+        if not isinstance(self, ABCMultiIndex):
+            _as = nargsort(
+                items=self, ascending=ascending, na_position=na_position, key=key
+            )
+        else:
+            idx = cast(Index, ensure_key_mapped(self, key))
+            _as = idx.argsort(na_position=na_position)
+            if not ascending:
+                _as = _as[::-1]
+
+        sorted_index = self.take(_as)
+
+        if return_indexer:
+            return sorted_index, _as
+        else:
+            return sorted_index
+[/SEARCH]
+[REPLACE]
+        # GH 35584. Sort missing values according to na_position kwarg
+        # ignore na_position for MultiIndex
+        if not isinstance(self, ABCMultiIndex):
+            if key is None and (
+                ascending == (self.is_monotonic_increasing and not self.has_duplicates)
+                or (
+                    not ascending
+                    and self.is_monotonic_decreasing
+                    and not self.has_duplicates
+                    and not na_position == "first"
+                    and not self.hasnans
+                )
+            ):
+                if return_indexer:
+                    return self.copy(), np.arange(len(self), dtype=np.intp)
+                else:
+                    return self.copy()
+
+            _as = nargsort(
+                items=self, ascending=ascending, na_position=na_position, key=key
+            )
+        else:
+            idx = cast(Index, ensure_key_mapped(self, key))
+            _as = idx.argsort(na_position=na_position)
+            if not ascending:
+                _as = _as[::-1]
+
+        sorted_index = self.take(_as)
+
+        if return_indexer:
+            return sorted_index, _as
+        else:
+            return sorted_index
+[/REPLACE]

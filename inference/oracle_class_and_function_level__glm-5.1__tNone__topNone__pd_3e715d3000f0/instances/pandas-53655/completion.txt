@@ -1,0 +1,42 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        result_data = []
+        for lst in split.to_pylist():
+            if lst is None:
+                result_data.append([False] * len(uniques_sorted))
+            else:
+                res = pc.is_in(uniques_sorted, pa.array(set(lst)))
+                result_data.append(res.to_pylist())
+        result = type(self)(pa.array(result_data))
+        return result, uniques_sorted.to_pylist()
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        num_uniques = len(uniques_sorted)
+        if num_uniques == 0:
+            num_rows = len(split)
+            result_data = np.empty((num_rows, 0), dtype=bool)
+        else:
+            list_type = pa.list_(pa.bool_())
+            list_arrays = []
+            for chunk in split.iterchunks():
+                present = pc.is_in(
+                    uniques_sorted,
+                    value_set=pc.list_flatten(
+                        chunk.cast(list_type, safe=False)
+                    ),
+                )
+                list_arrays.append(present)
+            result_data = pa.concat_tables(
+                [pa.table([a], names=["dummies"]) for a in list_arrays],
+            ).column("dummies").combine_chunks().to_numpy()
+        result = type(self)(pa.array(result_data))
+        return result, uniques_sorted.to_pylist()
+[/REPLACE]

@@ -1,0 +1,17 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    @doc(Index.__iter__)
+    def __iter__(self) -> Iterator[int]:
+        yield from self._range
+[/SEARCH]
+[REPLACE]
+    @doc(Index.__iter__)
+    def __iter__(self) -> Iterator[int]:
+        yield from self._range
+
+    @doc(Index.round)
+    def round(self, decimals: int = 0) -> Self:
+        # RangeIndex contains only integer values,
+        # so rounding is always a no-op.
+        return self
+[/REPLACE]

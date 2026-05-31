@@ -1,0 +1,54 @@
+
+
+pandas/core/methods/selectn.py
+[SEARCH]
+        if len(arr) > 0:
+            kth_val = libalgos.kth_smallest(arr.copy(order="C"), n - 1)
+        else:
+            kth_val = np.nan
+        (ns,) = np.nonzero(arr <= kth_val)
+        inds = ns[arr[ns].argsort(kind="mergesort")]
+
+        if self.keep != "all":
+            inds = inds[:n]
+            findex = nbase
+        else:
+            if len(inds) < nbase <= len(nan_index) + len(inds):
+                findex = len(nan_index) + len(inds)
+            else:
+                findex = len(inds)
+
+        if self.keep == "last":
+            # reverse indices
+            inds = narr - 1 - inds
+[/SEARCH]
+[REPLACE]
+        if len(arr) > 0:
+            # Use np.argpartition instead of kth_smallest + argsort
+            # np.argpartition is O(n) vs O(n log n) for full sort
+            np.argpartition(arr, n - 1)
+            kth_val = arr[n - 1]
+
+            # After partition, all elements in arr[:n] are <= kth_val
+            # If there are no duplicates at boundary, inds = range(n)
+            if np.all(arr[:n] <= kth_val):
+                inds = np.arange(n)
+            else:
+                (inds,) = np.nonzero(arr <= kth_val)
+        else:
+            kth_val = np.nan
+            inds = np.array([], dtype=np.intp)
+
+        if self.keep != "all":
+            inds = inds[:n]
+            findex = nbase
+        else:
+            if len(inds) < nbase <= len(nan_index) + len(inds):
+                findex = len(nan_index) + len(inds)
+            else:
+                findex = len(inds)
+
+        if self.keep == "last":
+            # reverse indices
+            inds = narr - 1 - inds
+[/REPLACE]

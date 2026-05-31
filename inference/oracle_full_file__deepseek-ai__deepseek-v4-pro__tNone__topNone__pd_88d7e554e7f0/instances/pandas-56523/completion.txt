@@ -1,0 +1,251 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+    def _convert_values_for_libjoin(
+        self, values: AnyArrayLike, side: str
+    ) -> np.ndarray:
+        # we require sortedness and non-null values in the join keys
+        if not Index(values).is_monotonic_increasing:
+            if isna(values).any():
+                raise ValueError(f"Merge keys contain null values on {side} side")
+            raise ValueError(f"{side} keys must be sorted")
+
+        if isinstance(values, ArrowExtensionArray):
+            values = values._maybe_convert_datelike_array()
+
+        if needs_i8_conversion(values.dtype):
+            values = values.view("i8")
+
+        elif isinstance(values, BaseMaskedArray):
+            # we've verified above that no nulls exist
+            values = values._data
+        elif isinstance(values, ExtensionArray):
+            values = values.to_numpy()
+
+        # error: Incompatible return value type (got "Union[ExtensionArray,
+        # Any, ndarray[Any, Any], ndarray[Any, dtype[Any]], Index, Series]",
+        # expected "ndarray[Any, Any]")
+        return values  # type: ignore[return-value]
+[/SEARCH]
+[REPLACE]
+    def _convert_values_for_libjoin(
+        self, values: AnyArrayLike, side: str
+    ) -> np.ndarray:
+        # we require sortedness and non-null values in the join keys
+        if not Index(values).is_monotonic_increasing:
+            if isna(values).any():
+                raise ValueError(f"Merge keys contain null values on {side} side")
+            raise ValueError(f"{side} keys must be sorted")
+
+        if isinstance(values, ArrowExtensionArray):
+            values = values._maybe_convert_datelike_array()
+
+        if needs_i8_conversion(values.dtype):
+            values = values.view("i8")
+        elif isinstance(values, BaseMaskedArray):
+            # we've verified above that no nulls exist
+            values = values._data
+        elif isinstance(values, ExtensionArray):
+            values = values.to_numpy()
+
+        return values
+[/REPLACE]
+
+pandas/core/reshape/merge.py
+[SEARCH]
+    def _get_join_indexers(self) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+        """return the join indexers"""
+
+        # values to compare
+        left_values = (
+            self.left.index._values if self.left_index else self.left_join_keys[-1]
+        )
+        right_values = (
+            self.right.index._values if self.right_index else self.right_join_keys[-1]
+        )
+
+        # _maybe_require_matching_dtypes already checked for dtype matching
+        assert left_values.dtype == right_values.dtype
+
+        tolerance = self.tolerance
+        if tolerance is not None:
+            # TODO: can we reuse a tolerance-conversion function from
+            #  e.g. TimedeltaIndex?
+            if needs_i8_conversion(left_values.dtype) or (
+                isinstance(left_values, ArrowExtensionArray)
+                and left_values.dtype.kind in "mM"
+            ):
+                tolerance = Timedelta(tolerance)
+                # TODO: we have no test cases with PeriodDtype here; probably
+                #  need to adjust tolerance for that case.
+                if left_values.dtype.kind in "mM":
+                    # Make sure the i8 representation for tolerance
+                    #  matches that for left_values/right_values.
+                    if isinstance(left_values, ArrowExtensionArray):
+                        unit = left_values.dtype.pyarrow_dtype.unit
+                    else:
+                        unit = ensure_wrapped_if_datetimelike(left_values).unit
+                    tolerance = tolerance.as_unit(unit)
+
+                tolerance = tolerance._value
+
+        # initial type conversion as needed
+        left_values = self._convert_values_for_libjoin(left_values, "left")
+        right_values = self._convert_values_for_libjoin(right_values, "right")
+
+        # a "by" parameter requires special handling
+        if self.left_by is not None:
+            # remove 'on' parameter from values if one existed
+            if self.left_index and self.right_index:
+                left_join_keys = self.left_join_keys
+                right_join_keys = self.right_join_keys
+            else:
+                left_join_keys = self.left_join_keys[0:-1]
+                right_join_keys = self.right_join_keys[0:-1]
+
+            mapped = [
+                _factorize_keys(
+                    left_join_keys[n],
+                    right_join_keys[n],
+                    sort=False,
+                )
+                for n in range(len(left_join_keys))
+            ]
+
+            if len(left_join_keys) == 1:
+                left_by_values = mapped[0][0]
+                right_by_values = mapped[0][1]
+            else:
+                arrs = [np.concatenate(m[:2]) for m in mapped]
+                shape = tuple(m[2] for m in mapped)
+                group_index = get_group_index(
+                    arrs, shape=shape, sort=False, xnull=False
+                )
+                left_len = len(left_join_keys[0])
+                left_by_values = group_index[:left_len]
+                right_by_values = group_index[left_len:]
+
+            left_by_values = ensure_int64(left_by_values)
+            right_by_values = ensure_int64(right_by_values)
+
+            # choose appropriate function by type
+            func = _asof_by_function(self.direction)
+            return func(
+                left_values,
+                right_values,
+                left_by_values,
+                right_by_values,
+                self.allow_exact_matches,
+                tolerance,
+            )
+        else:
+            # choose appropriate function by type
+            func = _asof_by_function(self.direction)
+            return func(
+                left_values,
+                right_values,
+                None,
+                None,
+                self.allow_exact_matches,
+                tolerance,
+                False,
+            )
+[/SEARCH]
+[REPLACE]
+    def _get_join_indexers(self) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+        """return the join indexers"""
+
+        # values to compare
+        left_values = (
+            self.left.index._values if self.left_index else self.left_join_keys[-1]
+        )
+        right_values = (
+            self.right.index._values if self.right_index else self.right_join_keys[-1]
+        )
+
+        # _maybe_require_matching_dtypes already checked for dtype matching
+        assert left_values.dtype == right_values.dtype
+
+        tolerance = self.tolerance
+        if tolerance is not None:
+            # TODO: can we reuse a tolerance-conversion function from
+            #  e.g. TimedeltaIndex?
+            if needs_i8_conversion(left_values.dtype) or (
+                isinstance(left_values, ArrowExtensionArray)
+                and left_values.dtype.kind in "mM"
+            ):
+                tolerance = Timedelta(tolerance)
+                # TODO: we have no test cases with PeriodDtype here; probably
+                #  need to adjust tolerance for that case.
+                if left_values.dtype.kind in "mM":
+                    # Make sure the i8 representation for tolerance
+                    #  matches that for left_values/right_values.
+                    if isinstance(left_values, ArrowExtensionArray):
+                        unit = left_values.dtype.pyarrow_dtype.unit
+                    else:
+                        unit = ensure_wrapped_if_datetimelike(left_values).unit
+                    tolerance = tolerance.as_unit(unit)
+
+                tolerance = tolerance._value
+
+        # initial type conversion as needed
+        left_values = self._convert_values_for_libjoin(left_values, "left")
+        right_values = self._convert_values_for_libjoin(right_values, "right")
+
+        # a "by" parameter requires special handling
+        if self.left_by is not None:
+            # remove 'on' parameter from values if one existed
+            if self.left_index and self.right_index:
+                left_join_keys = self.left_join_keys
+                right_join_keys = self.right_join_keys
+            else:
+                left_join_keys = self.left_join_keys[0:-1]
+                right_join_keys = self.right_join_keys[0:-1]
+
+            mapped = [
+                _factorize_keys(
+                    left_join_keys[n],
+                    right_join_keys[n],
+                    sort=False,
+                )
+                for n in range(len(left_join_keys))
+            ]
+
+            if len(left_join_keys) == 1:
+                left_by_values = mapped[0][0]
+                right_by_values = mapped[0][1]
+            else:
+                arrs = [np.concatenate(m[:2]) for m in mapped]
+                shape = tuple(m[2] for m in mapped)
+                group_index = get_group_index(
+                    arrs, shape=shape, sort=False, xnull=False
+                )
+                left_len = len(left_join_keys[0])
+                left_by_values = group_index[:left_len]
+                right_by_values = group_index[left_len:]
+
+            left_by_values = ensure_int64(left_by_values)
+            right_by_values = ensure_int64(right_by_values)
+
+            # choose appropriate function by type
+            func = _asof_by_function(self.direction)
+            return func(
+                left_values,
+                right_values,
+                left_by_values,
+                right_by_values,
+                self.allow_exact_matches,
+                tolerance,
+            )
+        else:
+            # choose appropriate function by type
+            func = _asof_by_function(self.direction)
+            return func(
+                left_values,
+                right_values,
+                None,
+                None,
+                self.allow_exact_matches,
+                tolerance,
+                False,
+            )
+[/REPLACE]

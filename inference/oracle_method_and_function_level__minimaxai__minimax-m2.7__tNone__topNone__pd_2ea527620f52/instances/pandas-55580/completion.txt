@@ -1,0 +1,59 @@
+
+
+Looking at the code, the optimization opportunity is in the `flip` function and its usage when handling multiple `by` columns. The current implementation creates Python tuples via `list(zip(*xs))` which is slow. I'll optimize this by using structured arrays when all columns have the same dtype, which is more efficient.
+
+Let me create the optimization:
+
+pandas/core/reshape/merge.py
+[SEARCH]
+            # get tuple representation of values if more than one
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+            else:
+                # We get here with non-ndarrays in test_merge_by_col_tz_aware
+                #  and test_merge_groupby_multiple_column_with_categorical_column
+                lbv = flip(left_by_values)
+                rbv = flip(right_by_values)
+                lbv = ensure_object(lbv)
+                rbv = ensure_object(rbv)
+[/SEARCH]
+[REPLACE]
+            # get tuple representation of values if more than one
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+            else:
+                # We get here with non-ndarrays in test_merge_by_col_tz_aware
+                #  and test_merge_groupby_multiple_column_with_categorical_column
+                # Optimized path: use structured array when all dtypes match
+                # to avoid expensive Python tuple creation
+                left_by_dtypes = set()
+                right_by_dtypes = set()
+                for lv, rv in zip(left_by_values, right_by_values):
+                    left_by_dtypes.add(lv.dtype)
+                    right_by_dtypes.add(rv.dtype)
+
+                if left_by_dtypes == right_by_dtypes and len(left_by_dtypes) == 1:
+                    # Fast path: all columns have same dtype, use structured array
+                    dtype = list(left_by_dtypes)[0]
+                    labels = list(string.ascii_lowercase[: len(left_by_values)])
+                    struct_dtype = np.dtype([(label, dtype) for label in labels])
+                    lbv = np.column_stack([np.asarray(x) for x in left_by_values]).view(struct_dtype)
+                    rbv = np.column_stack([np.asarray(x) for x in right_by_values]).view(struct_dtype)
+                    lbv = ensure_object(lbv)
+                    rbv = ensure_object(rbv)
+                else:
+                    lbv = flip(left_by_values)
+                    rbv = flip(right_by_values)
+                    lbv = ensure_object(lbv)
+                    rbv = ensure_object(rbv)
+[/REPLACE]

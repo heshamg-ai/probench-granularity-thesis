@@ -1,0 +1,78 @@
+xarray/core/accessor_dt.py
+[SEARCH]
+def _access_through_cftimeindex(values, name):
+    """Coerce an array of datetime-like values to a CFTimeIndex
+    and access requested datetime component
+    """
+    from xarray.coding.cftimeindex import CFTimeIndex
+
+    values_as_cftimeindex = CFTimeIndex(values.ravel())
+    if name == "season":
+        months = values_as_cftimeindex.month
+        field_values = _season_from_months(months)
+    elif name == "date":
+        raise AttributeError(
+            "'CFTimeIndex' object has no attribute `date`. Consider using the floor method instead, for instance: `.time.dt.floor('D')`."
+        )
+    else:
+        field_values = getattr(values_as_cftimeindex, name)
+    return field_values.reshape(values.shape)
+[/SEARCH]
+[REPLACE]
+def _access_through_cftimeindex(values, name):
+    """Coerce an array of datetime-like values to a CFTimeIndex
+    and access requested datetime component
+    """
+    from xarray.coding.cftimeindex import CFTimeIndex
+
+    values_as_cftimeindex = CFTimeIndex(values.ravel())
+    if name == "season":
+        months = values_as_cftimeindex.month
+        field_values = _season_from_months(months)
+    elif name == "date":
+        raise AttributeError(
+            "'CFTimeIndex' object has no attribute `date`. Consider using the floor method instead, for instance: `.time.dt.floor('D')`."
+        )
+    elif name == "floor":
+        field_values = values_as_cftimeindex.floor
+    else:
+        field_values = getattr(values_as_cftimeindex, name)
+    return field_values.reshape(values.shape)
+[/REPLACE]
+
+xarray/core/accessor_dt.py
+[SEARCH]
+def _round_field(values, name, freq):
+    if is_np_datetime_like(values.dtype):
+        access_method = _access_through_series
+    else:
+        from xarray.coding.cftimeindex import CFTimeIndex
+
+        values_as_cftimeindex = CFTimeIndex(values.ravel())
+        return values_as_cftimeindex.floor(freq).reshape(values.shape)
+
+    if is_duck_dask_array(values):
+        from dask.array import map_blocks
+
+        return map_blocks(
+            access_method, values, name, freq, dtype=values.dtype
+        )
+    else:
+        return access_method(values, name, freq)
+[/SEARCH]
+[REPLACE]
+def _round_field(values, name, freq):
+    if is_np_datetime_like(values.dtype):
+        access_method = _access_through_series
+    else:
+        access_method = _access_through_cftimeindex
+
+    if is_duck_dask_array(values):
+        from dask.array import map_blocks
+
+        return map_blocks(
+            access_method, values, name, freq, dtype=values.dtype
+        )
+    else:
+        return access_method(values, name, freq)
+[/REPLACE]

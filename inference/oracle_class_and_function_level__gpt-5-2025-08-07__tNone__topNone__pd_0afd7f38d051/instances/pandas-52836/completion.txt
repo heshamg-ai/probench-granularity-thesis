@@ -1,0 +1,65 @@
+pandas/core/frame.py
+[SEARCH]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            # We have EAs with the same dtype. We can preserve that dtype in transpose.
+            dtype = dtypes[0]
+            arr_type = dtype.construct_array_type()
+            values = self.values
+
+            new_values = [arr_type._from_sequence(row, dtype=dtype) for row in values]
+            result = type(self)._from_arrays(
+                new_values, index=self.columns, columns=self.index
+            )
+[/SEARCH]
+[REPLACE]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            # We have EAs with the same dtype. We can preserve that dtype in transpose.
+            dtype = dtypes[0]
+            arr_type = dtype.construct_array_type()
+
+            # Optimization: fast path for single masked dtype with missing values
+            new_values = None
+            try:
+                from pandas.core.arrays.masked import (
+                    MaskedDtype,
+                    transpose_homogenous_masked_arrays,
+                )
+            except Exception:
+                MaskedDtype = None  # type: ignore[assignment]
+                transpose_homogenous_masked_arrays = None  # type: ignore[assignment]
+
+            if MaskedDtype is not None and isinstance(dtype, MaskedDtype):
+                arrays = self._mgr.arrays
+                has_missing = False
+                for arr in arrays:
+                    try:
+                        if arr.isna().any():  # type: ignore[union-attr]
+                            has_missing = True
+                            break
+                    except AttributeError:
+                        # Fallback, although EAs should implement isna
+                        from pandas.core.dtypes.missing import isna as _isna
+
+                        if _isna(arr).any():
+                            has_missing = True
+                            break
+                if has_missing and transpose_homogenous_masked_arrays is not None:
+                    # Use optimized masked-array transpose
+                    new_values = transpose_homogenous_masked_arrays(arrays, dtype)
+
+            if new_values is None:
+                values = self.values
+                new_values = [arr_type._from_sequence(row, dtype=dtype) for row in values]
+
+            result = type(self)._from_arrays(
+                new_values, index=self.columns, columns=self.index
+            )
+[/REPLACE]

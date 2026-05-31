@@ -1,0 +1,73 @@
+
+
+Looking at the `get_indexer_for` method, I need to optimize it for PyArrow-backed timestamp/duration dtypes. The current implementation dispatches to `get_indexer` or `get_indexer_non_unique`, but for PyArrow timestamp/duration arrays, there's an opportunity to handle this more efficiently by bypassing some of the conversion overhead.
+
+Let me implement the optimization:
+
+pandas/core/indexes/base.py
+[SEARCH]
+    @final
+    def get_indexer_for(self, target) -> npt.NDArray[np.intp]:
+        """
+        Guaranteed return of an indexer even when non-unique.
+
+        This dispatches to get_indexer or get_indexer_non_unique
+        as appropriate.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+            List of indices.
+
+        Examples
+        --------
+        >>> idx = pd.Index([np.nan, 'var1', np.nan])
+        >>> idx.get_indexer_for([np.nan])
+        array([0, 2])
+        """
+        if self._index_as_unique:
+            return self.get_indexer(target)
+        indexer, _ = self.get_indexer_non_unique(target)
+        return indexer
+[/SEARCH]
+[REPLACE]
+    @final
+    def get_indexer_for(self, target) -> npt.NDArray[np.intp]:
+        """
+        Guaranteed return of an indexer even when non-unique.
+
+        This dispatches to get_indexer or get_indexer_non_unique
+        as appropriate.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+            List of indices.
+
+        Examples
+        --------
+        >>> idx = pd.Index([np.nan, 'var1', np.nan])
+        >>> idx.get_indexer_for([np.nan])
+        array([0, 2])
+        """
+        # Fast path for PyArrow-backed timestamp/duration dtypes
+        if (
+            isinstance(self._values, ArrowExtensionArray)
+            and self._values.dtype.kind in "mM"
+        ):
+            target = ensure_index(target)
+            # For unique indexes, convert target to same dtype and use get_indexer
+            # For non-unique, we need to handle duplicates properly
+            if self._index_as_unique:
+                target_values = target._get_engine_target()
+                return self._engine.get_indexer(target_values)
+            else:
+                tgt_values = target._get_engine_target()
+                indexer, _ = self._engine.get_indexer_non_unique(tgt_values)
+                return ensure_platform_int(indexer)
+
+        if self._index_as_unique:
+            return self.get_indexer(target)
+        indexer, _ = self.get_indexer_non_unique(target)
+        return indexer
+[/REPLACE]

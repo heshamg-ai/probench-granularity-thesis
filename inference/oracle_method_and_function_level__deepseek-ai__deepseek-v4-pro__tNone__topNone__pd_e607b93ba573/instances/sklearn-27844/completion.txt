@@ -1,0 +1,51 @@
+sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py
+[SEARCH]
+    def predict(self, X):
+        """Predict classes for X.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            The input samples.
+
+        Returns
+        -------
+        y : ndarray, shape (n_samples,)
+            The predicted classes.
+        """
+        # TODO: This could be done in parallel
+        encoded_classes = np.argmax(self.predict_proba(X), axis=1)
+        return self.classes_[encoded_classes]
+[/SEARCH]
+[REPLACE]
+    def predict(self, X):
+        """Predict classes for X.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            The input samples.
+
+        Returns
+        -------
+        y : ndarray, shape (n_samples,)
+            The predicted classes.
+        """
+        proba = self.predict_proba(X)
+        if proba.shape[1] == 1:
+            # Binary classification: only one column of raw scores/raw
+            # predictions. Positive class when raw score > 0 (log_loss)
+            # or, equivalently, predicted probability > 0.5.
+            # self.predict_proba already returns two columns for binary
+            # classification, but we keep this fast-path in case the
+            # internal implementation changes or for subclasses.
+            positive_class_idx = (proba[:, 0] >= 0.5).astype(np.int32)
+        elif proba.shape[1] == 2:
+            # Binary classification with two probability columns.
+            positive_class_idx = (proba[:, 1] >= 0.5).astype(np.int32)
+        else:
+            encoded_classes = np.argmax(proba, axis=1)
+            return self.classes_[encoded_classes]
+
+        return self.classes_[positive_class_idx]
+[/REPLACE]

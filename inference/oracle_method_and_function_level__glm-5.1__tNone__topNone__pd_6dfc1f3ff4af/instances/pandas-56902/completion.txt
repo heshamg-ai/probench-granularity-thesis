@@ -1,0 +1,30 @@
+pandas/core/groupby/groupby.py
+[SEARCH]
+                for i, value_element in enumerate(values):
+                    # call group_fillna_indexer column-wise
+                    indexer = np.empty(values.shape[1], dtype=np.intp)
+                    col_func(out=indexer, mask=mask[i])
+                    out[i, :] = algorithms.take_nd(value_element, indexer)
+                return out
+[/SEARCH]
+[REPLACE]
+                if isinstance(values, np.ndarray) and mask.any():
+                    flat_values = values.ravel()
+                    flat_mask = mask.ravel()
+                    ncols = values.shape[1]
+                    full_indexer = np.empty(values.size, dtype=np.intp)
+                    for i in range(values.shape[0]):
+                        col_func(
+                            out=full_indexer[i * ncols : (i + 1) * ncols],
+                            mask=flat_mask[i * ncols : (i + 1) * ncols],
+                        )
+                    flat_out = algorithms.take_nd(flat_values, full_indexer)
+                    out[:] = flat_out.reshape(values.shape)
+                else:
+                    for i, value_element in enumerate(values):
+                        # call group_fillna_indexer column-wise
+                        indexer = np.empty(values.shape[1], dtype=np.intp)
+                        col_func(out=indexer, mask=mask[i])
+                        out[i, :] = algorithms.take_nd(value_element, indexer)
+                return out
+[/REPLACE]

@@ -1,0 +1,22 @@
+We need to optimize `Categorical.categories` to preserve/return `RangeIndex` when possible. Let me first find the current implementation of the `categories` property.
+
+pandas/core/arrays/categorical.py
+[SEARCH]
+    @property
+    def categories(self) -> Index:
+        """
+        The categories of this categorical.
+        """
+        return self.dtype.categories
+[/SEARCH]
+[REPLACE]
+    @property
+    def categories(self) -> Index:
+        """
+        The categories of this categorical.
+        """
+        categories = self.dtype.categories
+        if isinstance(categories, Index):
+            return categories
+        return Index(categories)
+[/REPLACE]

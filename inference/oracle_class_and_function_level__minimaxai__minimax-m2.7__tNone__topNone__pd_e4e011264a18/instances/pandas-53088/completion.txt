@@ -1,0 +1,51 @@
+
+
+Looking at the code, the `groups` property is in `BaseGrouper` which is used by `DataFrameGroupBy`. The current implementation for multiple groupings creates an intermediate Index and calls `groupby` again, which is inefficient. I'll optimize this by directly constructing the groups dictionary from the codes.
+
+pandas/core/groupby/ops.py
+[SEARCH]
+    @cache_readonly
+    def groups(self) -> dict[Hashable, np.ndarray]:
+        """dict {group name -> group labels}"""
+        if len(self.groupings) == 1:
+            return self.groupings[0].groups
+        else:
+            to_groupby = zip(*(ping.grouping_vector for ping in self.groupings))
+            index = Index(to_groupby)
+            return self.axis.groupby(index)
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def groups(self) -> dict[Hashable, np.ndarray]:
+        """dict {group name -> group labels}"""
+        if len(self.groupings) == 1:
+            return self.groupings[0].groups
+        else:
+            # Build groups dict directly from codes to avoid creating
+            # intermediate Index and re-grouping
+            codes = self.codes
+            ids, obs_ids, _ = self.group_info
+            ngroups = len(obs_ids)
+
+            # Pre-allocate array for sorting indices
+            sort_indices = np.argsort(ids, kind='mergesort')
+            sorted_ids = ids[sort_indices]
+
+            # Group consecutive equal ids
+            groups_dict: dict[Hashable, np.ndarray] = {}
+            start = 0
+            for i in range(1, len(sorted_ids)):
+                if sorted_ids[i] != sorted_ids[i - 1]:
+                    # End of a group - extract original indices
+                    group_id = sorted_ids[start]
+                    original_indices = sort_indices[start:i]
+                    groups_dict[obs_ids[group_id]] = np.sort(original_indices)
+                    start = i
+            # Handle the last group
+            if ngroups > 0:
+                group_id = sorted_ids[start]
+                original_indices = sort_indices[start:]
+                groups_dict[obs_ids[group_id]] = np.sort(original_indices)
+
+            return groups_dict
+[/REPLACE]

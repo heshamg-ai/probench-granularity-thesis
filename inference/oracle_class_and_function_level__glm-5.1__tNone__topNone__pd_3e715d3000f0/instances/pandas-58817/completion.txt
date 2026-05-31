@@ -1,0 +1,73 @@
+pandas/core/reshape/reshape.py
+[SEARCH]
+    # Grab data for each unique index to be stacked
+    buf = []
+    for idx in stack_cols.unique():
+        if len(frame.columns) == 1:
+            data = frame.copy(deep=False)
+        else:
+            if not isinstance(frame.columns, MultiIndex) and not isinstance(idx, tuple):
+                # GH#57750 - if the frame is an Index with tuples, .loc below will fail
+                column_indexer = idx
+            else:
+                # Take the data from frame corresponding to this idx value
+                if len(level) == 1:
+                    idx = (idx,)
+                gen = iter(idx)
+                column_indexer = tuple(
+                    next(gen) if k in set_levels else slice(None)
+                    for k in range(frame.columns.nlevels)
+                )
+            data = frame.loc[:, column_indexer]
+[/SEARCH]
+[REPLACE]
+    # Grab data for each unique index to be stacked
+    if (
+        len(level) == 1
+        and not isinstance(frame.columns, MultiIndex)
+        and len(frame.columns) > 1
+    ):
+        buf = [frame.iloc[:, k] for k in stack_cols]
+    else:
+        buf = []
+        for idx in stack_cols.unique():
+            if len(frame.columns) == 1:
+                data = frame.copy(deep=False)
+            else:
+                if not isinstance(frame.columns, MultiIndex) and not isinstance(idx, tuple):
+                    # GH#57750 - if the frame is an Index with tuples, .loc below will fail
+                    column_indexer = idx
+                else:
+                    # Take the data from frame corresponding to this idx value
+                    if len(level) == 1:
+                        idx = (idx,)
+                    gen = iter(idx)
+                    column_indexer = tuple(
+                        next(gen) if k in set_levels else slice(None)
+                        for k in range(frame.columns.nlevels)
+                    )
+                data = frame.loc[:, column_indexer]
+[/REPLACE]
+
+pandas/core/reshape/reshape.py
+[SEARCH]
+        if len(level) < frame.columns.nlevels:
+            data.columns = data.columns._drop_level_numbers(drop_levnums)
+        elif stack_cols.nlevels == 1:
+            if data.ndim == 1:
+                data.name = 0
+            else:
+                data.columns = default_index(len(data.columns))
+        buf.append(data)
+[/SEARCH]
+[REPLACE]
+        if len(level) < frame.columns.nlevels:
+            data.columns = data.columns._drop_level_numbers(drop_levnums)
+        elif stack_cols.nlevels == 1:
+            if data.ndim == 1:
+                data.name = 0
+            else:
+                data.columns = default_index(len(data.columns))
+        buf.append(data)
+    # end else
+[/REPLACE]

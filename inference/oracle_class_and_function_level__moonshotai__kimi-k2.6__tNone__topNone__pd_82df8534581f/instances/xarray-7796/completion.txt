@@ -1,0 +1,63 @@
+xarray/core/accessor_dt.py
+[SEARCH]
+def _access_through_cftimeindex(values, name):
+    """Coerce an array of datetime-like values to a CFTimeIndex
+    and access requested datetime component
+    """
+    from xarray.coding.cftimeindex import CFTimeIndex
+
+    values_as_cftimeindex = CFTimeIndex(values.ravel())
+    if name == "season":
+        months = values_as_cftimeindex.month
+        field_values = _season_from_months(months)
+    elif name == "date":
+        raise AttributeError(
+            "'CFTimeIndex' object has no attribute `date`. Consider using the floor method instead, for instance: `.time.dt.floor('D')`."
+        )
+    else:
+        field_values = getattr(values_as_cftimeindex, name)
+    return field_values.reshape(values.shape)
+[/SEARCH]
+[REPLACE]
+def _access_through_cftimeindex(values, name):
+    """Coerce an array of datetime-like values to a CFTimeIndex
+    and access requested datetime component
+    """
+    from xarray.coding.cftimeindex import CFTimeIndex
+
+    values_as_cftimeindex = CFTimeIndex(values.ravel())
+    if name == "season":
+        months = values_as_cftimeindex.month
+        field_values = _season_from_months(months)
+    elif name == "date":
+        raise AttributeError(
+            "'CFTimeIndex' object has no attribute `date`. Consider using the floor method instead, for instance: `.time.dt.floor('D')`."
+        )
+    else:
+        field_values = getattr(values_as_cftimeindex, name)
+    return field_values.reshape(values.shape)
+
+
+def _access_through_cftimeindex_rounding(values, name, freq):
+    """Coerce an array of datetime-like values to a CFTimeIndex
+    and perform rounding/flooring/ceiling operation
+    """
+    from xarray.coding.cftimeindex import CFTimeIndex
+
+    values_as_cftimeindex = CFTimeIndex(values.ravel())
+    result = getattr(values_as_cftimeindex, name)(freq)
+    return result.reshape(values.shape)
+[/REPLACE]
+xarray/core/accessor_dt.py
+[SEARCH]
+    def _tslib_round_accessor(self, name: str, freq: str) -> T_DataArray:
+        obj_type = type(self._obj)
+        result = _round_field(self._obj.data, name, freq)
+        return obj_type(result, name=name, coords=self._obj.coords, dims=self._obj.dims)
+[/SEARCH]
+[REPLACE]
+    def _tslib_round_accessor(self, name: str, freq: str) -> T_DataArray:
+        obj_type = type(self._obj)
+        result = _round_field(self._obj.data, name, freq)
+        return obj_type(result, name=name, coords=self._obj.coords, dims=self._obj.dims)
+[/REPLACE]

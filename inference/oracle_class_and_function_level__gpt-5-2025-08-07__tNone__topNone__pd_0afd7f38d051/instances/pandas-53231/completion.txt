@@ -1,0 +1,24 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+    if isinstance(lk.dtype, DatetimeTZDtype) and isinstance(rk.dtype, DatetimeTZDtype):
+        # Extract the ndarray (UTC-localized) values
+        # Note: we dont need the dtypes to match, as these can still be compared
+        lk, rk = cast("DatetimeArray", lk)._ensure_matching_resos(rk)
+        lk = cast("DatetimeArray", lk)._ndarray
+        rk = cast("DatetimeArray", rk)._ndarray
+[/SEARCH]
+[REPLACE]
+    if isinstance(lk.dtype, DatetimeTZDtype) and isinstance(rk.dtype, DatetimeTZDtype):
+        # Extract the ndarray (UTC-localized) values
+        # Note: we dont need the dtypes to match, as these can still be compared
+        # Fast path: identical dtype (same tz and resolution) -> avoid ensure_matching_resos
+        if lk.dtype == rk.dtype:
+            lk = cast("DatetimeArray", lk)._ndarray
+            rk = cast("DatetimeArray", rk)._ndarray
+        else:
+            lk_da = cast("DatetimeArray", lk)
+            rk_da = cast("DatetimeArray", rk)
+            lk_da, rk_da = lk_da._ensure_matching_resos(rk_da)
+            lk = lk_da._ndarray
+            rk = rk_da._ndarray
+[/REPLACE]

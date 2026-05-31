@@ -1,0 +1,63 @@
+pandas/core/algorithms.py
+[SEARCH]
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : ndarray
+
+    Returns
+    -------
+    str
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+    return ndtype
+[/SEARCH]
+[REPLACE]
+def _check_object_for_strings(values: np.ndarray) -> str:
+    """
+    Check if we can use string hashtable instead of object hashtable.
+
+    Parameters
+    ----------
+    values : np.ndarray
+        Input array to analyze. May contain mixed types or all strings.
+
+    Returns
+    -------
+    str
+        The inferred data type name. Returns "string" if the object array
+        contains only strings (allowing nulls), otherwise returns the
+        original dtype name.
+    """
+    ndtype = values.dtype.name
+    if ndtype == "object":
+        # Fast path: check first non-null element to avoid expensive lib.infer_dtype
+        # This is a heuristic optimization: if the first non-null element is not
+        # a string, we can skip the full inference. If it is a string, we still
+        # need lib.infer_dtype for correctness since later elements might be non-strings.
+        for val in values.ravel(order="K"):
+            if val is lib.no_default or (val is not lib.no_default and not (val is lib.no_default or pd.isna(val))):
+                # Found a non-null value, check its type
+                if not isinstance(val, str):
+                    break
+        else:
+            # All values are null or no non-string found in fast check
+            # Need full inference for correctness
+            pass
+        
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+    return ndtype
+[/REPLACE]

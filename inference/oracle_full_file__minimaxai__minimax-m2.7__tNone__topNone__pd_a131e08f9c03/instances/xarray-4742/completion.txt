@@ -1,0 +1,32 @@
+
+
+Looking at the code, I need to optimize `_ipython_key_completions_` in `xarray/core/common.py`. The current implementation creates intermediate lists before deduplication. I'll optimize by collecting directly into a set during iteration.
+
+xarray/core/common.py
+[SEARCH]
+    def _ipython_key_completions_(self) -> List[str]:
+        """Provide method for the key-autocompletions in IPython.
+        See http://ipython.readthedocs.io/en/stable/config/integrating.html#tab-completion
+        For the details.
+        """
+        item_lists = [
+            item
+            for sublist in self._item_sources
+            for item in sublist
+            if isinstance(item, str)
+        ]
+        return list(set(item_lists))
+[/SEARCH]
+[REPLACE]
+    def _ipython_key_completions_(self) -> List[str]:
+        """Provide method for the key-autocompletions in IPython.
+        See http://ipython.readthedocs.io/en/stable/config/integrating.html#tab-completion
+        For the details.
+        """
+        items: set[str] = set()
+        for source in self._item_sources:
+            for item in source:
+                if isinstance(item, str):
+                    items.add(item)
+        return list(items)
+[/REPLACE]

@@ -1,0 +1,50 @@
+pandas/core/frame.py
+[SEARCH]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            # We have EAs with the same dtype. We can preserve that dtype in transpose.
+            dtype = dtypes[0]
+            arr_type = dtype.construct_array_type()
+            values = self.values
+
+            new_values = [arr_type._from_sequence(row, dtype=dtype) for row in values]
+            result = type(self)._from_arrays(
+                new_values, index=self.columns, columns=self.index
+            )
+
+        else:
+[/SEARCH]
+[REPLACE]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            # We have EAs with the same dtype. We can preserve that dtype in transpose.
+            dtype = dtypes[0]
+            arr_type = dtype.construct_array_type()
+            values = self.values
+
+            # For a single masked dtype, use the array's native T/transpose
+            # which is a zero-copy view-like operation (swapping data and mask).
+            if hasattr(arr_type, 'T'):
+                # values is a 2D ExtensionArray (e.g. a single masked block)
+                transposed_arr = values.T
+                df_args = transposed_arr  # use it directly
+                # Build from the transposed array: columns as index, index as columns
+                result = type(self)._from_arrays(
+                    [df_args[:, i] for i in range(df_args.shape[1])],
+                    index=self.columns,
+                    columns=self.index,
+                )
+            else:
+                new_values = [arr_type._from_sequence(row, dtype=dtype) for row in values]
+                result = type(self)._from_arrays(
+                    new_values, index=self.columns, columns=self.index
+                )
+
+        else:
+[/REPLACE]

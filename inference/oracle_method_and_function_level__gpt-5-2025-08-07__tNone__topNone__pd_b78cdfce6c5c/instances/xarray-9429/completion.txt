@@ -1,0 +1,80 @@
+xarray/groupers.py
+[SEARCH]
+    def _factorize_unique(self) -> EncodedGroups:
+        # look through group to find the unique values
+        sort = not isinstance(self.group_as_index, pd.MultiIndex)
+        unique_values, codes_ = unique_value_groups(self.group_as_index, sort=sort)
+        if (codes_ == -1).all():
+            raise ValueError(
+                "Failed to group data. Are you grouping by a variable that is all NaN?"
+            )
+        codes = self.group.copy(data=codes_.reshape(self.group.shape))
+        unique_coord = Variable(
+            dims=codes.name, data=unique_values, attrs=self.group.attrs
+        )
+        full_index = pd.Index(unique_values)
+
+        return EncodedGroups(
+            codes=codes,
+            full_index=full_index,
+            unique_coord=unique_coord,
+            coords=_coordinates_from_variable(unique_coord),
+        )
+[/SEARCH]
+[REPLACE]
+    def _factorize_unique(self) -> EncodedGroups:
+        # look through group to find the unique values
+        sort = not isinstance(self.group_as_index, pd.MultiIndex)
+
+        # Fast path for cftime object arrays using pandas.factorize
+        values = getattr(self.group_as_index, "values", np.asarray(self.group_as_index))
+        use_fast = False
+        if getattr(values, "dtype", None) is not None and values.dtype == object:
+            arr_flat = values.ravel()
+            sample = None
+            for v in arr_flat:
+                if v is not None and not pd.isna(v):
+                    sample = v
+                    break
+            if sample is not None:
+                mod = type(sample).__module__
+                if isinstance(mod, str) and mod.startswith("cftime"):
+                    use_fast = True
+
+        if use_fast:
+            try:
+                codes_, unique_values = pd.factorize(values, sort=sort)
+            except TypeError:
+                codes_, unique_values = pd.factorize(values)
+                if sort:
+                    uniques_arr = (
+                        unique_values.to_numpy()
+                        if isinstance(unique_values, pd.Index)
+                        else np.asarray(unique_values)
+                    )
+                    order = np.argsort(uniques_arr)
+                    remap = np.empty_like(order)
+                    remap[order] = np.arange(order.size)
+                    mask = codes_ >= 0
+                    codes_[mask] = remap[codes_[mask]]
+                    unique_values = uniques_arr[order]
+        else:
+            unique_values, codes_ = unique_value_groups(self.group_as_index, sort=sort)
+
+        if (codes_ == -1).all():
+            raise ValueError(
+                "Failed to group data. Are you grouping by a variable that is all NaN?"
+            )
+        codes = self.group.copy(data=codes_.reshape(self.group.shape))
+        unique_coord = Variable(
+            dims=codes.name, data=unique_values, attrs=self.group.attrs
+        )
+        full_index = pd.Index(unique_values)
+
+        return EncodedGroups(
+            codes=codes,
+            full_index=full_index,
+            unique_coord=unique_coord,
+            coords=_coordinates_from_variable(unique_coord),
+        )
+[/REPLACE]

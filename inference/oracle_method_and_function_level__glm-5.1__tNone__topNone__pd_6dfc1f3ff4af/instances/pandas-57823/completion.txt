@@ -1,0 +1,19 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def argmin(self, axis=None):
+        self._validate_axis(axis)
+        if not self._is_monotonic_increasing or self._is_monotonic_decreasing:
+            return super().argmin(axis=axis)
+        return 0
+[/SEARCH]
+[REPLACE]
+    def argmin(self, axis=None):
+        self._validate_axis(axis)
+        if not self.is_monotonic_increasing_or_decreasing:
+            return super().argmin(axis=axis)
+        if len(self) == 0:
+            raise ValueError("attempt to get argmin of an empty sequence")
+        if self.step > 0:
+            return 0
+        return len(self) - 1
+[/REPLACE]

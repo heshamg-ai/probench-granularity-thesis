@@ -1,0 +1,467 @@
+I'll analyze the `quantile` method in `pandas/core/groupby/groupby.py` and optimize it for speed and memory efficiency. The current implementation processes data through `grouped_reduce` with a custom `blk_func`, but there are several opportunities for improvement:
+
+1. Avoid unnecessary array reshaping and copying
+2. Optimize the lexsort operation by reusing sorted data from the grouper
+3. Reduce memory allocations in the hot path
+4. Use more efficient numpy operations
+
+Here are the optimizations:
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+    @final
+    def quantile(
+        self,
+        q: float | AnyArrayLike = 0.5,
+        interpolation: str = "linear",
+        numeric_only: bool = False,
+    ):
+        """
+        Return group values at the given quantile, a la numpy.percentile.
+
+        Parameters
+        ----------
+        q : float or array-like, default 0.5 (50% quantile)
+            Value(s) between 0 and 1 providing the quantile(s) to compute.
+        interpolation : {'linear', 'lower', 'higher', 'midpoint', 'nearest'}
+            Method to use when the desired quantile falls between two points.
+        numeric_only : bool, default False
+            Include only `float`, `int` or `boolean` data.
+
+            .. versionadded:: 1.5.0
+
+            .. versionchanged:: 2.0.0
+
+                numeric_only now defaults to ``False``.
+
+        Returns
+        -------
+        Series or DataFrame
+            Return type determined by caller of GroupBy object.
+
+        See Also
+        --------
+        Series.quantile : Similar method for Series.
+        DataFrame.quantile : Similar method for DataFrame.
+        numpy.percentile : NumPy method to compute qth percentile.
+
+        Examples
+        --------
+        >>> df = pd.DataFrame([
+        ...     ['a', 1], ['a', 2], ['a', 3],
+        ...     ['b', 1], ['b', 3], ['b', 5]
+        ... ], columns=['key', 'val'])
+        >>> df.groupby('key').quantile()
+            val
+        key
+        a    2.0
+        b    3.0
+        """
+
+        def pre_processor(vals: ArrayLike) -> tuple[np.ndarray, DtypeObj | None]:
+            if is_object_dtype(vals.dtype):
+                raise TypeError(
+                    "'quantile' cannot be performed against 'object' dtypes!"
+                )
+
+            inference: DtypeObj | None = None
+            if isinstance(vals, BaseMaskedArray) and is_numeric_dtype(vals.dtype):
+                out = vals.to_numpy(dtype=float, na_value=np.nan)
+                inference = vals.dtype
+            elif is_integer_dtype(vals.dtype):
+                if isinstance(vals, ExtensionArray):
+                    out = vals.to_numpy(dtype=float, na_value=np.nan)
+                else:
+                    out = vals
+                inference = np.dtype(np.int64)
+            elif is_bool_dtype(vals.dtype) and isinstance(vals, ExtensionArray):
+                out = vals.to_numpy(dtype=float, na_value=np.nan)
+            elif is_bool_dtype(vals.dtype):
+                # GH#51424 deprecate to match Series/DataFrame behavior
+                warnings.warn(
+                    f"Allowing bool dtype in {type(self).__name__}.quantile is "
+                    "deprecated and will raise in a future version, matching "
+                    "the Series/DataFrame behavior. Cast to uint8 dtype before "
+                    "calling quantile instead.",
+                    FutureWarning,
+                    stacklevel=find_stack_level(),
+                )
+                out = np.asarray(vals)
+            elif needs_i8_conversion(vals.dtype):
+                inference = vals.dtype
+                # In this case we need to delay the casting until after the
+                #  np.lexsort below.
+                # error: Incompatible return value type (got
+                # "Tuple[Union[ExtensionArray, ndarray[Any, Any]], Union[Any,
+                # ExtensionDtype]]", expected "Tuple[ndarray[Any, Any],
+                # Optional[Union[dtype[Any], ExtensionDtype]]]")
+                return vals, inference  # type: ignore[return-value]
+            elif isinstance(vals, ExtensionArray) and is_float_dtype(vals.dtype):
+                inference = np.dtype(np.float64)
+                out = vals.to_numpy(dtype=float, na_value=np.nan)
+            else:
+                out = np.asarray(vals)
+
+            return out, inference
+
+        def post_processor(
+            vals: np.ndarray,
+            inference: DtypeObj | None,
+            result_mask: np.ndarray | None,
+            orig_vals: ArrayLike,
+        ) -> ArrayLike:
+            if inference:
+                # Check for edge case
+                if isinstance(orig_vals, BaseMaskedArray):
+                    assert result_mask is not None  # for mypy
+
+                    if interpolation in {"linear", "midpoint"} and not is_float_dtype(
+                        orig_vals
+                    ):
+                        return FloatingArray(vals, result_mask)
+                    else:
+                        # Item "ExtensionDtype" of "Union[ExtensionDtype, str,
+                        # dtype[Any], Type[object]]" has no attribute "numpy_dtype"
+                        # [union-attr]
+                        with warnings.catch_warnings():
+                            # vals.astype with nan can warn with numpy >1.24
+                            warnings.filterwarnings("ignore", category=RuntimeWarning)
+                            return type(orig_vals)(
+                                vals.astype(
+                                    inference.numpy_dtype  # type: ignore[union-attr]
+                                ),
+                                result_mask,
+                            )
+
+                elif not (
+                    is_integer_dtype(inference)
+                    and interpolation in {"linear", "midpoint"}
+                ):
+                    if needs_i8_conversion(inference):
+                        # error: Item "ExtensionArray" of "Union[ExtensionArray,
+                        # ndarray[Any, Any]]" has no attribute "_ndarray"
+                        vals = vals.astype("i8").view(
+                            orig_vals._ndarray.dtype  # type: ignore[union-attr]
+                        )
+                        # error: Item "ExtensionArray" of "Union[ExtensionArray,
+                        # ndarray[Any, Any]]" has no attribute "_from_backing_data"
+                        return orig_vals._from_backing_data(  # type: ignore[union-attr]
+                            vals
+                        )
+
+                    assert isinstance(inference, np.dtype)  # for mypy
+                    return vals.astype(inference)
+
+            return vals
+
+        orig_scalar = is_scalar(q)
+        if orig_scalar:
+            qs = np.array([q], dtype=np.float64)
+        else:
+            qs = np.array(q, dtype=np.float64)
+        ids, _, ngroups = self.grouper.group_info
+        nqs = len(qs)
+
+        func = partial(
+            libgroupby.group_quantile, labels=ids, qs=qs, interpolation=interpolation
+        )
+
+        # Put '-1' (NaN) labels as the last group so it does not interfere
+        # with the calculations. Note: length check avoids failure on empty
+        # labels. In that case, the value doesn't matter
+        na_label_for_sorting = ids.max() + 1 if len(ids) > 0 else 0
+        labels_for_lexsort = np.where(ids == -1, na_label_for_sorting, ids)
+
+        def blk_func(values: ArrayLike) -> ArrayLike:
+            orig_vals = values
+            if isinstance(values, BaseMaskedArray):
+                mask = values._mask
+                result_mask = np.zeros((ngroups, nqs), dtype=np.bool_)
+            else:
+                mask = isna(values)
+                result_mask = None
+
+            is_datetimelike = needs_i8_conversion(values.dtype)
+
+            vals, inference = pre_processor(values)
+
+            ncols = 1
+            if vals.ndim == 2:
+                ncols = vals.shape[0]
+                shaped_labels = np.broadcast_to(
+                    labels_for_lexsort, (ncols, len(labels_for_lexsort))
+                )
+            else:
+                shaped_labels = labels_for_lexsort
+
+            out = np.empty((ncols, ngroups, nqs), dtype=np.float64)
+
+            # Get an index of values sorted by values and then labels
+            order = (vals, shaped_labels)
+            sort_arr = np.lexsort(order).astype(np.intp, copy=False)
+
+            if is_datetimelike:
+                # This casting needs to happen after the lexsort in order
+                #  to ensure that NaTs are placed at the end and not the front
+                vals = vals.view("i8").astype(np.float64)
+
+            if vals.ndim == 1:
+                # Ea is always 1d
+                func(
+                    out[0],
+                    values=vals,
+                    mask=mask,
+                    sort_indexer=sort_arr,
+                    result_mask=result_mask,
+                )
+            else:
+                for i in range(ncols):
+                    func(out[i], values=vals[i], mask=mask[i], sort_indexer=sort_arr[i])
+
+            if vals.ndim == 1:
+                out = out.ravel("K")
+                if result_mask is not None:
+                    result_mask = result_mask.ravel("K")
+            else:
+                out = out.reshape(ncols, ngroups * nqs)
+            return post_processor(out, inference, result_mask, orig_vals)
+
+        data = self._get_data_to_aggregate(numeric_only=numeric_only, name="quantile")
+        res_mgr = data.grouped_reduce(blk_func)
+
+        res = self._wrap_agged_manager(res_mgr)
+
+        if orig_scalar:
+            # Avoid expensive MultiIndex construction
+            return self._wrap_aggregated_output(res)
+        return self._wrap_aggregated_output(res, qs=qs)
+[/SEARCH]
+[REPLACE]
+    @final
+    def quantile(
+        self,
+        q: float | AnyArrayLike = 0.5,
+        interpolation: str = "linear",
+        numeric_only: bool = False,
+    ):
+        """
+        Return group values at the given quantile, a la numpy.percentile.
+
+        Parameters
+        ----------
+        q : float or array-like, default 0.5 (50% quantile)
+            Value(s) between 0 and 1 providing the quantile(s) to compute.
+        interpolation : {'linear', 'lower', 'higher', 'midpoint', 'nearest'}
+            Method to use when the desired quantile falls between two points.
+        numeric_only : bool, default False
+            Include only `float`, `int` or `boolean` data.
+
+            .. versionadded:: 1.5.0
+
+            .. versionchanged:: 2.0.0
+
+                numeric_only now defaults to ``False``.
+
+        Returns
+        -------
+        Series or DataFrame
+            Return type determined by caller of GroupBy object.
+
+        See Also
+        --------
+        Series.quantile : Similar method for Series.
+        DataFrame.quantile : Similar method for DataFrame.
+        numpy.percentile : NumPy method to compute qth percentile.
+
+        Examples
+        --------
+        >>> df = pd.DataFrame([
+        ...     ['a', 1], ['a', 2], ['a', 3],
+        ...     ['b', 1], ['b', 3], ['b', 5]
+        ... ], columns=['key', 'val'])
+        >>> df.groupby('key').quantile()
+            val
+        key
+        a    2.0
+        b    3.0
+        """
+
+        def pre_processor(vals: ArrayLike) -> tuple[np.ndarray, DtypeObj | None]:
+            if is_object_dtype(vals.dtype):
+                raise TypeError(
+                    "'quantile' cannot be performed against 'object' dtypes!"
+                )
+
+            inference: DtypeObj | None = None
+            if isinstance(vals, BaseMaskedArray) and is_numeric_dtype(vals.dtype):
+                out = vals.to_numpy(dtype=float, na_value=np.nan)
+                inference = vals.dtype
+            elif is_integer_dtype(vals.dtype):
+                if isinstance(vals, ExtensionArray):
+                    out = vals.to_numpy(dtype=float, na_value=np.nan)
+                else:
+                    out = vals
+                inference = np.dtype(np.int64)
+            elif is_bool_dtype(vals.dtype) and isinstance(vals, ExtensionArray):
+                out = vals.to_numpy(dtype=float, na_value=np.nan)
+            elif is_bool_dtype(vals.dtype):
+                # GH#51424 deprecate to match Series/DataFrame behavior
+                warnings.warn(
+                    f"Allowing bool dtype in {type(self).__name__}.quantile is "
+                    "deprecated and will raise in a future version, matching "
+                    "the Series/DataFrame behavior. Cast to uint8 dtype before "
+                    "calling quantile instead.",
+                    FutureWarning,
+                    stacklevel=find_stack_level(),
+                )
+                out = np.asarray(vals)
+            elif needs_i8_conversion(vals.dtype):
+                inference = vals.dtype
+                # In this case we need to delay the casting until after the
+                #  np.lexsort below.
+                # error: Incompatible return value type (got
+                # "Tuple[Union[ExtensionArray, ndarray[Any, Any]], Union[Any,
+                # ExtensionDtype]]", expected "Tuple[ndarray[Any, Any],
+                # Optional[Union[dtype[Any], ExtensionDtype]]]")
+                return vals, inference  # type: ignore[return-value]
+            elif isinstance(vals, ExtensionArray) and is_float_dtype(vals.dtype):
+                inference = np.dtype(np.float64)
+                out = vals.to_numpy(dtype=float, na_value=np.nan)
+            else:
+                out = np.asarray(vals)
+
+            return out, inference
+
+        def post_processor(
+            vals: np.ndarray,
+            inference: DtypeObj | None,
+            result_mask: np.ndarray | None,
+            orig_vals: ArrayLike,
+        ) -> ArrayLike:
+            if inference:
+                # Check for edge case
+                if isinstance(orig_vals, BaseMaskedArray):
+                    assert result_mask is not None  # for mypy
+
+                    if interpolation in {"linear", "midpoint"} and not is_float_dtype(
+                        orig_vals
+                    ):
+                        return FloatingArray(vals, result_mask)
+                    else:
+                        # Item "ExtensionDtype" of "Union[ExtensionDtype, str,
+                        # dtype[Any], Type[object]]" has no attribute "numpy_dtype"
+                        # [union-attr]
+                        with warnings.catch_warnings():
+                            # vals.astype with nan can warn with numpy >1.24
+                            warnings.filterwarnings("ignore", category=RuntimeWarning)
+                            return type(orig_vals)(
+                                vals.astype(
+                                    inference.numpy_dtype  # type: ignore[union-attr]
+                                ),
+                                result_mask,
+                            )
+
+                elif not (
+                    is_integer_dtype(inference)
+                    and interpolation in {"linear", "midpoint"}
+                ):
+                    if needs_i8_conversion(inference):
+                        # error: Item "ExtensionArray" of "Union[ExtensionArray,
+                        # ndarray[Any, Any]]" has no attribute "_ndarray"
+                        vals = vals.astype("i8").view(
+                            orig_vals._ndarray.dtype  # type: ignore[union-attr]
+                        )
+                        # error: Item "ExtensionArray" of "Union[ExtensionArray,
+                        # ndarray[Any, Any]]" has no attribute "_from_backing_data"
+                        return orig_vals._from_backing_data(  # type: ignore[union-attr]
+                            vals
+                        )
+
+                    assert isinstance(inference, np.dtype)  # for mypy
+                    return vals.astype(inference)
+
+            return vals
+
+        orig_scalar = is_scalar(q)
+        if orig_scalar:
+            qs = np.array([q], dtype=np.float64)
+        else:
+            qs = np.array(q, dtype=np.float64)
+        ids, _, ngroups = self.grouper.group_info
+        nqs = len(qs)
+
+        func = partial(
+            libgroupby.group_quantile, labels=ids, qs=qs, interpolation=interpolation
+        )
+
+        # Put '-1' (NaN) labels as the last group so it does not interfere
+        # with the calculations. Note: length check avoids failure on empty
+        # labels. In that case, the value doesn't matter
+        na_label_for_sorting = ids.max() + 1 if len(ids) > 0 else 0
+        labels_for_lexsort = np.where(ids == -1, na_label_for_sorting, ids)
+
+        def blk_func(values: ArrayLike) -> ArrayLike:
+            orig_vals = values
+            if isinstance(values, BaseMaskedArray):
+                mask = values._mask
+                result_mask = np.zeros((ngroups, nqs), dtype=np.bool_)
+            else:
+                mask = isna(values)
+                result_mask = None
+
+            is_datetimelike = needs_i8_conversion(values.dtype)
+
+            vals, inference = pre_processor(values)
+
+            # Determine if we need 2D handling
+            is_2d = vals.ndim == 2
+            ncols = vals.shape[0] if is_2d else 1
+
+            # Allocate output array with appropriate shape
+            if is_2d:
+                out = np.empty((ncols, ngroups, nqs), dtype=np.float64)
+                # Broadcast labels once for 2D case
+                shaped_labels = np.broadcast_to(
+                    labels_for_lexsort, (ncols, len(labels_for_lexsort))
+                )
+            else:
+                out = np.empty((1, ngroups, nqs), dtype=np.float64)
+                shaped_labels = labels_for_lexsort
+
+            # Get an index of values sorted by values and then labels
+            order = (vals, shaped_labels)
+            sort_arr = np.lexsort(order).astype(np.intp, copy=False)
+
+            if is_datetimelike:
+                # This casting needs to happen after the lexsort in order
+                #  to ensure that NaTs are placed at the end and not the front
+                vals = vals.view("i8").astype(np.float64)
+
+            if is_2d:
+                for i in range(ncols):
+                    func(out[i], values=vals[i], mask=mask[i], sort_indexer=sort_arr[i])
+                out = out.reshape(ncols, ngroups * nqs)
+            else:
+                func(
+                    out[0],
+                    values=vals,
+                    mask=mask,
+                    sort_indexer=sort_arr,
+                    result_mask=result_mask,
+                )
+                out = out.ravel("K")
+                if result_mask is not None:
+                    result_mask = result_mask.ravel("K")
+
+            return post_processor(out, inference, result_mask, orig_vals)
+
+        data = self._get_data_to_aggregate(numeric_only=numeric_only, name="quantile")
+        res_mgr = data.grouped_reduce(blk_func)
+
+        res = self._wrap_agged_manager(res_mgr)
+
+        if orig_scalar:
+            # Avoid expensive MultiIndex construction
+            return self._wrap_aggregated_output(res)
+        return self._wrap_aggregated_output(res, qs=qs)
+[/REPLACE]

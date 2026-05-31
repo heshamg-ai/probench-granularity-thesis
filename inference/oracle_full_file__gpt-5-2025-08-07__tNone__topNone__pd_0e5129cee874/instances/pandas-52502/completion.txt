@@ -1,0 +1,25 @@
+pandas/core/series.py
+[SEARCH]
+        this_values = np.asarray(this._values)
+        other_values = np.asarray(other._values)
+[/SEARCH]
+[REPLACE]
+        # Avoid unnecessary object-dtype coercion/copies for ExtensionArrays.
+        # Prefer converting to float64 with NaN for missing when possible.
+        def _values_for_corr(ser: Series):
+            vals = ser._values
+            if isinstance(vals, ExtensionArray):
+                # Best-effort zero-copy conversion to float64 with NaN for missing
+                try:
+                    return vals.to_numpy(dtype=np.float64, na_value=np.nan, copy=False)
+                except TypeError:
+                    # Some EAs may not support na_value keyword
+                    try:
+                        return vals.to_numpy(dtype=np.float64, copy=False)
+                    except Exception:
+                        return np.asarray(vals)
+            return np.asarray(vals)
+
+        this_values = _values_for_corr(this)
+        other_values = _values_for_corr(other)
+[/REPLACE]

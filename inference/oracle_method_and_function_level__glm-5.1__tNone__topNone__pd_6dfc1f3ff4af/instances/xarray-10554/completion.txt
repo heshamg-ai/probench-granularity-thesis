@@ -1,0 +1,33 @@
+xarray/core/dataset.py
+[SEARCH]
+        if reindex_vars and (
+            reindex_indexers := {
+                k: v for k, (_, v) in validated_indexers.items() if v.dims == (k,)
+            }
+        ):
+            reindexed = alignment.reindex(
+                obj[reindex_vars],
+                indexers=reindex_indexers,
+                method=method_non_numeric,
+                exclude_vars=variables.keys(),
+            )
+            indexes = dict(reindexed._indexes)
+            variables.update(reindexed.variables)
+        else:
+[/SEARCH]
+[REPLACE]
+        if reindex_vars and (
+            reindex_indexers := {
+                k: v for k, (_, v) in validated_indexers.items() if v.dims == (k,)
+            }
+        ):
+            reindexed = alignment.reindex(
+                obj._subset_variables(reindex_vars),
+                indexers=reindex_indexers,
+                method=method_non_numeric,
+                exclude_vars=variables.keys(),
+            )
+            indexes = dict(reindexed._indexes)
+            variables.update(reindexed.variables)
+        else:
+[/REPLACE]

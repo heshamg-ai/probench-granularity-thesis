@@ -1,0 +1,46 @@
+pandas/core/generic.py
+[SEARCH]
+        # align the cond to same shape as myself
+        cond = common.apply_if_callable(cond, self)
+        if isinstance(cond, NDFrame):
+            # CoW: Make sure reference is not kept alive
+            cond = cond.align(self, join="right", broadcast_axis=1, copy=False)[0]
+        else:
+            if not hasattr(cond, "shape"):
+                cond = np.asanyarray(cond)
+            if cond.shape != self.shape:
+                raise ValueError("Array conditional must be same shape as self")
+            cond = self._constructor(cond, **self._construct_axes_dict())
+
+        # make sure we are boolean
+        fill_value = bool(inplace)
+        cond = cond.fillna(fill_value)
+[/SEARCH]
+[REPLACE]
+        # align the cond to same shape as myself
+        cond = common.apply_if_callable(cond, self)
+        if isinstance(cond, NDFrame):
+            # CoW: Make sure reference is not kept alive
+            cond = cond.align(self, join="right", broadcast_axis=1, copy=False)[0]
+        else:
+            if not hasattr(cond, "shape"):
+                cond = np.asanyarray(cond)
+            if cond.shape != self.shape:
+                raise ValueError("Array conditional must be same shape as self")
+            cond = self._constructor(cond, **self._construct_axes_dict())
+
+        # make sure we are boolean
+        fill_value = bool(inplace)
+        # Fast-path: avoid .fillna() overhead when cond has no NAs (common case)
+        if cond._mgr.is_single_block and isinstance(
+            cond._mgr, type(self._mgr)
+        ):
+            # Only call fillna if there are actually NAs
+            cond_dtype = cond.dtypes
+            if (cond_dtype == "bool").all():
+                pass  # Already boolean, no NAs possible
+            else:
+                cond = cond.fillna(fill_value)
+        else:
+            cond = cond.fillna(fill_value)
+[/REPLACE]

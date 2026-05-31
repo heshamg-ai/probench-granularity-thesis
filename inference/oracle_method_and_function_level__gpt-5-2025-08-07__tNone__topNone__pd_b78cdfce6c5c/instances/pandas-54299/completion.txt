@@ -1,0 +1,7 @@
+pandas/core/generic.py
+[SEARCH]
+                self.iloc[:, i].astype(dtype, copy=copy)
+[/SEARCH]
+[REPLACE]
+                self._ixs(i, axis=1).astype(dtype, copy=copy)
+[/REPLACE]

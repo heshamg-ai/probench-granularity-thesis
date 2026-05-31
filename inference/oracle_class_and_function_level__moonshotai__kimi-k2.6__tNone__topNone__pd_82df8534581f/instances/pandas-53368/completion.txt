@@ -1,0 +1,192 @@
+ pandas/core/indexes/base.py
+[SEARCH]
+    @final
+    def get_indexer_for(self, target) -> npt.NDArray[np.intp]:
+        """
+        Guaranteed return of an indexer even when non-unique.
+
+        This dispatches to get_indexer or get_indexer_non_unique as appropriate.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+            List of indices.
+
+        Examples
+        --------
+        >>> idx = pd.Index([np.nan, 'var1', np.nan])
+        >>> idx.get_indexer_for([np.nan])
+        array([0, 2])
+        """
+        if self._index_as_unique:
+            return self.get_indexer(target)
+
+        indexer, _ = self.get_indexer_non_unique(target)
+        return indexer
+[/SEARCH]
+[REPLACE]
+    @final
+    def get_indexer_for(self, target) -> npt.NDArray[np.intp]:
+        """
+        Guaranteed return of an indexer even when non-unique.
+
+        This dispatches to get_indexer or get_indexer_non_unique as appropriate.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+            List of indices.
+
+        Examples
+        --------
+        >>> idx = pd.Index([np.nan, 'var1', np.nan])
+        >>> idx.get_indexer_for([np.nan])
+        array([0, 2])
+        """
+        if self._index_as_unique:
+            return self.get_indexer(target)
+
+        indexer, _ = self.get_indexer_non_unique(target)
+        return indexer
+[/REPLACE]
+
+pandas/core/indexes/base.py
+[SEARCH]
+    def _get_engine_target(self) -> ArrayLike:
+        """Get the ndarray or ExtensionArray that we can pass to the IndexEngine constructor."""
+        vals = self._values
+        if isinstance(vals, StringArray):
+            # GH#45652 much more performant than ExtensionEngine
+            return vals._ndarray
+        if (
+            type(self) is Index
+            and isinstance(self._values, ExtensionArray)
+            and not isinstance(self._values, BaseMaskedArray)
+            and not (
+                isinstance(self._values, ArrowExtensionArray)
+                and is_numeric_dtype(self.dtype)
+                # Exclude decimal
+                and self.dtype.kind != "O"
+            )
+        ):
+            # TODO(ExtensionIndex): remove special-case, just use self._values
+            return self._values.astype(object)
+        return vals
+[/SEARCH]
+[REPLACE]
+    def _get_engine_target(self) -> ArrayLike:
+        """Get the ndarray or ExtensionArray that we can pass to the IndexEngine constructor."""
+        vals = self._values
+        if isinstance(vals, StringArray):
+            # GH#45652 much more performant than ExtensionEngine
+            return vals._ndarray
+        if (
+            type(self) is Index
+            and isinstance(self._values, ExtensionArray)
+            and not isinstance(self._values, BaseMaskedArray)
+            and not (
+                isinstance(self._values, ArrowExtensionArray)
+                and is_numeric_dtype(self.dtype)
+                # Exclude decimal
+                and self.dtype.kind != "O"
+            )
+            and not (
+                # GH#??? PyArrow-backed datetime-like and timedelta-like
+                # can use ExtensionEngine with their underlying i8 values
+                isinstance(self._values, ArrowExtensionArray)
+                and (
+                    self.dtype.kind in "mM"
+                    or getattr(self.dtype, "pyarrow_dtype", None) is not None
+                    and hasattr(self.dtype.pyarrow_dtype, "id")
+                    and self.dtype.pyarrow_dtype.id
+                    in {
+                        34,  # pyarrow.lib.Type_TIMESTAMP
+                        35,  # pyarrow.lib.Type_TIME32
+                        36,  # pyarrow.lib.Type_TIME64
+                        37,  # pyarrow.lib.Type_DURATION
+                    }
+                )
+            )
+        ):
+            # TODO(ExtensionIndex): remove special-case, just use self._values
+            return self._values.astype(object)
+        return vals
+[/REPLACE]
+
+pandas/core/indexes/base.py
+[SEARCH]
+    @cache_readonly
+    def _engine(
+        self,
+    ) -> libindex.IndexEngine | libindex.ExtensionEngine | libindex.MaskedIndexEngine:
+        # For base class (object dtype) we get ObjectEngine
+        target_values = self._get_engine_target()
+        if isinstance(target_values, ExtensionArray):
+            if isinstance(target_values, (BaseMaskedArray, ArrowExtensionArray)):
+                try:
+                    return _masked_engines[target_values.dtype.name](target_values)
+                except KeyError:
+                    # Not supported yet e.g. decimal
+                    pass
+            elif self._engine_type is libindex.ObjectEngine:
+                return libindex.ExtensionEngine(target_values)
+            target_values = cast(np.ndarray, target_values)  # to avoid a reference cycle, bind `target_values` to a local variable, so # `self` is not passed into the lambda.
+        if target_values.dtype == bool:
+            return libindex.BoolEngine(target_values)
+        elif target_values.dtype == np.complex64:
+            return libindex.Complex64Engine(target_values)
+        elif target_values.dtype == np.complex128:
+            return libindex.Complex128Engine(target_values)
+        elif needs_i8_conversion(self.dtype):
+            # We need to keep M8/m8 dtype when initializing the Engine,
+            # but don't want to change _get_engine_target bc it is used
+            # elsewhere
+            # error: Item "ExtensionArray" of "Union[ExtensionArray,
+            # ndarray[Any, Any]]" has no attribute "_ndarray" [union-attr]
+            target_values = self._data._ndarray  # type: ignore[union-attr]
+            # error: Argument 1 to "ExtensionEngine" has incompatible type
+            # "ndarray[Any, Any]"; expected "ExtensionArray"
+            return self._engine_type(target_values)  # type: ignore[arg-type]
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def _engine(
+        self,
+    ) -> libindex.IndexEngine | libindex.ExtensionEngine | libindex.MaskedIndexEngine:
+        # For base class (object dtype) we get ObjectEngine
+        target_values = self._get_engine_target()
+        if isinstance(target_values, ExtensionArray):
+            if isinstance(target_values, (BaseMaskedArray, ArrowExtensionArray)):
+                try:
+                    return _masked_engines[target_values.dtype.name](target_values)
+                except KeyError:
+                    # Not supported yet e.g. decimal
+                    pass
+            elif self._engine_type is libindex.ObjectEngine:
+                return libindex.ExtensionEngine(target_values)
+            target_values = cast(np.ndarray, target_values)  # to avoid a reference cycle, bind `target_values` to a local variable, so # `self` is not passed into the lambda.
+        if target_values.dtype == bool:
+            return libindex.BoolEngine(target_values)
+        elif target_values.dtype == np.complex64:
+            return libindex.Complex64Engine(target_values)
+        elif target_values.dtype == np.complex128:
+            return libindex.Complex128Engine(target_values)
+        elif needs_i8_conversion(self.dtype):
+            # We need to keep M8/m8 dtype when initializing the Engine,
+            # but don't want to change _get_engine_target bc it is used
+            # elsewhere
+            # error: Item "ExtensionArray" of "Union[ExtensionArray,
+            # ndarray[Any, Any]]" has no attribute "_ndarray" [union-attr]
+            target_values = self._data._ndarray  # type: ignore[union-attr]
+            # error: Argument 1 to "ExtensionEngine" has incompatible type
+            # "ndarray[Any, Any]"; expected "ExtensionArray"
+            return self._engine_type(target_values)  # type: ignore[arg-type]
+        elif (
+            # PyArrow-backed datetime/duration: we need to get i8 values
+            # for the engine, similar to DatetimeArray/TimedeltaArray above
+            isinstance(self._data, ArrowExtensionArray)
+            and self.dtype.kind in "mM"
+        ):
+            target_values = self._data.to_numpy(dtype=f"i8[{self.dtype}]")
+            return self._engine_type(target_values)
+[/REPLACE]

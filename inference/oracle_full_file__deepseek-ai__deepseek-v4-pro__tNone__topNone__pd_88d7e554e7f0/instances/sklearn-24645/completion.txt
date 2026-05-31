@@ -1,0 +1,41 @@
+sklearn/neighbors/_nearest_centroid.py
+[SEARCH]
+        check_is_fitted(self)
+
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        return self.classes_[
+            pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)
+        ]
+[/SEARCH]
+[REPLACE]
+        check_is_fitted(self)
+
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        metric = self.metric
+        centroids = self.centroids_
+
+        if metric == "euclidean":
+            # Compute squared Euclidean distances fast:
+            # ||X - c||^2 = ||X||^2 + ||c||^2 - 2 X c^T
+            # Only distances are needed, not actual L2 norms.
+            X_sq = np.sum(X**2, axis=1, keepdims=True)
+            c_sq = np.sum(centroids**2, axis=1)
+            X_sq = X_sq + c_sq  # broadcast
+            if sp.issparse(X):
+                X_sq -= 2 * X @ centroids.T
+            else:
+                X_sq -= 2 * np.dot(X, centroids.T)
+            labels = X_sq.argmin(axis=1)
+        elif metric == "manhattan":
+            # Manhattan distance optimized via broadcasting, avoiding copy.
+            if sp.issparse(X):
+                D = np.abs(X[:, np.newaxis, :] - centroids[np.newaxis, :, :]).sum(axis=2)
+            else:
+                D = np.add.reduce(np.abs(X[:, np.newaxis, :] - centroids), axis=2)
+            labels = D.argmin(axis=1)
+        else:
+            D = pairwise_distances(X, centroids, metric=metric)
+            labels = D.argmin(axis=1)
+
+        return self.classes_[labels]
+[/REPLACE]

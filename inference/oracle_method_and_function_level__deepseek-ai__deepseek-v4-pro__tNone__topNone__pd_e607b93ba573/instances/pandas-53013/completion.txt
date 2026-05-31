@@ -1,0 +1,22 @@
+pandas/core/arrays/masked.py
+[SEARCH]
+    def reshape(self, *args, **kwargs) -> Self:
+        data = self._data.reshape(*args, **kwargs)
+        mask = self._mask.reshape(*args, **kwargs)
+        return type(self)(data, mask)
+[/SEARCH]
+[REPLACE]
+    def reshape(self, *args, **kwargs) -> Self:
+        if len(args) == 1 and isinstance(args[0], tuple):
+            shape = args[0]
+        elif args:
+            shape = args
+        else:
+            shape = kwargs.pop('shape', None)
+            if shape is None:
+                raise TypeError("reshape() missing 1 required positional "
+                                "argument: 'shape'")
+        new_data = self._data.reshape(shape)
+        new_mask = self._mask.reshape(shape)
+        return type(self)(new_data, new_mask, copy=False)
+[/REPLACE]

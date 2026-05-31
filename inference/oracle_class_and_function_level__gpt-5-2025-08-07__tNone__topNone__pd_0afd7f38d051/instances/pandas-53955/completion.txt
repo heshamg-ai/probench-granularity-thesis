@@ -1,0 +1,96 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+    def _is_comparable_dtype(self, dtype: DtypeObj) -> bool:
+        return is_object_dtype(dtype)
+[/SEARCH]
+[REPLACE]
+    def intersection(self, other, sort=False):
+        other, result_names = self._convert_can_do_setop(other)
+
+        if not isinstance(other, MultiIndex):
+            result = super().intersection(other, sort=sort)
+            return self._wrap_intersection_result(other, result)
+
+        if self.nlevels != other.nlevels:
+            result = super().intersection(other, sort=sort)
+            return self._wrap_intersection_result(other, result)
+
+        if len(self) == 0 or len(other) == 0:
+            result = super().intersection(other, sort=sort)
+            return self._wrap_intersection_result(other, result)
+
+        if self.equal_levels(other):
+            # Fast path: operate on codes without materializing tuples
+            try:
+                codes_self = [ensure_int64(c) for c in self.codes]
+                codes_other = [ensure_int64(c) for c in other.codes]
+
+                mat_self = np.vstack(codes_self).T
+                mat_other = np.vstack(codes_other).T
+
+                vtype = np.dtype((np.void, mat_self.dtype.itemsize * mat_self.shape[1]))
+                view_self = np.ascontiguousarray(mat_self).view(vtype).ravel()
+                view_other = np.ascontiguousarray(mat_other).view(vtype).ravel()
+
+                other_uniq = np.unique(view_other)
+                if other_uniq.size == 0:
+                    empty_codes = [c[:0] for c in self.codes]
+                    result = MultiIndex(
+                        levels=self.levels,
+                        codes=empty_codes,
+                        names=self.names,
+                        verify_integrity=False,
+                    )
+                    return result.set_names(result_names)
+
+                mask = np.isin(view_self, other_uniq)
+                if not mask.any():
+                    empty_codes = [c[:0] for c in self.codes]
+                    result = MultiIndex(
+                        levels=self.levels,
+                        codes=empty_codes,
+                        names=self.names,
+                        verify_integrity=False,
+                    )
+                    return result.set_names(result_names)
+
+                pos = mask.nonzero()[0]
+                vals = view_self[pos]
+                # Deduplicate while preserving the order of appearance
+                _, first_idx = np.unique(vals, return_index=True)
+                if first_idx.size != pos.size:
+                    first_idx.sort()
+                    pos = pos[first_idx]
+
+                new_codes = [codes_self[i][pos] for i in range(self.nlevels)]
+                result = MultiIndex(
+                    levels=self.levels,
+                    codes=new_codes,
+                    names=self.names,
+                    verify_integrity=False,
+                )
+                if sort is not False:
+                    try:
+                        result = result.sort_values()
+                    except TypeError:
+                        if sort is True:
+                            raise
+                        warnings.warn(
+                            "The values in the array are unorderable. "
+                            "Pass `sort=False` to suppress this warning.",
+                            RuntimeWarning,
+                            stacklevel=find_stack_level(),
+                        )
+                return result.set_names(result_names)
+            except Exception:
+                # Fallback to base implementation on any unexpected issue
+                result = super().intersection(other, sort=sort)
+                return self._wrap_intersection_result(other, result)
+
+        # Fallback for non-aligned levels
+        result = super().intersection(other, sort=sort)
+        return self._wrap_intersection_result(other, result)
+
+    def _is_comparable_dtype(self, dtype: DtypeObj) -> bool:
+        return is_object_dtype(dtype)
+[/REPLACE]

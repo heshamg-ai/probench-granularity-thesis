@@ -1,0 +1,154 @@
+pandas/core/frame.py
+[SEARCH]
+        if isinstance(values, dict):
+            from pandas.core.reshape.concat import concat
+
+            values = collections.defaultdict(list, values)
+            result = concat(
+                (
+                    self.iloc[:, [i]].isin(values[col])
+                    for i, col in enumerate(self.columns)
+                ),
+                axis=1,
+            )
+        elif isinstance(values, Series):
+            if not values.index.is_unique:
+                raise ValueError("cannot compute isin with a duplicate axis.")
+            result = self.eq(values.reindex_like(self), axis="index")
+        elif isinstance(values, DataFrame):
+            if not (values.columns.is_unique and values.index.is_unique):
+                raise ValueError("cannot compute isin with a duplicate axis.")
+            result = self.eq(values.reindex_like(self))
+        else:
+            if not is_list_like(values):
+                raise TypeError(
+                    "only list-like or dict-like objects are allowed "
+                    "to be passed to DataFrame.isin(), "
+                    f"you passed a '{type(values).__name__}'"
+                )
+            # error: Argument 2 to "isin" has incompatible type "Union[Sequence[Any],
+            # Mapping[Any, Any]]"; expected "Union[Union[ExtensionArray,
+            # ndarray[Any, Any]], Index, Series]"
+            res_values = algorithms.isin(
+                self.values.ravel(),
+                values,  # type: ignore[arg-type]
+            )
+            result = self._constructor(
+                res_values.reshape(self.shape),
+                self.index,
+                self.columns,
+                copy=False,
+            )
+        return result.__finalize__(self, method="isin")
+[/SEARCH]
+[REPLACE]
+        if isinstance(values, dict):
+            from pandas.core.reshape.concat import concat
+
+            values = collections.defaultdict(list, values)
+            result = concat(
+                (
+                    self.iloc[:, [i]].isin(values[col])
+                    for i, col in enumerate(self.columns)
+                ),
+                axis=1,
+            )
+        elif isinstance(values, Series):
+            if not values.index.is_unique:
+                raise ValueError("cannot compute isin with a duplicate axis.")
+            result = self.eq(values.reindex_like(self), axis="index")
+        elif isinstance(values, DataFrame):
+            if not (values.columns.is_unique and values.index.is_unique):
+                raise ValueError("cannot compute isin with a duplicate axis.")
+            result = self.eq(values.reindex_like(self))
+        else:
+            if not is_list_like(values):
+                raise TypeError(
+                    "only list-like or dict-like objects are allowed "
+                    "to be passed to DataFrame.isin(), "
+                    f"you passed a '{type(values).__name__}'"
+                )
+            # error: Argument 2 to "isin" has incompatible type "Union[Sequence[Any],
+            # Mapping[Any, Any]]"; expected "Union[Union[ExtensionArray,
+            # ndarray[Any, Any]], Index, Series]"
+            res_values = self._isin_ea_fastpath(values)
+            if res_values is None:
+                res_values = algorithms.isin(
+                    self.values.ravel(),
+                    values,  # type: ignore[arg-type]
+                )
+            result = self._constructor(
+                res_values.reshape(self.shape),
+                self.index,
+                self.columns,
+                copy=False,
+            )
+        return result.__finalize__(self, method="isin")
+[/REPLACE]
+
+pandas/core/frame.py
+[SEARCH]
+    def isin(self, values: Series | DataFrame | Sequence | Mapping) -> DataFrame:
+[/SEARCH]
+[REPLACE]
+    def _isin_ea_fastpath(self, values):
+        """
+        Fast path for DataFrame.isin when columns use PyArrow-backed
+        or other ExtensionArray dtypes.
+
+        Returns a 2D boolean ndarray if a fast path is used, otherwise None.
+        """
+        from pandas.core.arrays import ArrowExtensionArray
+
+        mgr = self._mgr
+        if not hasattr(mgr, "blocks"):
+            # ArrayManager or unsupported manager
+            return None
+
+        n_rows = self.shape[0]
+        n_cols = self.shape[1]
+
+        blocks = mgr.blocks
+        if len(blocks) != n_cols:
+            # Blocks aren't columnar (e.g. consolidated numpy backend);
+            # fall back to generic path.
+            return None
+
+        # Pre-convert values to a set once for all-arrow columns to enable
+        # O(1) membership lookup.
+        # Only build the set if we see at least one arrow column.
+        try:
+            values_set = frozenset(values)
+        except TypeError:
+            # Unhashable values (e.g. lists, dicts) – fall back.
+            return None
+
+        result = np.empty((n_rows, n_cols), dtype=bool)
+        arrow_columns_used = False
+
+        # Map block placement to column index
+        for blk in blocks:
+            col_positions = blk.mgr_locs.as_array
+            arr = blk.values  # either numpy or ExtensionArray-backed
+
+            if col_positions.size == 1 and isinstance(arr, ArrowExtensionArray):
+                arrow_columns_used = True
+                col = col_positions[0]
+                # Use PyArrow compute kernel for set membership
+                try:
+                    result_col = arr._data.is_in(values_set)
+                    result[:, col] = result_col.to_numpy()
+                except Exception:
+                    # Fallback to generic path for this block
+                    return None
+            else:
+                # For mixed dtype or multi-column blocks, avoid the fast path
+                # to keep the optimization simple and safe.
+                return None
+
+        if arrow_columns_used:
+            return result
+        return None
+
+    def isin(self, values: Series | DataFrame | Sequence | Mapping) -> DataFrame:
+[/REPLACE]

@@ -1,0 +1,50 @@
+{
+  "id": 10,
+  "scenario_id": "pandas-51730",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 51730,
+  "baseline_sha": "56508fb9a5df3ab9d04057e25be959a00927d357",
+  "reference_sha": "49bdf5a64efc9540b160de051fe6ba8d2354b4b6",
+  "task": "Optimize ArrowExtensionArray._from_sequence_of_strings when parsing strings to boolean[pyarrow] dtype",
+  "entry_point": "pandas.api.extensions.ArrowExtensionArray._from_sequence_of_strings",
+  "whats_new": "Performance improvement when parsing strings to ``boolean[pyarrow]`` dtype",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-51730:baseline",
+      "digest": "sha256:50aaac70222919fceb9289eddab4fd9eed2db66d9f849b0f2d1973c842707b28"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-51730:reference",
+      "digest": "sha256:fc92e7503dfccecb605a50193ae76ddaf2604012dd33c0ace7d1288408b8fd86"
+    }
+  },
+  "params": [
+    {
+      "name": "Num Strings",
+      "short_indicator": "N",
+      "values": [
+        "10000",
+        "100000",
+        "1000000"
+      ],
+      "explanation": "The number of string elements to parse."
+    },
+    {
+      "name": "Backend",
+      "short_indicator": "B",
+      "values": [
+        "numpy",
+        "pyarrow"
+      ],
+      "explanation": "Backend library for string object"
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/arrays/boolean/test_construction.py::test_to_boolean_array_from_strings",
+    "pandas/tests/arrays/boolean/test_construction.py::test_to_boolean_array_from_strings_invalid_string",
+    "pandas/tests/extension/test_arrow.py::test_duration_from_strings_with_nat",
+    "pandas/tests/extension/test_arrow.py::TestBaseParsing::test_EA_types"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.api.extensions.ArrowExtensionArray._from_sequence_of_strings for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n- Only change what directly improves the optimization target.\n\nOPTIMIZATION REQUEST:\nOptimize ArrowExtensionArray._from_sequence_of_strings when parsing strings to boolean[pyarrow] dtype\nOptimization function: pandas.api.extensions.ArrowExtensionArray._from_sequence_of_strings\n\n\n[start of pandas/core/arrays/arrow/array.py]\n### Relevant context\n#### Class `pandas.core.arrays.arrow.array.ArrowExtensionArray`\n**Class Signature**\n```python\nclass ArrowExtensionArray(OpsMixin, ExtensionArray, BaseStringArrayMethods):\n```\n**Class Attributes**\n```python\n    _data: pa.ChunkedArray\n    _dtype: ArrowDtype\n    _dt_dayofweek = _dt_day_of_week\n    _dt_weekday = _dt_day_of_week\n    _dt_dayofyear = _dt_day_of_year\n```\n**Class __init__ method**\n```python\n    def __init__(self, values: pa.Array | pa.ChunkedArray) -> None:\n        if pa_version_under7p0:\n            msg = \"pyarrow>=7.0.0 is required for PyArrow backed ArrowExtensionArray.\"\n            raise ImportError(msg)\n        if isinstance(values, pa.Array):\n            self._data = pa.chunked_array([values])\n        elif isinstance(values, pa.ChunkedArray):\n            self._data = values\n        else:\n            raise ValueError(\n                f\"Unsupported type '{type(values)}' for ArrowExtensionArray\"\n            )\n        self._dtype = ArrowDtype(self._data.type)\n```\n##### Method `pandas.core.arrays.arrow.array.ArrowExtensionArray._from_sequence_of_strings`\n```python\n@classmethod\n    def _from_sequence_of_strings(\n        cls, strings, *, dtype: Dtype | None = None, copy: bool = False\n    ):\n        \"\"\"\n        Construct a new ExtensionArray from a sequence of strings.\n        \"\"\"\n        pa_type = to_pyarrow_type(dtype)\n        if (\n            pa_type is None\n            or pa.types.is_binary(pa_type)\n            or pa.types.is_string(pa_type)\n        ):\n            # pa_type is None: Let pa.array infer\n            # pa_type is string/binary: scalars already correct type\n            scalars = strings\n        elif pa.types.is_timestamp(pa_type):\n            from pandas.core.tools.datetimes import to_datetime\n\n            scalars = to_datetime(strings, errors=\"raise\")\n        elif pa.types.is_date(pa_type):\n            from pandas.core.tools.datetimes import to_datetime\n\n            scalars = to_datetime(strings, errors=\"raise\").date\n        elif pa.types.is_duration(pa_type):\n            from pandas.core.tools.timedeltas import to_timedelta\n\n            scalars = to_timedelta(strings, errors=\"raise\")\n            if pa_type.unit != \"ns\":\n                # GH51175: test_from_sequence_of_strings_pa_array\n                # attempt to parse as int64 reflecting pyarrow's\n                # duration to string casting behavior\n                mask = isna(scalars)\n                if not isinstance(strings, (pa.Array, pa.ChunkedArray)):\n                    strings = pa.array(strings, type=pa.string(), from_pandas=True)\n                strings = pc.if_else(mask, None, strings)\n                try:\n                    scalars = strings.cast(pa.int64())\n                except pa.ArrowInvalid:\n                    pass\n        elif pa.types.is_time(pa_type):\n            from pandas.core.tools.times import to_time\n\n            # \"coerce\" to allow \"null times\" (None) to not raise\n            scalars = to_time(strings, errors=\"coerce\")\n        elif pa.types.is_boolean(pa_type):\n            from pandas.core.arrays import BooleanArray\n\n            scalars = BooleanArray._from_sequence_of_strings(strings).to_numpy()\n        elif (\n            pa.types.is_integer(pa_type)\n            or pa.types.is_floating(pa_type)\n            or pa.types.is_decimal(pa_type)\n        ):\n            from pandas.core.tools.numeric import to_numeric\n\n            scalars = to_numeric(strings, errors=\"raise\")\n        else:\n            raise NotImplementedError(\n                f\"Converting strings to {pa_type} is not implemented.\"\n            )\n        return cls._from_sequence(scalars, dtype=pa_type, copy=copy)\n```\n[end of pandas/core/arrays/arrow/array.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

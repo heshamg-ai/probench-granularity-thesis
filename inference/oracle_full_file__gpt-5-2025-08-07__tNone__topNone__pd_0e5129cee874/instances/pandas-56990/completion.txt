@@ -1,0 +1,41 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+        if self.nlevels != other.nlevels:
+            return False
+
+        for i in range(self.nlevels):
+[/SEARCH]
+[REPLACE]
+        if self.nlevels != other.nlevels:
+            return False
+
+        # Fast paths: if levels are identical (same objects) or equal, we can
+        # determine equality by comparing codes (including -1 positions) only,
+        # avoiding materializing values.
+        levels_self = self._levels
+        levels_other = other._levels
+
+        all_same_obj = True
+        for a, b in zip(levels_self, levels_other):
+            if a is not b:
+                all_same_obj = False
+                break
+        if all_same_obj:
+            for sc, oc in zip(self.codes, other.codes):
+                if not np.array_equal(sc, oc):
+                    return False
+            return True
+
+        all_levels_equal = True
+        for a, b in zip(levels_self, levels_other):
+            if not a.equals(b):
+                all_levels_equal = False
+                break
+        if all_levels_equal:
+            for sc, oc in zip(self.codes, other.codes):
+                if not np.array_equal(sc, oc):
+                    return False
+            return True
+
+        for i in range(self.nlevels):
+[/REPLACE]

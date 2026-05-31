@@ -1,0 +1,58 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        _validate_join_method(how)
+[/SEARCH]
+[REPLACE]
+        _validate_join_method(how)
+
+        # Fastpath for unordered CategoricalIndex left/right join with unique other side
+        if (
+            isinstance(self.dtype, CategoricalDtype)
+            and isinstance(other.dtype, CategoricalDtype)
+            and not cast(CategoricalDtype, self.dtype).ordered
+            and not cast(CategoricalDtype, other.dtype).ordered
+            and not sort
+            and how in ("left", "right")
+        ):
+            # Only handle cases where the non-join side is unique to preserve behavior
+            if (how == "left" and other.is_unique) or (how == "right" and self.is_unique):
+                # Build normalized code mapping via union of categories
+                self_cat = cast(Categorical, self._values)
+                other_cat = cast(Categorical, other._values)
+                cats_union = Index(self_cat.categories).union(Index(other_cat.categories))
+                # Map categories to union positions
+                map_self = cats_union.get_indexer_for(Index(self_cat.categories))
+                map_other = cats_union.get_indexer_for(Index(other_cat.categories))
+                scodes = self_cat.codes
+                ocodes = other_cat.codes
+                # Normalize codes to union space, preserving -1 for missing
+                snorm = np.where(scodes >= 0, map_self.take(scodes), -1)
+                onorm = np.where(ocodes >= 0, map_other.take(ocodes), -1)
+
+                if how == "left":
+                    # Build position lookup for right side (unique)
+                    pos = np.full(len(cats_union), -1, dtype=np.intp)
+                    ok = onorm >= 0
+                    if ok.any():
+                        ok_idx = ok.nonzero()[0]
+                        ucodes, first_pos = np.unique(onorm[ok], return_index=True)
+                        pos[ucodes] = ok_idx[first_pos]
+                    rindexer = np.full(len(snorm), -1, dtype=np.intp)
+                    mask = snorm >= 0
+                    if mask.any():
+                        rindexer[mask] = pos[snorm[mask]]
+                    return self._view(), None, ensure_platform_int(rindexer)
+                else:
+                    # how == "right"
+                    pos = np.full(len(cats_union), -1, dtype=np.intp)
+                    ok = snorm >= 0
+                    if ok.any():
+                        ok_idx = ok.nonzero()[0]
+                        ucodes, first_pos = np.unique(snorm[ok], return_index=True)
+                        pos[ucodes] = ok_idx[first_pos]
+                    lindexer = np.full(len(onorm), -1, dtype=np.intp)
+                    mask = onorm >= 0
+                    if mask.any():
+                        lindexer[mask] = pos[onorm[mask]]
+                    return other._view(), ensure_platform_int(lindexer), None
+[/REPLACE]

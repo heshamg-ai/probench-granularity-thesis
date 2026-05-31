@@ -1,0 +1,93 @@
+pandas/core/frame.py
+[SEARCH]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            # We have EAs with the same dtype. We can preserve that dtype in transpose.
+            dtype = dtypes[0]
+            arr_type = dtype.construct_array_type()
+            values = self.values
+
+            new_values = [arr_type._from_sequence(row, dtype=dtype) for row in values]
+            result = type(self)._from_arrays(
+                new_values, index=self.columns, columns=self.index
+            )
+[/SEARCH]
+[REPLACE]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            # We have EAs with the same dtype. We can preserve that dtype in transpose.
+            dtype = dtypes[0]
+            arr_type = dtype.construct_array_type()
+            values = self.values
+
+            if isinstance(dtype, BaseMaskedDtype):
+                from pandas.core.arrays.masked import (
+                    transpose_homogenous_masked_arrays,
+                )
+                new_values = transpose_homogenous_masked_arrays(values)
+            else:
+                new_values = [arr_type._from_sequence(row, dtype=dtype) for row in values]
+            result = type(self)._from_arrays(
+                new_values, index=self.columns, columns=self.index
+            )
+[/REPLACE]
+
+pandas/core/arrays/masked.py
+[SEARCH]
+### Relevant context
+**New code only:** No baseline bodies or inlined source are available for this file in this record.
+Added items (summary):
+- `pandas.core.arrays.masked.transpose_homogenous_masked_arrays` (function)
+[/SEARCH]
+[REPLACE]
+### Relevant context
+**New code only:** No baseline bodies or inlined source are available for this file in this record.
+Added items (summary):
+- `pandas.core.arrays.masked.transpose_homogenous_masked_arrays` (function)
+
+def transpose_homogenous_masked_arrays(
+    values: np.ndarray,
+) -> list:
+    """
+    Fast path for transposing a 2D numpy array of homogeneous masked dtype.
+
+    Parameters
+    ----------
+    values : np.ndarray
+        2D numpy array of BaseMaskedArray objects.
+
+    Returns
+    -------
+    list
+        List of 1D BaseMaskedArray objects, each representing a row of the
+        transposed array.
+    """
+    # Extract underlying data and mask efficiently
+    n_rows, n_cols = values.shape
+    # All masked arrays share the same dtype
+    first = values.flat[0]
+    scalar_dtype = first.dtype
+    masked_dtype = type(first)
+
+    # Pre-allocate the transposed data and mask arrays as plain numpy arrays
+    new_data = np.empty((n_cols, n_rows), dtype=scalar_dtype.numpy_dtype)
+    new_mask = np.empty((n_cols, n_rows), dtype=np.bool_)
+
+    for i in range(n_rows):
+        arr = values[i]
+        new_data[:, i] = arr._data
+        new_mask[:, i] = arr._mask
+
+    # Build the result as a list of 1D masked arrays
+    result = [
+        masked_dtype(new_data[j].copy(), new_mask[j].copy())
+        for j in range(n_cols)
+    ]
+    return result
+[/REPLACE]

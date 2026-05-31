@@ -1,0 +1,56 @@
+pandas/core/base.py
+[SEARCH]
+        if na_value is not lib.no_default:
+            values = self._values
+            if not can_hold_element(values, na_value):
+                # if we can't hold the na_value asarray either makes a copy or we
+                # error before modifying values. The asarray later on thus won't make
+                # another copy
+                values = np.asarray(values, dtype=dtype)
+            else:
+                values = values.copy()
+
+            values[np.asanyarray(self.isna())] = na_value
+        else:
+            values = self._values
+[/SEARCH]
+[REPLACE]
+        if na_value is not lib.no_default:
+            # optimized path for float dtype with na_value=np.nan to avoid unnecessary work
+            if dtype is not None:
+                try:
+                    dtype_obj = np.dtype(dtype)
+                except Exception:
+                    dtype_obj = None
+                if (
+                    dtype_obj is not None
+                    and dtype_obj.kind == "f"
+                    and isinstance(na_value, float)
+                    and np.isnan(na_value)
+                ):
+                    values = self._values
+                    if can_hold_element(values, na_value):
+                        values = values.copy()
+                        if self.hasnans:
+                            values[np.asanyarray(self.isna())] = na_value
+                    else:
+                        result = np.asarray(values, dtype=dtype)
+                        if self.hasnans:
+                            result[np.asanyarray(self.isna())] = na_value
+                        return result
+                    result = np.asarray(values, dtype=dtype)
+                    return result
+
+            values = self._values
+            if not can_hold_element(values, na_value):
+                # if we can't hold the na_value asarray either makes a copy or we
+                # error before modifying values. The asarray later on thus won't make
+                # another copy
+                values = np.asarray(values, dtype=dtype)
+            else:
+                values = values.copy()
+
+            values[np.asanyarray(self.isna())] = na_value
+        else:
+            values = self._values
+[/REPLACE]

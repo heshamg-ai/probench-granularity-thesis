@@ -1,0 +1,141 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+    def _set_levels(
+        self,
+        levels,
+        *,
+        level=None,
+        copy: bool = False,
+        validate: bool = True,
+        verify_integrity: bool = False,
+    ) -> None:
+        # This is NOT part of the levels property because it should be
+        # externally not allowed to set levels. User beware if you change
+        # _levels directly
+        if validate:
+            if len(levels) == 0:
+                raise ValueError("Must set non-zero number of levels.")
+            if level is None and len(levels) != self.nlevels:
+                raise ValueError("Length of levels must match number of levels.")
+            if level is not None and len(levels) != len(level):
+                raise ValueError("Length of levels must match length of level.")
+
+        if level is None:
+            new_levels = FrozenList(
+                ensure_index(lev, copy=copy)._view() for lev in levels
+            )
+        else:
+            level_numbers = [self._get_level_number(lev) for lev in level]
+            new_levels_list = list(self._levels)
+            for lev_num, lev in zip(level_numbers, levels):
+                new_levels_list[lev_num] = ensure_index(lev, copy=copy)._view()
+            new_levels = FrozenList(new_levels_list)
+
+        if verify_integrity:
+            new_codes = self._verify_integrity(levels=new_levels)
+            self._codes = new_codes
+
+        names = self.names
+        self._levels = new_levels
+        if any(names):
+            self._set_names(names)
+
+        self._reset_cache()
+[/SEARCH]
+[REPLACE]
+    def _set_levels(
+        self,
+        levels,
+        *,
+        level=None,
+        copy: bool = False,
+        validate: bool = True,
+        verify_integrity: bool = False,
+    ) -> None:
+        # This is NOT part of the levels property because it should be
+        # externally not allowed to set levels. User beware if you change
+        # _levels directly
+        if validate:
+            if len(levels) == 0:
+                raise ValueError("Must set non-zero number of levels.")
+            if level is None and len(levels) != self.nlevels:
+                raise ValueError("Length of levels must match number of levels.")
+            if level is not None and len(levels) != len(level):
+                raise ValueError("Length of levels must match length of level.")
+
+        if level is None:
+            new_levels = FrozenList(
+                ensure_index(lev, copy=copy)._view() for lev in levels
+            )
+        else:
+            level_numbers = [self._get_level_number(lev) for lev in level]
+            new_levels_list = list(self._levels)
+            for lev_num, lev in zip(level_numbers, levels):
+                new_levels_list[lev_num] = ensure_index(lev, copy=copy)._view()
+            new_levels = FrozenList(new_levels_list)
+
+        if verify_integrity:
+            new_codes = self._verify_integrity(levels=new_levels, codes=self._codes)
+            self._codes = new_codes
+
+        names = self.names
+        self._levels = new_levels
+        if any(names):
+            self._set_names(names)
+
+        self._reset_cache()
+[/REPLACE]
+
+pandas/core/indexes/multi.py
+[SEARCH]
+    def _verify_integrity(self, codes: list | None = None, levels: list | None = None):
+        """
+        Parameters
+        ----------
+        codes : optional list
+            Codes to check for validity. Defaults to current codes.
+        levels : optional list
+            Levels to check for validity. Defaults to current levels.
+
+        Raises
+        ------
+        ValueError
+            If length of levels and codes don't match, if the codes for any
+            level would exceed level bounds, or there are any duplicate levels.
+
+        Returns
+        -------
+        new codes where code value = -1 if it corresponds to a
+        NaN level.
+        """
+        # NOTE: Currently does not check, among other things, that cached
+        # nlevels matches nor that sortorder matches actually sortorder.
+        codes = codes or self.codes
+        levels = levels or self.levels
+[/SEARCH]
+[REPLACE]
+    def _verify_integrity(self, codes: list | None = None, levels: list | None = None):
+        """
+        Parameters
+        ----------
+        codes : optional list
+            Codes to check for validity. Defaults to current codes.
+        levels : optional list
+            Levels to check for validity. Defaults to current levels.
+
+        Raises
+        ------
+        ValueError
+            If length of levels and codes don't match, if the codes for any
+            level would exceed level bounds, or there are any duplicate levels.
+
+        Returns
+        -------
+        new codes where code value = -1 if it corresponds to a
+        NaN level.
+        """
+        # NOTE: Currently does not check, among other things, that cached
+        # nlevels matches nor that sortorder matches actually sortorder.
+        codes = self._codes if codes is None else codes
+        levels = self._levels if levels is None else levels
+[/REPLACE]

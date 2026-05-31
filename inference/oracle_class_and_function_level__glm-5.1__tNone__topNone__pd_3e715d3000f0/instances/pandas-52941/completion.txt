@@ -1,0 +1,20 @@
+pandas/core/generic.py
+[SEARCH]
+        if items is not None:
+            name = self._get_axis_name(axis)
+            # error: Keywords must be strings
+            return self.reindex(  # type: ignore[misc]
+                **{name: [r for r in items if r in labels]}  # type: ignore[arg-type]
+            )
+[/SEARCH]
+[REPLACE]
+        if items is not None:
+            name = self._get_axis_name(axis)
+            # error: Keywords must be strings
+            existing = labels.intersection(items)
+            # Preserve order of items for the reindex operation
+            items_in_order = [r for r in items if r in existing]
+            return self.reindex(  # type: ignore[misc]
+                **{name: items_in_order}  # type: ignore[arg-type]
+            )
+[/REPLACE]

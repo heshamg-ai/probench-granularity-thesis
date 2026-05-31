@@ -1,0 +1,243 @@
+
+
+Looking at the optimization request for `DataFrame.loc` and `Series.loc` MultiIndex key lookups. Let me first explore the relevant pandas source code.
+
+pandas/core/indexing.py
+[SEARCH]
+        # ----------------------------------------------------------------
+        # MultiIndex query
+
+        # short-circuit if the key is not a tuple of tuples.
+        if len(key) == 1:
+            key = key[0]
+            if is_int_indexer(key):
+                self._setitem_with_indexer(indexer, value)
+                return
+
+            elif isinstance(key, slice) or is_list_like(key):
+                if isinstance(self.obj.index, ABCMultiIndex):
+                    # If i is a slice, preserve the original behavior
+                    #  (key = key[0] below)
+                    if is_int_indexer(slice(None)):
+                        raise KeyError(key)
+                    return self._handle_legacy_multi_index_key_error(key)
+
+        if not len(key):
+            return
+
+        if not isinstance(key, tuple):
+            key = (key,)
+
+        # Slicing out a multi-index axis is always done with the last
+        # axis being the slice
+        if (
+            isinstance(key, tuple)
+            and len(key) == self.obj.ndim
+            and all(isinstance(k, slice) for k in key)
+        ):
+            # handle the multi-index case by slicing
+            #  (i.e. df.loc[(slice(None), slice('a', 'c'))])
+            obj = self.obj
+            for ax, k in zip(obj.index.axes, key):
+                obj = obj.loc[(slice(None), ax.get_loc(k))]
+            return
+
+        if not is_list_like(key[-1]) or isinstance(key[-1], slice):
+            if len(key) > self.obj.ndim:
+                raise KeyError(key)
+
+            # A slice index that resolves to a single element
+            #  (e.g. df.loc[(I1, I2, slice(None)), 'col'])
+            #  that we want to expand back out to a tuple for later
+            if isinstance(key[-1], slice) and self.obj.ndim == 2:
+                # (df.loc[(I1, I2, slice(None)), 'col'])
+                key = (*key[:-1], (key[-1],))
+            else:
+                key = (*key[:-1], (key[-1],)) if len(key) > 1 else (key[0], (key[0],))
+
+            if isinstance(self.obj.index, ABCMultiIndex):
+                if is_int_indexer(key):
+                    self._setitem_with_indexer(indexer, value)
+                    return
+
+        return super().__getitem__(key)
+[/SEARCH]
+[REPLACE]
+        # ----------------------------------------------------------------
+        # MultiIndex query
+
+        # short-circuit if the key is not a tuple of tuples.
+        if len(key) == 1:
+            key = key[0]
+            if is_int_indexer(key):
+                self._setitem_with_indexer(indexer, value)
+                return
+
+            elif isinstance(key, slice) or is_list_like(key):
+                if isinstance(self.obj.index, ABCMultiIndex):
+                    # If i is a slice, preserve the original behavior
+                    #  (key = key[0] below)
+                    if is_int_indexer(slice(None)):
+                        raise KeyError(key)
+                    return self._handle_legacy_multi_index_key_error(key)
+
+        if not len(key):
+            return
+
+        if not isinstance(key, tuple):
+            key = (key,)
+
+        # Slicing out a multi-index axis is always done with the last
+        # axis being the slice
+        if (
+            isinstance(key, tuple)
+            and len(key) == self.obj.ndim
+            and all(isinstance(k, slice) for k in key)
+        ):
+            # handle the multi-index case by slicing
+            #  (i.e. df.loc[(slice(None), slice('a', 'c'))])
+            obj = self.obj
+            for ax, k in zip(obj.index.axes, key):
+                obj = obj.loc[(slice(None), ax.get_loc(k))]
+            return
+
+        if not is_list_like(key[-1]) or isinstance(key[-1], slice):
+            if len(key) > self.obj.ndim:
+                raise KeyError(key)
+
+            # A slice index that resolves to a single element
+            #  (e.g. df.loc[(I1, I2, slice(None)), 'col'])
+            #  that we want to expand back out to a tuple for later
+            if isinstance(key[-1], slice) and self.obj.ndim == 2:
+                # (df.loc[(I1, I2, slice(None)), 'col'])
+                key = (*key[:-1], (key[-1],))
+            else:
+                key = (*key[:-1], (key[-1],)) if len(key) > 1 else (key[0], (key[0],))
+
+            if isinstance(self.obj.index, ABCMultiIndex):
+                if is_int_indexer(key):
+                    self._setitem_with_indexer(indexer, value)
+                    return
+
+        return super().__getitem__(key)
+[/REPLACE]
+
+pandas/core/indexing.py
+[SEARCH]
+        # ----------------------------------------------------------------
+        # MultiIndex query
+
+        # short-circuit if the key is not a tuple of tuples.
+        if len(key) == 1:
+            key = key[0]
+            if is_int_indexer(key):
+                self._setitem_with_indexer(indexer, value)
+                return
+
+            elif isinstance(key, slice) or is_list_like(key):
+                if isinstance(self.obj.index, ABCMultiIndex):
+                    # If i is a slice, preserve the original behavior
+                    #  (key = key[0] below)
+                    if is_int_indexer(slice(None)):
+                        raise KeyError(key)
+                    return self._handle_legacy_multi_index_key_error(key)
+
+        if not len(key):
+            return
+
+        if not isinstance(key, tuple):
+            key = (key,)
+
+        # Slicing out a multi-index axis is always done with the last
+        # axis being the slice
+        if (
+            isinstance(key, tuple)
+            and len(key) == self.obj.ndim
+            and all(isinstance(k, slice) for k in key)
+        ):
+            # handle the multi-index case by slicing
+            #  (i.e. df.loc[(slice(None), slice('a', 'c'))])
+            obj = self.obj
+            for ax, k in zip(obj.index.axes, key):
+                obj = obj.loc[(slice(None), ax.get_loc(k))]
+            return
+
+        if not is_list_like(key[-1]) or isinstance(key[-1], slice):
+            if len(key) > self.obj.ndim:
+                raise KeyError(key)
+
+            # A slice index that resolves to a single element
+            #  (e.g. df.loc[(I1, I2, slice(None)), 'col'])
+            #  that we want to expand back out to a tuple for later
+            if isinstance(key[-1], slice) and self.obj.ndim == 2:
+                # (df.loc[(I1, I2, slice(None)), 'col'])
+                key = (*key[:-1], (key[-1],))
+            else:
+                key = (*key[:-1], (key[-1],)) if len(key) > 1 else (key[0], (key[0],))
+
+            if isinstance(self.obj.index, ABCMultiIndex):
+                if is_int_indexer(key):
+                    self._setitem_with_indexer(indexer, value)
+                    return
+
+        return super().__getitem__(key)
+[/SEARCH]
+[REPLACE]
+        # ----------------------------------------------------------------
+        # MultiIndex query
+
+        # short-circuit if the key is not a tuple of tuples.
+        if len(key) == 1:
+            key = key[0]
+            if is_int_indexer(key):
+                self._setitem_with_indexer(indexer, value)
+                return
+
+            elif isinstance(key, slice) or is_list_like(key):
+                if isinstance(self.obj.index, ABCMultiIndex):
+                    # If i is a slice, preserve the original behavior
+                    #  (key = key[0] below)
+                    if is_int_indexer(slice(None)):
+                        raise KeyError(key)
+                    return self._handle_legacy_multi_index_key_error(key)
+
+        if not len(key):
+            return
+
+        if not isinstance(key, tuple):
+            key = (key,)
+
+        # Slicing out a multi-index axis is always done with the last
+        # axis being the slice
+        if (
+            isinstance(key, tuple)
+            and len(key) == self.obj.ndim
+            and all(isinstance(k, slice) for k in key)
+        ):
+            # handle the multi-index case by slicing
+            #  (i.e. df.loc[(slice(None), slice('a', 'c'))])
+            obj = self.obj
+            for ax, k in zip(obj.index.axes, key):
+                obj = obj.loc[(slice(None), ax.get_loc(k))]
+            return
+
+        if not is_list_like(key[-1]) or isinstance(key[-1], slice):
+            if len(key) > self.obj.ndim:
+                raise KeyError(key)
+
+            # A slice index that resolves to a single element
+            #  (e.g. df.loc[(I1, I2, slice(None)), 'col'])
+            #  that we want to expand back out to a tuple for later
+            if isinstance(key[-1], slice) and self.obj.ndim == 2:
+                # (df.loc[(I1, I2, slice(None)), 'col'])
+                key = (*key[:-1], (key[-1],))
+            else:
+                key = (*key[:-1], (key[-1],)) if len(key) > 1 else (key[0], (key[0],))
+
+            if isinstance(self.obj.index, ABCMultiIndex):
+                if is_int_indexer(key):
+                    self._setitem_with_indexer(indexer, value)
+                    return
+
+        return super().__getitem__(key)
+[/REPLACE]

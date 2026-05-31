@@ -1,0 +1,10 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+    klass, lk, rk = _convert_arrays_and_get_rizer_klass(lk, rk)
+[/SEARCH]
+[REPLACE]
+    if isinstance(lk.dtype, DatetimeTZDtype) and isinstance(rk.dtype, DatetimeTZDtype):
+        klass = lib.Int64Factorizer
+    else:
+        klass, lk, rk = _convert_arrays_and_get_rizer_klass(lk, rk)
+[/REPLACE]

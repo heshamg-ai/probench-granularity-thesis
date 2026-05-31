@@ -1,0 +1,150 @@
+sklearn/feature_selection/_univariate_selection.py
+[SEARCH]
+def chi2(X, y):
+    """Compute chi-squared stats between each non-negative feature and class.
+
+    This score can be used to select the n_features features with the
+    highest values for the test chi-squared statistic from X, which must
+    contain only non-negative features such as booleans or frequencies
+    (e.g., term counts in document classification), relative to the classes.
+
+    Recall that the chi-square test measures dependence between stochastic
+    variables, so using this function "weeds out" the features that are the
+    most likely to be independent of class and therefore irrelevant for
+    classification.
+
+    Read more in the :ref:`User Guide <univariate_feature_selection>`.
+
+    Parameters
+    ----------
+    X : {array-like, sparse matrix} of shape (n_samples, n_features)
+        Sample vectors.
+
+    y : array-like of shape (n_samples,)
+        Target vector (class labels).
+
+    Returns
+    -------
+    chi2 : ndarray of shape (n_features,)
+        Chi2 statistics for each feature.
+
+    p_values : ndarray of shape (n_features,)
+        P-values for each feature.
+
+    Notes
+    -----
+    Complexity of this algorithm is O(n_classes * n_features).
+
+    See Also
+    --------
+    f_classif : ANOVA F-value between label/feature for classes.
+    f_regression : F-value between label/feature for regression tasks.
+    """
+
+    # XXX: we might want to do some of the following in logspace instead for
+    # numerical stability.
+    X = check_array(X, accept_sparse="csr")
+    if np.any((X.data if issparse(X) else X) < 0):
+        raise ValueError("Input X must be non-negative.")
+
+    Y = LabelBinarizer().fit_transform(y)
+    if Y.shape[1] == 1:
+        Y = np.append(1 - Y, Y, axis=2)
+
+    observed = safe_sparse_dot(Y.T, X)  # n_classes * n_features
+
+    feature_count = X.sum(axis=0).reshape(1, -1)
+    class_prob = Y.mean(axis=0).reshape(1, -1)
+    expected = np.dot(class_prob.T, feature_count)
+
+    return _chisquare(observed, expected)
+[/SEARCH]
+[REPLACE]
+def chi2(X, y):
+    """Compute chi-squared stats between each non-negative feature and class.
+
+    This score can be used to select the n_features features with the
+    highest values for the test chi-squared statistic from X, which must
+    contain only non-negative features such as booleans or frequencies
+    (e.g., term counts in document classification), relative to the classes.
+
+    Recall that the chi-square test measures dependence between stochastic
+    variables, so using this function "weeds out" the features that are the
+    most likely to be independent of class and therefore irrelevant for
+    classification.
+
+    Read more in the :ref:`User Guide <univariate_feature_selection>`.
+
+    Parameters
+    ----------
+    X : {array-like, sparse matrix} of shape (n_samples, n_features)
+        Sample vectors.
+
+    y : array-like of shape (n_samples,)
+        Target vector (class labels).
+
+    Returns
+    -------
+    chi2 : ndarray of shape (n_features,)
+        Chi2 statistics for each feature.
+
+    p_values : ndarray of shape (n_features,)
+        P-values for each feature.
+
+    Notes
+    -----
+    Complexity of this algorithm is O(n_classes * n_features).
+
+    See Also
+    --------
+    f_classif : ANOVA F-value between label/feature for classes.
+    f_regression : F-value between label/feature for regression tasks.
+    """
+
+    # XXX: we might want to do some of the following in logspace instead for
+    # numerical stability.
+    X = check_array(X, accept_sparse="csr")
+    if np.any((X.data if issparse(X) else X) < 0):
+        raise ValueError("Input X must be non-negative.")
+
+    # Encode labels into integer indices for efficient sparse computation
+    classes, y_encoded = np.unique(y, return_inverse=True)
+    n_samples = X.shape[0]
+    n_classes = classes.shape[0]
+
+    # Fast path for binary classification: avoid LabelBinarizer overhead
+    if n_classes == 2:
+        # For two classes, compute observed for both classes and stack
+        # y_encoded is 0 or 1; use boolean mask for each class
+        mask0 = y_encoded == 0
+        mask1 = ~mask0  # equivalent to y_encoded == 1, but avoids second comparison
+        observed = np.vstack([
+            X[mask0, :].sum(axis=0),
+            X[mask1, :].sum(axis=0)
+        ])
+        observed = np.asarray(observed).reshape(2, -1)
+    else:
+        # For multi-class, use sparse matrix to avoid dense Y memory
+        from scipy import sparse as sp
+        
+        # Build sparse indicator matrix Y as CSR
+        Y = sp.csr_matrix((np.ones(n_samples, dtype=np.int8), (np.arange(n_samples), y_encoded)), shape=(n_samples, n_classes))
+        observed = safe_sparse_dot(Y.T, X)
+        if issparse(observed):
+            observed = observed.toarray()
+        observed = np.asarray(observed)
+
+    # Ensure observed is dense array for _chisquare
+    if issparse(observed):
+        observed = observed.toarray()
+    observed = np.asarray(observed)
+
+    feature_count = X.sum(axis=0).reshape(1, -1)
+    
+    # Compute class probabilities efficiently without dense Y
+    class_counts = np.bincount(y_encoded, minlength=n_classes).reshape(-1, 1)
+    class_prob = (class_counts / n_samples).reshape(1, -1)
+    expected = np.dot(class_prob.T, feature_count)
+
+    return _chisquare(observed, expected)
+[/REPLACE]

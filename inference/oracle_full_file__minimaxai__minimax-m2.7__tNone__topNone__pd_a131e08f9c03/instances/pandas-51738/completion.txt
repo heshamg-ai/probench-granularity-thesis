@@ -1,0 +1,110 @@
+
+
+Looking at the code, I need to optimize `pandas.Index.is_unique` for speed after slicing. The current implementation always calls `self._engine.is_unique`, which builds an expensive hash table. For sliced indexes with sorted data, we can check uniqueness by comparing adjacent elements in O(n) time without building the engine.
+
+Let me implement the optimization:
+[SEARCH]
+    @cache_readonly
+    def is_unique(self) -> bool:
+        """
+        Return if the index has unique values.
+
+        Returns
+        -------
+        bool
+
+        See Also
+        --------
+        Index.has_duplicates : Inverse method that checks if it has duplicate values.
+
+        Examples
+        --------
+        >>> idx = pd.Index([1, 5, 7, 7])
+        >>> idx.is_unique
+        False
+
+        >>> idx = pd.Index([1, 5, 7])
+        >>> idx.is_unique
+        True
+
+        >>> idx = pd.Index(["Watermelon", "Orange", "Apple",
+        ...                 "Watermelon"]).astype("category")
+        >>> idx.is_unique
+        False
+
+        >>> idx = pd.Index(["Orange", "Apple",
+        ...                 "Watermelon"]).astype("category")
+        >>> idx.is_unique
+        True
+        """
+        return self._engine.is_unique
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def is_unique(self) -> bool:
+        """
+        Return if the index has unique values.
+
+        Returns
+        -------
+        bool
+
+        See Also
+        --------
+        Index.has_duplicates : Inverse method that checks if it has duplicate values.
+
+        Examples
+        --------
+        >>> idx = pd.Index([1, 5, 7, 7])
+        >>> idx.is_unique
+        False
+
+        >>> idx = pd.Index([1, 5, 7])
+        >>> idx.is_unique
+        True
+
+        >>> idx = pd.Index(["Watermelon", "Orange", "Apple",
+        ...                 "Watermelon"]).astype("category")
+        >>> idx.is_unique
+        False
+
+        >>> idx = pd.Index(["Orange", "Apple",
+        ...                 "Watermelon"]).astype("category")
+        >>> idx.is_unique
+        True
+        """
+        # Optimization: For monotonic numeric and datetime-like arrays,
+        # check uniqueness by comparing adjacent elements. This avoids
+        # expensive engine construction for common cases (e.g., sliced indexes).
+        values = self._values
+        if isinstance(values, np.ndarray):
+            kind = self.dtype.kind
+
+            # Handle numeric types (integer, unsigned, float, complex, bool)
+            if kind in "iufc":
+                if len(self) <= 1:
+                    return True
+
+                if self.is_monotonic_increasing:
+                    # For sorted data, check adjacent elements
+                    # This is O(n) time, O(1) space
+                    return np.all(values[1:] != values[:-1])
+                else:
+                    # For unsorted data, use engine
+                    return self._engine.is_unique
+
+            # Handle datetime-like types (datetime64, timedelta64)
+            if needs_i8_conversion(self.dtype):
+                if len(self) <= 1:
+                    return True
+
+                if self.is_monotonic_increasing:
+                    # For datetime-like, convert to int64 for comparison
+                    int_values = values.view(np.int64)
+                    return np.all(int_values[1:] != int_values[:-1])
+                else:
+                    return self._engine.is_unique
+
+        # For ExtensionArrays and other dtypes, use engine
+        return self._engine.is_unique
+[/REPLACE]

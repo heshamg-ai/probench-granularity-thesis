@@ -1,0 +1,36 @@
+ pandas/core/reshape/merge.py [SEARCH]             if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+                if needs_i8_conversion(lbv.dtype):
+                    lbv = lbv.view("i8")
+                if needs_i8_conversion(rbv.dtype):
+                    rbv = rbv.view("i8") [/SEARCH] [REPLACE]             if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+                if needs_i8_conversion(lbv.dtype):
+                    lbv = lbv.view("i8")
+                if needs_i8_conversion(rbv.dtype):
+                    rbv = rbv.view("i8")
+                # When the 'by' columns have different dtypes, we need to
+                # factorize them to get comparable integer codes. This handles
+                # cases like int8 vs int64, or any other dtype mismatch that
+                # would prevent direct comparison in the asof join Cython code.
+                if lbv.dtype.kind != rbv.dtype.kind:
+                    # Factorize both sides together for consistent codes
+                    combined = np.concatenate([lbv, rbv])
+                    codes, _ = pd.factorize(combined, sort=False)
+                    left_len = len(lbv)
+                    lbv = codes[:left_len].astype(np.intp)
+                    rbv = codes[left_len:].astype(np.intp)
+                elif lbv.dtype != rbv.dtype:
+                    # Same kind but different dtype (e.g., int32 vs int64)
+                    # Find a common dtype that can hold both ranges
+                    common_dtype = np.find_common_type([lbv.dtype, rbv.dtype], [])
+                    lbv = lbv.astype(common_dtype, copy=False)
+                    rbv = rbv.astype(common_dtype, copy=False) [/REPLACE]

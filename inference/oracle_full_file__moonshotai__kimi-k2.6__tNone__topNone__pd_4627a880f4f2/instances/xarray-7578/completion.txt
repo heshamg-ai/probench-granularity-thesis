@@ -1,0 +1,232 @@
+xarray/core/rolling.py
+[SEARCH]
+    def _construct(
+        self,
+        obj: DataArray,
+        window_dim: Hashable | Mapping[Any, Hashable] | None = None,
+        stride: int | Mapping[Any, int] = 1,
+        fill_value: Any = dtypes.NA,
+        keep_attrs: bool | None = None,
+        **window_dim_kwargs: Hashable,
+    ) -> DataArray:
+        from xarray.core.dataarray import DataArray
+
+        keep_attrs = self._get_keep_attrs(keep_attrs)
+
+        if window_dim is None:
+            if len(window_dim_kwargs) == 0:
+                raise ValueError(
+                    "Either window_dim or window_dim_kwargs need to be specified."
+                )
+            window_dim = {d: window_dim_kwargs[str(d)] for d in self.dim}
+
+        window_dims = self._mapping_to_list(
+            window_dim, allow_default=False, allow_allsame=False
+        )
+        strides = self._mapping_to_list(stride, default=1)
+
+        window = obj.variable.rolling_window(
+            self.dim, self.window, window_dims, self.center, fill_value=fill_value
+        )
+
+        attrs = obj.attrs if keep_attrs else {}
+
+        result = DataArray(
+            window,
+            dims=obj.dims + tuple(window_dims),
+            coords=obj.coords,
+            attrs=attrs,
+            name=obj.name,
+        )
+        return result.isel({d: slice(None, None, s) for d, s in zip(self.dim, strides)})
+[/SEARCH]
+[REPLACE]
+    def _construct(
+        self,
+        obj: DataArray,
+        window_dim: Hashable | Mapping[Any, Hashable] | None = None,
+        stride: int | Mapping[Any, int] = 1,
+        fill_value: Any = dtypes.NA,
+        keep_attrs: bool | None = None,
+        **window_dim_kwargs: Hashable,
+    ) -> DataArray:
+        from xarray.core.dataarray import DataArray
+
+        keep_attrs = self._get_keep_attrs(keep_attrs)
+
+        if window_dim is None:
+            if len(window_dim_kwargs) == 0:
+                raise ValueError(
+                    "Either window_dim or window_dim_kwargs need to be specified."
+                )
+            window_dim = {d: window_dim_kwargs[str(d)] for d in self.dim}
+
+        window_dims = self._mapping_to_list(
+            window_dim, allow_default=False, allow_allsame=False
+        )
+        strides = self._mapping_to_list(stride, default=1)
+
+        window = obj.variable.rolling_window(
+            self.dim, self.window, window_dims, self.center, fill_value=fill_value
+        )
+
+        # Apply stride before creating DataArray to avoid instantiating full array
+        if any(s != 1 for s in strides):
+            window = window.isel({d: slice(None, None, s) for d, s in zip(self.dim, strides)})
+
+        attrs = obj.attrs if keep_attrs else {}
+
+        result = DataArray(
+            window,
+            dims=window.dims,
+            coords=obj.coords,
+            attrs=attrs,
+            name=obj.name,
+        )
+        return result
+[/REPLACE]
+xarray/core/rolling.py
+[SEARCH]
+    def construct(
+        self,
+        window_dim: Hashable | Mapping[Any, Hashable] | None = None,
+        stride: int | Mapping[Any, int] = 1,
+        fill_value: Any = dtypes.NA,
+        keep_attrs: bool | None = None,
+        **window_dim_kwargs: Hashable,
+    ) -> Dataset:
+        """
+        Convert this rolling object to xr.Dataset,
+        where the window dimension is stacked as a new dimension
+
+        Parameters
+        ----------
+        window_dim : str or mapping, optional
+            A mapping from dimension name to the new window dimension names.
+            Just a string can be used for 1d-rolling.
+        stride : int, optional
+            size of stride for the rolling window.
+        fill_value : Any, default: dtypes.NA
+            Filling value to match the dimension size.
+        **window_dim_kwargs : {dim: new_name, ...}, optional
+            The keyword arguments form of ``window_dim``.
+
+        Returns
+        -------
+        Dataset with variables converted from rolling object.
+        """
+
+        from xarray.core.dataset import Dataset
+
+        keep_attrs = self._get_keep_attrs(keep_attrs)
+
+        if window_dim is None:
+            if len(window_dim_kwargs) == 0:
+                raise ValueError(
+                    "Either window_dim or window_dim_kwargs need to be specified."
+                )
+            window_dim = {d: window_dim_kwargs[str(d)] for d in self.dim}
+
+        window_dims = self._mapping_to_list(
+            window_dim, allow_default=False, allow_allsame=False
+        )
+        strides = self._mapping_to_list(stride, default=1)
+
+        dataset = {}
+        for key, da in self.obj.data_vars.items():
+            # keeps rollings only for the dataset depending on self.dim
+            dims = [d for d in self.dim if d in da.dims]
+            if dims:
+                wi = {d: window_dims[i] for i, d in enumerate(self.dim) if d in da.dims}
+                st = {d: strides[i] for i, d in enumerate(self.dim) if d in da.dims}
+
+                dataset[key] = self.rollings[key].construct(
+                    window_dim=wi,
+                    fill_value=fill_value,
+                    stride=st,
+                    keep_attrs=keep_attrs,
+                )
+            else:
+                dataset[key] = da.copy()
+
+            # as the DataArrays can be copied we need to delete the attrs
+            if not keep_attrs:
+                dataset[key].attrs = {}
+
+        attrs = self.obj.attrs if keep_attrs else {}
+
+        return Dataset(dataset, coords=self.obj.coords, attrs=attrs).isel(
+            {d: slice(None, None, s) for d, s in zip(self.dim, strides)}
+        )
+[/SEARCH]
+[REPLACE]
+    def construct(
+        self,
+        window_dim: Hashable | Mapping[Any, Hashable] | None = None,
+        stride: int | Mapping[Any, int] = 1,
+        fill_value: Any = dtypes.NA,
+        keep_attrs: bool | None = None,
+        **window_dim_kwargs: Hashable,
+    ) -> Dataset:
+        """
+        Convert this rolling object to xr.Dataset,
+        where the window dimension is stacked as a new dimension
+
+        Parameters
+        ----------
+        window_dim : str or mapping, optional
+            A mapping from dimension name to the new window dimension names.
+            Just a string can be used for 1d-rolling.
+        stride : int, optional
+            size of stride for the rolling window.
+        fill_value : Any, default: dtypes.NA
+            Filling value to match the dimension size.
+        **window_dim_kwargs : {dim: new_name, ...}, optional
+            The keyword arguments form of ``window_dim``.
+
+        Returns
+        -------
+        Dataset with variables converted from rolling object.
+        """
+
+        from xarray.core.dataset import Dataset
+
+        keep_attrs = self._get_keep_attrs(keep_attrs)
+
+        if window_dim is None:
+            if len(window_dim_kwargs) == 0:
+                raise ValueError(
+                    "Either window_dim or window_dim_kwargs need to be specified."
+                )
+            window_dim = {d: window_dim_kwargs[str(d)] for d in self.dim}
+
+        window_dims = self._mapping_to_list(
+            window_dim, allow_default=False, allow_allsame=False
+        )
+        strides = self._mapping_to_list(stride, default=1)
+
+        dataset = {}
+        for key, da in self.obj.data_vars.items():
+            # keeps rollings only for the dataset depending on self.dim
+            dims = [d for d in self.dim if d in da.dims]
+            if dims:
+                wi = {d: window_dims[i] for i, d in enumerate(self.dim) if d in da.dims}
+                st = {d: strides[i] for i, d in enumerate(self.dim) if d in da.dims}
+
+                dataset[key] = self.rollings[key].construct(
+                    window_dim=wi,
+                    fill_value=fill_value,
+                    stride=st,
+                    keep_attrs=keep_attrs,
+                )
+            else:
+                dataset[key] = da.copy()
+
+            # as the DataArrays can be copied we need to delete the attrs
+            if not keep_attrs:
+                dataset[key].attrs = {}
+
+        attrs = self.obj.attrs if keep_attrs else {}
+
+        return Dataset(dataset, coords=self.obj.coords, attrs=attrs)
+[/REPLACE]

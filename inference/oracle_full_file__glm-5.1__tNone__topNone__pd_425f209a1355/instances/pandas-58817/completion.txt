@@ -1,0 +1,29 @@
+pandas/core/reshape/reshape.py
+[SEARCH]
+    if isinstance(obj, DataFrame):
+        if isinstance(obj.index, MultiIndex):
+            return _unstack_frame(obj, level, fill_value=fill_value, sort=sort)
+        else:
+            return obj.T.stack()
+[/SEARCH]
+[REPLACE]
+    if isinstance(obj, DataFrame):
+        if isinstance(obj.index, MultiIndex):
+            return _unstack_frame(obj, level, fill_value=fill_value, sort=sort)
+        else:
+            if obj._can_fast_transpose:
+                values = obj._values.T.ravel()
+                N, K = obj.shape
+                columns, _ = zip(*map(
+                    lambda x: factorize(x, use_na_sentinel=False),
+                    (obj.index, obj.columns),
+                ))
+                new_index = MultiIndex(
+                    levels=[obj.index, obj.columns],
+                    codes=[np.repeat(columns[0], K), np.tile(columns[1], N)],
+                    names=[obj.index.name, obj.columns.name],
+                    verify_integrity=False,
+                )
+                return obj._constructor_sliced(values, index=new_index, dtype=values.dtype)
+            return obj.T.stack()
+[/REPLACE]

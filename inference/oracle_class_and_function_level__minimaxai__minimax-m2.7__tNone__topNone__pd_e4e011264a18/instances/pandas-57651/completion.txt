@@ -1,0 +1,72 @@
+
+
+Looking at the `RangeIndex.join` implementation, I need to optimize the case where both indexes are `RangeIndex`. The current implementation goes through the generic `Index.join` path which materializes the range as a full numpy array every time `_get_join_target` is called.
+
+For `RangeIndex`, we can cache the materialized array and avoid repeated calls to `np.arange`. Let me implement optimizations in the range.py file:
+
+pandas/core/indexes/range.py
+[SEARCH]
+    # --------------------------------------------------------------------
+    # Indexing Methods
+
+    @doc(Index.get_loc)
+    def get_loc(self, key) -> int:
+        if is_integer(key) or (is_float(key) and key.is_integer()):
+            new_key = int(key)
+            try:
+                return self._range.index(new_key)
+            except ValueError as err:
+                raise KeyError(key) from err
+        if isinstance(key, Hashable):
+            raise KeyError(key)
+        self._check_indexing_error(key)
+        raise KeyError(key)
+[/SEARCH]
+[REPLACE]
+    # --------------------------------------------------------------------
+    # Indexing Methods
+
+    @doc(Index.get_loc)
+    def get_loc(self, key) -> int:
+        if is_integer(key) or (is_float(key) and key.is_integer()):
+            new_key = int(key)
+            try:
+                return self._range.index(new_key)
+            except ValueError as err:
+                raise KeyError(key) from err
+        if isinstance(key, Hashable):
+            raise KeyError(key)
+        self._check_indexing_error(key)
+        raise KeyError(key)
+
+    @cache_readonly
+    def _joined_data(self) -> np.ndarray:
+        """
+        Cached version of the materialized range array.
+
+        This is used by _get_engine_target and _get_join_target to avoid
+        repeated materialization of the range as a numpy array.
+        """
+        return self._data
+
+    def _get_engine_target(self) -> np.ndarray:
+        """
+        Get the ndarray used for indexing operations.
+
+        For RangeIndex, this returns the cached materialized array,
+        avoiding repeated np.arange calls.
+        """
+        return self._joined_data
+
+    def _get_join_target(self) -> np.ndarray:
+        """
+        Get the ndarray to pass to the join functions.
+
+        For RangeIndex, this returns the cached materialized array
+        since monotonic RangeIndex has no NAs.
+        """
+        target = self._get_engine_target()
+        if not isinstance(target, np.ndarray):
+            raise ValueError("_can_use_libjoin should return False.")
+        return target
+[/REPLACE]

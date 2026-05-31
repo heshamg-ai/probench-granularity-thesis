@@ -1,0 +1,54 @@
+pandas/core/arrays/masked.py
+[SEARCH]
+    def unique(self) -> Self:
+        """
+        Compute the BaseMaskedArray of unique values.
+
+        Returns
+        -------
+        uniques : BaseMaskedArray
+        """
+        uniques, mask = algos.unique_with_mask(self._data, self._mask)
+        return self._simple_new(uniques, mask)
+[/SEARCH]
+[REPLACE]
+    def unique(self) -> Self:
+        """
+        Compute the BaseMaskedArray of unique values.
+
+        Returns
+        -------
+        uniques : BaseMaskedArray
+        """
+        uniques, mask = algos.unique_with_mask(self._data, self._mask)
+        return self._simple_new(uniques, mask)
+
+    def _hash_pandas_object(
+        self, *, encoding: str, hash_key: str, categorize: bool
+    ) -> npt.NDArray[np.uint64]:
+        from pandas.core.util.hashing import hash_array as _hash_array
+        from pandas.core.algorithms import factorize_array as _factorize_array
+
+        codes, uniques = _factorize_array(
+            self._data, use_na_sentinel=True, mask=self._mask
+        )
+        # Hash uniques via object path to match default semantics exactly
+        hashed_uniques = _hash_array(
+            uniques.astype(object), encoding=encoding, hash_key=hash_key, categorize=False
+        )
+        res = np.empty(codes.shape, dtype=np.uint64)
+        if (codes == -1).any():
+            na_hash = _hash_array(
+                np.array([libmissing.NA], dtype=object),
+                encoding=encoding,
+                hash_key=hash_key,
+                categorize=False,
+            )[0]
+            res.fill(na_hash)
+            mask_not_na = codes != -1
+            if mask_not_na.any():
+                res[mask_not_na] = hashed_uniques[codes[mask_not_na]]
+        else:
+            res = hashed_uniques[codes]
+        return res
+[/REPLACE]

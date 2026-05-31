@@ -1,0 +1,5 @@
+ pandas/core/groupby/groupby.py [SEARCH]     @final
+    def __len__(self) -> int:
+        return len(self.groups) [/SEARCH] [REPLACE]     @final
+    def __len__(self) -> int:
+        return self.ngroups [/REPLACE]

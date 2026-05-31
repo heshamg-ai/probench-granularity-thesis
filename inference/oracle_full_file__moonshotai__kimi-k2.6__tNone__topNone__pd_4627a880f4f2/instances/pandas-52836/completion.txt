@@ -1,0 +1,82 @@
+pandas/core/arrays/masked.py
+[SEARCH]
+    @property
+    def T(self) -> Self:
+        return self._simple_new(self._data.T, self._mask.T)
+[/SEARCH]
+[REPLACE]
+    @property
+    def T(self) -> Self:
+        return self._simple_new(self._data.T, self._mask.T)
+[/REPLACE]
+
+pandas/core/frame.py
+[SEARCH]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            # We have EAs with the same dtype. We can preserve that dtype in transpose.
+            dtype = dtypes[0]
+            arr_type = dtype.construct_array_type()
+            values = self.values
+
+            new_values = [arr_type._from_sequence(row, dtype=dtype) for row in values]
+            result = type(self)._from_arrays(
+                new_values, index=self.columns, columns=self.index
+            )
+[/SEARCH]
+[REPLACE]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            # We have EAs with the same dtype. We can preserve that dtype in transpose.
+            dtype = dtypes[0]
+            arr_type = dtype.construct_array_type()
+
+            # For masked EAs with 2D support, we can transpose much more efficiently
+            # by transposing the underlying data and mask arrays directly.
+            from pandas.core.arrays.masked import BaseMaskedArray
+
+            if issubclass(arr_type, BaseMaskedArray):
+                mgr = self._mgr
+                # Single block with masked array
+                if len(mgr.blocks) == 1:
+                    arr = mgr.blocks[0].values
+                    if arr.ndim == 2:
+                        # 2D masked array - transpose directly
+                        result = type(self)(
+                            arr.T,
+                            index=self.columns,
+                            columns=self.index,
+                            copy=False,
+                        )
+                    else:
+                        # 1D masked arrays stored in columns - need to construct properly
+                        values = self.values
+                        new_values = [
+                            arr_type._from_sequence(row, dtype=dtype) for row in values
+                        ]
+                        result = type(self)._from_arrays(
+                            new_values, index=self.columns, columns=self.index
+                        )
+                else:
+                    values = self.values
+                    new_values = [
+                        arr_type._from_sequence(row, dtype=dtype) for row in values
+                    ]
+                    result = type(self)._from_arrays(
+                        new_values, index=self.columns, columns=self.index
+                    )
+            else:
+                values = self.values
+                new_values = [
+                    arr_type._from_sequence(row, dtype=dtype) for row in values
+                ]
+                result = type(self)._from_arrays(
+                    new_values, index=self.columns, columns=self.index
+                )
+[/REPLACE]

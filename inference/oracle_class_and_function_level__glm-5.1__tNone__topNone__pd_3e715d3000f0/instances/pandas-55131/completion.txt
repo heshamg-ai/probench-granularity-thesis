@@ -1,0 +1,159 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _groupby_op(
+        self,
+        *,
+        how: str,
+        has_dropped_na: bool,
+        min_count: int,
+        ngroups: int,
+        ids: npt.NDArray[np.intp],
+        **kwargs,
+    ):
+        if isinstance(self.dtype, StringDtype):
+            return super()._groupby_op(
+                how=how,
+                has_dropped_na=has_dropped_na,
+                min_count=min_count,
+                ngroups=ngroups,
+                ids=ids,
+                **kwargs,
+            )
+
+        masked = self._to_masked()
+[/SEARCH]
+[REPLACE]
+    def _groupby_op(
+        self,
+        *,
+        how: str,
+        has_dropped_na: bool,
+        min_count: int,
+        ngroups: int,
+        ids: npt.NDArray[np.intp],
+        **kwargs,
+    ):
+        if isinstance(self.dtype, StringDtype):
+            return super()._groupby_op(
+                how=how,
+                has_dropped_na=has_dropped_na,
+                min_count=min_count,
+                ngroups=ngroups,
+                ids=ids,
+                **kwargs,
+            )
+
+        pa_type = self._pa_array.type
+        if how in ("min", "max") and (
+            pa.types.is_timestamp(pa_type) or pa.types.is_duration(pa_type)
+        ):
+            return self._groupby_op_min_max(
+                how=how,
+                has_dropped_na=has_dropped_na,
+                min_count=min_count,
+                ngroups=ngroups,
+                ids=ids,
+                **kwargs,
+            )
+
+        masked = self._to_masked()
+[/REPLACE]
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _to_masked(self):
+        pa_dtype = self._pa_array.type
+
+        if pa.types.is_floating(pa_dtype) or pa.types.is_integer(pa_dtype):
+            na_value = 1
+        elif pa.types.is_boolean(pa_dtype):
+            na_value = True
+        else:
+            raise NotImplementedError
+
+        dtype = _arrow_dtype_mapping()[pa_dtype]
+        mask = self.isna()
+        arr = self.to_numpy(dtype=dtype.numpy_dtype, na_value=na_value)
+        return dtype.construct_array_type()(arr, mask)
+[/SEARCH]
+[REPLACE]
+    def _to_masked(self):
+        pa_dtype = self._pa_array.type
+
+        if pa.types.is_floating(pa_dtype) or pa.types.is_integer(pa_dtype):
+            na_value = 1
+        elif pa.types.is_boolean(pa_dtype):
+            na_value = True
+        else:
+            raise NotImplementedError
+
+        dtype = _arrow_dtype_mapping()[pa_dtype]
+        mask = self.isna()
+        arr = self.to_numpy(dtype=dtype.numpy_dtype, na_value=na_value)
+        return dtype.construct_array_type()(arr, mask)
+
+    def _groupby_op_min_max(
+        self,
+        *,
+        how: str,
+        has_dropped_na: bool,
+        min_count: int,
+        ngroups: int,
+        ids: npt.NDArray[np.intp],
+        **kwargs,
+    ):
+        from pandas.core.arrays.masked import BaseMaskedDtype
+
+        pa_type = self._pa_array.type
+        if pa.types.is_timestamp(pa_type):
+            np_dtype = np.dtype(f"M8[{pa_type.unit}]")
+            from pandas.core.arrays.datetimes import DatetimeArray
+
+            arr_cls = DatetimeArray
+        else:
+            np_dtype = np.dtype(f"m8[{pa_type.unit}]")
+            from pandas.core.arrays.timedeltas import TimedeltaArray
+
+            arr_cls = TimedeltaArray
+
+        mask = self.isna()
+
+        if has_dropped_na:
+            mask_arr = np.zeros(len(self), dtype=np.bool_)
+        else:
+            mask_arr = mask
+
+        i8_values = self._pa_array.to_numpy().astype(np_dtype).view("i8")
+
+        from pandas.core.groupby.ops import WrappedCythonOp
+
+        kind = WrappedCythonOp.get_kind("int64")
+        op = WrappedCythonOp.get_cython_function("add", how, kind, min_count=min_count)
+        op_dtype = "int64"
+
+        result = op(
+            i8_values,
+            mask_arr,
+            ids,
+            min_count=min_count,
+            ngroups=ngroups,
+            comp_ids=None,
+            **kwargs,
+        )
+
+        out_mask = np.zeros(ngroups, dtype=np.bool_)
+        if has_dropped_na and mask.any():
+            counts = np.bincount(ids[~mask], minlength=ngroups)
+            out_mask = counts == 0
+        elif not has_dropped_na:
+            out_mask = np.asarray(result[1])
+
+        i8_result = np.asarray(result[0])
+
+        dtype = arr_cls._simple_new(i8_values, dtype=np_dtype).dtype
+        result_arr = arr_cls._simple_new(i8_result, dtype=dtype)
+
+        return type(self)._from_sequence(
+            result_arr.to_numpy(dtype=object, na_value=dtypes.NaT), copy=False
+        )
+[/REPLACE]

@@ -1,0 +1,130 @@
+pandas/core/sorting.py
+[SEARCH]
+    if level is not None:
+        _, indexer = target.sortlevel(
+            level,
+            ascending=ascending,
+            sort_remaining=sort_remaining,
+            na_position=na_position,
+        )
+    elif isinstance(target, ABCMultiIndex):
+        indexer = lexsort_indexer(
+            target.codes, orders=ascending, na_position=na_position, codes_given=True
+        )
+    else:
+        # Check monotonic-ness before sort an index (GH 11080)
+        if (ascending and target.is_monotonic_increasing) or (
+            not ascending and target.is_monotonic_decreasing
+        ):
+            return None
+
+        # ascending can only be a Sequence for MultiIndex
+        indexer = nargsort(
+            target,
+            kind=kind,
+            ascending=cast(bool, ascending),
+            na_position=na_position,
+        )
+[/SEARCH]
+[REPLACE]
+    if level is not None:
+        _, indexer = target.sortlevel(
+            level,
+            ascending=ascending,
+            sort_remaining=sort_remaining,
+            na_position=na_position,
+        )
+    elif isinstance(target, ABCMultiIndex):
+        indexer = _lexsort_indexer_multiindex(
+            target, orders=ascending, na_position=na_position
+        )
+    else:
+        # Check monotonic-ness before sort an index (GH 11080)
+        if (ascending and target.is_monotonic_increasing) or (
+            not ascending and target.is_monotonic_decreasing
+        ):
+            return None
+
+        # ascending can only be a Sequence for MultiIndex
+        indexer = nargsort(
+            target,
+            kind=kind,
+            ascending=cast(bool, ascending),
+            na_position=na_position,
+        )
+[/REPLACE]
+
+pandas/core/sorting.py
+[SEARCH]
+    return indexer_from_factorized(labels, tuple(shape))
+[/SEARCH]
+[REPLACE]
+    return indexer_from_factorized(labels, tuple(shape))
+
+
+def _lexsort_indexer_multiindex(
+    target: ABCMultiIndex,
+    orders: list[bool] | bool = True,
+    na_position: str = "last",
+) -> npt.NDArray[np.intp]:
+    """
+    Optimized lexsort_indexer for MultiIndex that reuses the MultiIndex engine
+    when possible to avoid redundant factorisation and grouping steps.
+    """
+    codes = target.codes
+    nlevels = target.nlevels
+
+    if nlevels == 0:
+        return np.arange(len(target), dtype=np.intp)
+
+    if isinstance(orders, bool):
+        orders = [orders] * nlevels
+    elif orders is None:
+        orders = [True] * nlevels
+
+    # Fast path: all ascending, na_position='last', already sorted
+    if (
+        na_position == "last"
+        and all(orders)
+        and target._is_lexsorted()
+    ):
+        return np.arange(len(target), dtype=np.intp)
+
+    # Fast path: all descending, na_position='first' can be derived from reversed
+    # lexsorted check
+    if (
+        na_position == "first"
+        and not any(orders)
+        and target._is_lexsorted()
+    ):
+        # Fully reversing a lexsorted MultiIndex gives descending order
+        # with NAs first (since -1 is smallest after transformation)
+        return np.arange(len(target) - 1, -1, -1, dtype=np.intp)
+
+    # Fall back to general algorithm but bypass Categorical construction
+    # when codes are already integer arrays (they always are for MultiIndex)
+    labels = []
+    shape = []
+
+    for i, (code, order) in enumerate(zip(codes, orders)):
+        mask = code == -1
+        n = len(target.levels[i])
+        mask_n = n
+
+        if order:  # ascending
+            if na_position == "last":
+                codes_i = np.where(mask, n, code)
+            else:  # na_position == "first"
+                codes_i = code + 1
+                mask_n = n + 1
+        else:  # descending
+            if na_position == "last":
+                codes_i = np.where(mask, n, n - code - 1)
+            else:  # na_position == "first"
+                codes_i = np.where(mask, 0, n - code)
+
+        shape.append(mask_n)
+        labels.append(codes_i)
+
+    return indexer_from_factorized(labels, tuple(shape))
+[/REPLACE]

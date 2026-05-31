@@ -1,0 +1,108 @@
+pandas/core/indexes/base.py
+[SEARCH]
+    @final
+    def round(self, decimals: int = 0) -> Self:
+        """
+        Round each value in the Index to the given number of decimals.
+
+        Parameters
+        ----------
+        decimals : int, optional
+            Number of decimal places to round to. If decimals is negative,
+            it specifies the number of positions to the left of the decimal point.
+
+        Returns
+        -------
+        Index
+            A new Index with the rounded values.
+
+        Examples
+        --------
+        >>> import pandas as pd
+        >>> idx = pd.Index([10.1234, 20.5678, 30.9123, 40.4567, 50.7890])
+        >>> idx.round(decimals=2)
+        Index([10.12, 20.57, 30.91, 40.46, 50.79], dtype='float64')
+
+        """
+        return self._constructor(self.to_series().round(decimals))
+[/SEARCH]
+[REPLACE]
+    @final
+    def round(self, decimals: int = 0) -> Self:
+        """
+        Round each value in the Index to the given number of decimals.
+
+        Parameters
+        ----------
+        decimals : int, optional
+            Number of decimal places to round to. If decimals is negative,
+            it specifies the number of positions to the left of the decimal point.
+
+        Returns
+        -------
+        Index
+            A new Index with the rounded values.
+
+        Examples
+        --------
+        >>> import pandas as pd
+        >>> idx = pd.Index([10.1234, 20.5678, 30.9123, 40.4567, 50.7890])
+        >>> idx.round(decimals=2)
+        Index([10.12, 20.57, 30.91, 40.46, 50.79], dtype='float64')
+
+        """
+        if self._is_numeric_mixed_type:
+            # GH 46060 mixed-type case uses Series path
+            return self._constructor(self.to_series().round(decimals))
+        return self._constructor(self._round_arraylike(decimals), name=self.name)
+[/REPLACE]
+
+pandas/core/indexes/range.py
+[SEARCH]
+class RangeIndex(Index):
+[/SEARCH]
+[REPLACE]
+class RangeIndex(Index):
+
+    @final
+    def round(self, decimals: int = 0) -> Self:
+        """
+        Round each value in the Index to the given number of decimals.
+
+        Parameters
+        ----------
+        decimals : int, optional
+            Number of decimal places to round to. If decimals is negative,
+            it specifies the number of positions to the left of the decimal point.
+
+        Returns
+        -------
+        Index
+            A new Index with the rounded values.
+
+        Examples
+        --------
+        >>> import pandas as pd
+        >>> idx = pd.RangeIndex(0, 5, 1)
+        >>> idx.round(2)
+        RangeIndex(0, 5, 1)
+
+        """
+        if decimals >= 0:
+            return self.copy()
+        if self._is_empty():
+            return self.copy()
+        start = self.start
+        step = self.step
+        if decimals < 0:
+            factor = 10**abs(decimals)
+            start_rounded = (start // factor) * factor
+            step_rounded = (step // factor) * factor
+            if (start_rounded, step_rounded) == (start, step):
+                return self.copy()
+            return self._simple_new(
+                self._range[start_rounded::step_rounded]
+            )
+        # Fallback for other cases (should not be reached)
+        return super().round(decimals)
+[/REPLACE]

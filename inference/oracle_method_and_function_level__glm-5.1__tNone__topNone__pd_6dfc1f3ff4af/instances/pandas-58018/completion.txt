@@ -1,0 +1,30 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        from pandas import DataFrame
+
+        if name is lib.no_default:
+            name = self._get_level_names()
+        result = DataFrame({name: self}, copy=False)
+
+        if index:
+            result.index = self
+        return result
+[/SEARCH]
+[REPLACE]
+        from pandas import DataFrame
+
+        if name is lib.no_default:
+            name = self._get_level_names()
+
+        if isinstance(self, RangeIndex):
+            from pandas import RangeIndex as RangeIndexType
+
+            result = DataFrame({}, index=RangeIndexType(len(self)), copy=False)
+            result[name] = self
+        else:
+            result = DataFrame({name: self}, copy=False)
+
+        if index:
+            result.index = self
+        return result
+[/REPLACE]

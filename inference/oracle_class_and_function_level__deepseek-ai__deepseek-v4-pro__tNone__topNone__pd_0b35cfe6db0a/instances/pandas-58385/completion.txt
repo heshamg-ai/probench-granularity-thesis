@@ -1,0 +1,77 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+    # Cannot determine type of "memory_usage"
+    @doc(Index.memory_usage)  # type: ignore[has-type]
+    def memory_usage(self, deep: bool = False) -> int:
+        # we are overwriting our base class to avoid
+        # computing .values here which could materialize
+        # a tuple representation unnecessarily
+        return self._nbytes(deep)
+[/SEARCH]
+[REPLACE]
+    # Cannot determine type of "memory_usage"
+    @doc(Index.memory_usage)  # type: ignore[has-type]
+    def memory_usage(self, deep: bool = False) -> int:
+        # we are overwriting our base class to avoid
+        # computing .values here which could materialize
+        # a tuple representation unnecessarily
+        return self._nbytes(deep)
+
+    @cache_readonly
+    def _engine_size(self) -> int:
+        """Size of the engine without going through the cached _engine property."""
+        # Avoid calling self._engine directly to prevent unnecessary
+        # construction and caching of the engine when not needed.
+        # This uses a direct sizeof on the engine class type.
+        return self._engine.sizeof(deep=False)
+[/REPLACE]
+
+pandas/core/indexes/multi.py
+[SEARCH]
+    def _nbytes(self, deep: bool = False) -> int:
+        """
+        return the number of bytes in the underlying data
+        deeply introspect the level data if deep=True
+
+        include the engine hashtable
+
+        *this is in internal routine*
+
+        """
+        # for implementations with no useful getsizeof (PyPy)
+        objsize = 24
+
+        level_nbytes = sum(i.memory_usage(deep=deep) for i in self.levels)
+        label_nbytes = sum(i.nbytes for i in self.codes)
+        names_nbytes = sum(getsizeof(i, objsize) for i in self.names)
+        result = level_nbytes + label_nbytes + names_nbytes
+
+        # include our engine hashtable
+        result += self._engine.sizeof(deep=deep)
+        return result
+[/SEARCH]
+[REPLACE]
+    def _nbytes(self, deep: bool = False) -> int:
+        """
+        return the number of bytes in the underlying data
+        deeply introspect the level data if deep=True
+
+        include the engine hashtable
+
+        *this is in internal routine*
+
+        """
+        # for implementations with no useful getsizeof (PyPy)
+        objsize = 24
+
+        level_nbytes = sum(i.memory_usage(deep=deep) for i in self.levels)
+        label_nbytes = sum(i.nbytes for i in self.codes)
+        names_nbytes = sum(getsizeof(i, objsize) for i in self.names)
+        result = level_nbytes + label_nbytes + names_nbytes
+
+        # include our engine hashtable
+        # Use self._engine_size to leverage caching and avoid potential
+        # re-computation of the engine object.
+        result += self._engine_size if deep is False else self._engine.sizeof(deep=True)
+        return result
+[/REPLACE]

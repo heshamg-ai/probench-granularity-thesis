@@ -1,0 +1,86 @@
+pandas/core/arrays/string_arrow.py
+[SEARCH]
+    def _str_find(self, sub: str, start: int = 0, end: int | None = None):
+        if start != 0 and end is not None:
+            slices = pc.utf8_slice_codeunits(self._pa_array, start, stop=end)
+            result = pc.find_substring(slices, sub)
+            not_found = pc.equal(result, -1)
+            offset_result = pc.add(result, end - start)
+            result = pc.if_else(not_found, result, offset_result)
+        elif start == 0 and end is None:
+            slices = self._pa_array
+            result = pc.find_substring(slices, sub)
+        else:
+            return super()._str_find(sub, start, end)
+        return self._convert_int_dtype(result)
+
+    def _convert_int_dtype(self, result):
+[/SEARCH]
+[REPLACE]
+    def _str_find(self, sub: str, start: int = 0, end: int | None = None):
+        if start != 0 and end is not None:
+            slices = pc.utf8_slice_codeunits(self._pa_array, start, stop=end)
+            result = pc.find_substring(slices, sub)
+            not_found = pc.equal(result, -1)
+            offset_result = pc.add(result, end - start)
+            result = pc.if_else(not_found, result, offset_result)
+        elif start == 0 and end is None:
+            slices = self._pa_array
+            result = pc.find_substring(slices, sub)
+        else:
+            return super()._str_find(sub, start, end)
+        return self._convert_int_dtype(result)
+
+    def _str_get_dummies(self, sep="|"):
+        try:
+            if not isinstance(sep, str) or sep == "":
+                return super()._str_get_dummies(sep)
+            lists = pc.split_pattern(self._pa_array, pattern=sep)
+            flat = pc.list_flatten(lists)
+            if len(flat) == 0:
+                from pandas import DataFrame
+                return DataFrame(np.zeros((len(self), 0), dtype=np.uint8))
+            enc = pc.dictionary_encode(flat)
+            dictionary = enc.dictionary
+            tokens_py = dictionary.to_pylist()
+            tokens_noempty = [t for t in tokens_py if t != ""]
+            if len(tokens_noempty) == 0:
+                from pandas import DataFrame
+                return DataFrame(np.zeros((len(self), 0), dtype=np.uint8))
+            sorted_tokens = sorted(tokens_noempty)
+            new_index_map = np.full(len(tokens_py), -1, dtype=np.int64)
+            pos_map = {tok: i for i, tok in enumerate(sorted_tokens)}
+            for i, tok in enumerate(tokens_py):
+                if tok != "":
+                    new_index_map[i] = pos_map[tok]
+            try:
+                parent_idx = pc.list_parent_indices(lists)
+            except Exception:
+                return super()._str_get_dummies(sep)
+            col_idx = enc.indices
+            rows_np = parent_idx.to_numpy(zero_copy_only=False)
+            cols_np = col_idx.to_numpy(zero_copy_only=False)
+            new_cols = new_index_map[cols_np]
+            mask = new_cols >= 0
+            if not np.any(mask):
+                from pandas import DataFrame
+                return DataFrame(np.zeros((len(self), 0), dtype=np.uint8))
+            rows_use = rows_np[mask]
+            cols_use = new_cols[mask]
+            pairs = np.stack((rows_use.astype(np.int64, copy=False),
+                              cols_use.astype(np.int64, copy=False)), axis=1)
+            if pairs.size == 0:
+                from pandas import DataFrame
+                return DataFrame(np.zeros((len(self), 0), dtype=np.uint8))
+            uniq_pairs = np.unique(pairs, axis=0)
+            n_rows = len(self)
+            n_cols = len(sorted_tokens)
+            data = np.zeros((n_rows, n_cols), dtype=np.uint8)
+            data[uniq_pairs[:, 0], uniq_pairs[:, 1]] = 1
+            from pandas import DataFrame
+            return DataFrame(data, columns=sorted_tokens)
+        except Exception:
+            return super()._str_get_dummies(sep)
+
+    def _convert_int_dtype(self, result):
+[/REPLACE]

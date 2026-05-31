@@ -1,0 +1,49 @@
+xarray/core/rolling.py
+[SEARCH]
+        rolling_dim = {
+            d: utils.get_temp_dimname(self.obj.dims, f"_rolling_dim_{d}")
+            for d in self.dim
+        }
+        windows = self.construct(rolling_dim, keep_attrs=keep_attrs)
+        result = windows.reduce(
+            func, dim=list(rolling_dim.values()), keep_attrs=keep_attrs, **kwargs
+        )
+
+        # Find valid windows based on count.
+        counts = self._counts(keep_attrs=False)
+        return result.where(counts >= self.min_periods)
+[/SEARCH]
+[REPLACE]
+        rolling_dim = {
+            d: utils.get_temp_dimname(self.obj.dims, f"_rolling_dim_{d}")
+            for d in self.dim
+        }
+        windows = self.construct(rolling_dim, keep_attrs=keep_attrs)
+        result = windows.reduce(
+            func, dim=list(rolling_dim.values()), keep_attrs=keep_attrs, **kwargs
+        )
+
+        # Find valid windows based on count.
+        counts = self._counts(keep_attrs=False)
+        if (
+            func is duck_array_ops.mean
+            and self.center is not None
+            and not all(self.center)
+            and self.min_periods == np.prod(self.window)
+        ):
+            # For the default min_periods == window_size case, we only need
+            # to mask the edges where insufficient points exist.
+            # We can compute these edge masks more cheaply than a full count + where.
+            result_dtype = result.values.dtype
+            if np.issubdtype(result_dtype, np.floating) or np.issubdtype(
+                result_dtype, np.complexfloating
+            ):
+                pass  # already NaN where appropriate from the reduce
+            else:
+                # For integer/other dtypes, we must explicitly mask edges
+                mask = counts.values < self.min_periods
+                result.values = result.values.astype(np.float64)
+                result.values[mask] = np.nan
+            return result
+        return result.where(counts >= self.min_periods)
+[/REPLACE]

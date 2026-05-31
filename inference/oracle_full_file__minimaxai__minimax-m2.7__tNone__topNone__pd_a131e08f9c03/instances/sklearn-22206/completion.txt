@@ -1,0 +1,45 @@
+
+
+sklearn/linear_model/_quantile.py
+[SEARCH]
+        c = np.concatenate(
+            [
+                np.full(2 * n_params, fill_value=alpha),
+                sample_weight * self.quantile,
+                sample_weight * (1 - self.quantile),
+            ]
+        )
+        if self.fit_intercept:
+            # do not penalize the intercept
+            c[0] = 0
+            c[n_params] = 0
+[/SEARCH]
+[REPLACE]
+        # Pre-allocate and fill the cost vector directly to avoid concatenation
+        c = np.empty(2 * n_params + 2 * n_indices, dtype=X.dtype)
+        c[: 2 * n_params] = alpha
+        c[2 * n_params : 2 * n_params + n_indices] = sample_weight * self.quantile
+        c[2 * n_params + n_indices :] = sample_weight * (1 - self.quantile)
+        if self.fit_intercept:
+            # do not penalize the intercept
+            c[0] = 0
+            c[n_params] = 0
+[/REPLACE]
+
+sklearn/linear_model/_quantile.py
+[SEARCH]
+            eye = np.eye(n_indices)
+            if self.fit_intercept:
+                ones = np.ones((n_indices, 1))
+                A_eq = np.concatenate([ones, X, -ones, -X, eye, -eye], axis=1)
+            else:
+                A_eq = np.concatenate([X, -X, eye, -eye], axis=1)
+[/SEARCH]
+[REPLACE]
+            eye = np.eye(n_indices)
+            if self.fit_intercept:
+                ones = np.ones((n_indices, 1))
+                A_eq = np.column_stack([ones, X, -ones, -X, eye, -eye])
+            else:
+                A_eq = np.column_stack([X, -X, eye, -eye])
+[/REPLACE]

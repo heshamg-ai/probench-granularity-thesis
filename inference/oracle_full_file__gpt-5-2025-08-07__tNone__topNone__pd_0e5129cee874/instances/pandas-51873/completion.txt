@@ -1,0 +1,55 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+        if verify_integrity:
+            new_codes = self._verify_integrity(levels=new_levels)
+            self._codes = new_codes
+[/SEARCH]
+[REPLACE]
+        if verify_integrity:
+            # Fast path: when only a subset of levels is updated, validate and
+            # adjust codes only for those levels instead of all levels.
+            if level is None:
+                new_codes = self._verify_integrity(levels=new_levels)
+                self._codes = new_codes
+            else:
+                level_numbers = [self._get_level_number(lev) for lev in level]
+                new_codes_list = list(self._codes)
+                codes_length = len(new_codes_list[0]) if len(new_codes_list) else 0
+
+                # Preserve the existing sortorder check semantics (uses current self.codes)
+                if self.sortorder is not None:
+                    if self.sortorder > _lexsort_depth(self.codes, self.nlevels):
+                        raise ValueError(
+                            "Value for sortorder must be inferior or equal to actual "
+                            f"lexsort_depth: sortorder {self.sortorder} "
+                            f"with lexsort_depth {_lexsort_depth(self.codes, self.nlevels)}"
+                        )
+
+                for i in level_numbers:
+                    lev = new_levels[i]
+                    level_codes = new_codes_list[i]
+
+                    if len(level_codes) != codes_length:
+                        raise ValueError(
+                            f"Unequal code lengths: {[len(code_) for code_ in new_codes_list]}"
+                        )
+                    if len(level_codes) and level_codes.max() >= len(lev):
+                        raise ValueError(
+                            f"On level {i}, code max ({level_codes.max()}) >= length of "
+                            f"level ({len(lev)}). NOTE: this index is in an "
+                            "inconsistent state"
+                        )
+                    if len(level_codes) and level_codes.min() < -1:
+                        raise ValueError(
+                            f"On level {i}, code value ({level_codes.min()}) < -1"
+                        )
+                    if not lev.is_unique:
+                        raise ValueError(
+                            f"Level values must be unique: {list(lev)} on level {i}"
+                        )
+
+                    # Reassign codes pointing to NA entries in the level to -1
+                    new_codes_list[i] = self._validate_codes(lev, level_codes)
+
+                self._codes = FrozenList(new_codes_list)
+[/REPLACE]

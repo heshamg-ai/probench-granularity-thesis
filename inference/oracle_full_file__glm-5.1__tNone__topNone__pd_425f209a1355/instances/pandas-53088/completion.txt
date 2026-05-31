@@ -1,0 +1,37 @@
+pandas/core/groupby/ops.py
+[SEARCH]
+    @cache_readonly
+    def groups(self) -> dict[Hashable, np.ndarray]:
+        """dict {group name -> group labels}"""
+        if len(self.groupings) == 1:
+            return self.groupings[0].groups
+        else:
+            to_groupby = zip(*(ping.grouping_vector for ping in self.groupings))
+            index = Index(to_groupby)
+            return self.axis.groupby(index)
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def groups(self) -> dict[Hashable, np.ndarray]:
+        """dict {group name -> group labels}"""
+        if len(self.groupings) == 1:
+            return self.groupings[0].groups
+
+        # Optimized path: use group_info to avoid constructing a MultiIndex
+        # and calling the expensive Index.groupby method.
+        comp_ids, _, ngroups = self.group_info
+
+        result_index = self.result_index
+        # Pre-allocate result dict for faster insertion
+        result = {key: np.empty(0, dtype=np.intp) for key in result_index}
+
+        # Use the already-compressed comp_ids to bin the original axis indices
+        ax_indices = np.arange(len(self.axis), dtype=np.intp)
+        for comp_id, group_indices_arr in enumerate(
+            np.split(ax_indices, np.bincount(comp_ids, minlength=ngroups).cumsum()[:-1])
+        ):
+            if comp_id < ngroups:
+                result[result_index[comp_id]] = group_indices_arr
+
+        return result
+[/REPLACE]

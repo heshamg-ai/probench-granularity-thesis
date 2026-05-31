@@ -1,0 +1,174 @@
+pandas/core/frame.py
+[SEARCH]
+    @doc(klass=_shared_doc_kwargs["klass"])
+    def unstack(self, level=-1, fill_value=None, sort=True):
+        """
+        Pivot a level of the (necessarily hierarchical) index labels.
+
+        Returns a DataFrame having a new level of column labels whose inner-most level
+        consists of the pivoted index labels.
+
+        If the index is not a MultiIndex, the output is as a Series
+        (the analogue of stack when the columns are not a MultiIndex).
+
+        Parameters
+        ----------
+        level : int, str, or list of these, default -1 (last level)
+            Level(s) of index to unstack, can pass level name.
+        fill_value : int, str or dict, optional
+            Replace NaN with this value if the unstack produces missing values.
+        sort : bool, default True
+            Sort the level(s) in the resulting MultiIndex columns.
+
+        Returns
+        -------
+        Series or DataFrame
+
+        See Also
+        --------
+        DataFrame.pivot : Pivot a table based on column values.
+        DataFrame.stack : Pivot a level of the column labels
+                          (inverse operation from `unstack`).
+
+        Examples
+        --------
+        >>> index = pd.MultiIndex.from_tuples([('one', 'a'), ('one', 'b'),
+        ...                                    ('two', 'a'), ('two', 'b')])
+        >>> s = pd.Series(np.arange(1.0, 5.0), index=index)
+        >>> s
+        one  a   1.0
+             b   2.0
+        two  a   3.0
+             b   4.0
+        dtype: float64
+
+        >>> s.unstack(level=-1)
+             a   b
+        one  1.0  2.0
+        two  3.0  4.0
+
+        >>> s.unstack(level=0)
+           one  two
+        a  1.0   3.0
+        b  2.0   4.0
+
+        >>> df = s.unstack(level=0)
+        >>> df.unstack()
+        one  a  1.0
+             b  2.0
+        two  a  3.0
+             b  4.0
+        dtype: float64
+        """
+        from pandas.core.reshape.reshape import unstack
+
+        result = unstack(self, level, fill_value, sort)
+
+        return result
+[/SEARCH]
+[REPLACE]
+    @doc(klass=_shared_doc_kwargs["klass"])
+    def unstack(self, level=-1, fill_value=None, sort=True):
+        """
+        Pivot a level of the (necessarily hierarchical) index labels.
+
+        Returns a DataFrame having a new level of column labels whose inner-most level
+        consists of the pivoted index labels.
+
+        If the index is not a MultiIndex, the output is as a Series
+        (the analogue of stack when the columns are not a MultiIndex).
+
+        Parameters
+        ----------
+        level : int, str, or list of these, default -1 (last level)
+            Level(s) of index to unstack, can pass level name.
+        fill_value : int, str or dict, optional
+            Replace NaN with this value if the unstack produces missing values.
+        sort : bool, default True
+            Sort the level(s) in the resulting MultiIndex columns.
+
+        Returns
+        -------
+        Series or DataFrame
+
+        See Also
+        --------
+        DataFrame.pivot : Pivot a table based on column values.
+        DataFrame.stack : Pivot a level of the column labels
+                          (inverse operation from `unstack`).
+
+        Examples
+        --------
+        >>> index = pd.MultiIndex.from_tuples([('one', 'a'), ('one', 'b'),
+        ...                                    ('two', 'a'), ('two', 'b')])
+        >>> s = pd.Series(np.arange(1.0, 5.0), index=index)
+        >>> s
+        one  a   1.0
+             b   2.0
+        two  a   3.0
+             b   4.0
+        dtype: float64
+
+        >>> s.unstack(level=-1)
+             a   b
+        one  1.0  2.0
+        two  3.0  4.0
+
+        >>> s.unstack(level=0)
+           one  two
+        a  1.0   3.0
+        b  2.0   4.0
+
+        >>> df = s.unstack(level=0)
+        >>> df.unstack()
+        one  a  1.0
+             b  2.0
+        two  a  3.0
+             b  4.0
+        dtype: float64
+        """
+        from pandas.core.reshape.reshape import unstack
+
+        # fast path for simple non-MultiIndex with future_stack
+        if (
+            not isinstance(self.index, MultiIndex)
+            and future_stack is True
+        ):
+            if self.columns.nlevels != 1:
+                raise ValueError(
+                    "DataFrame's columns must be unique for unstack when "
+                    "future_stack=True and index is not a MultiIndex."
+                )
+            index = self.index
+            n = len(index)
+            # factorize the index values to get integer codes
+            codes, uniques = factorize(index, use_na_sentinel=False)
+            # build a new index from the unique values
+            new_index = Index(uniques)
+            # create column MultiIndex from column names
+            col_names = [(name,) for name in self.columns]
+            new_col = MultiIndex.from_tuples(col_names)
+            # create result array
+            arr = np.empty((len(new_index), n * len(self.columns)), dtype=self.values.dtype)
+            arr.fill(np.nan)
+            for i in range(n):
+                row_code = codes[i]
+                row_vals = self.iloc[i].values
+                for j in range(len(self.columns)):
+                    arr[row_code, i * len(self.columns) + j] = row_vals[j]
+            # build column MultiIndex: (index_value, column_name)
+            tups = [(idx_val, col_name) for idx_val in index for col_name in self.columns]
+            result_cols = MultiIndex.from_tuples(tups)
+            result = DataFrame(
+                arr,
+                index=new_index,
+                columns=result_cols,
+            )
+            if sort:
+                result = result.sort_index(axis=1)
+            return result
+
+        result = unstack(self, level, fill_value, sort)
+
+        return result
+[/REPLACE]

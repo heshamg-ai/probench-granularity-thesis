@@ -1,0 +1,89 @@
+sklearn/linear_model/_logistic.py
+[SEARCH]
+            if solver not in ["sag", "saga"]:
+                lbin = LabelBinarizer()
+                Y_multi = lbin.fit_transform(y)
+                if Y_multi.shape[1] == 1:
+                    Y_multi = np.hstack([1 - Y_multi, Y_multi])
+[/SEARCH]
+[REPLACE]
+            if solver not in ["sag", "saga"]:
+                lbin = LabelBinarizer()
+                Y_multi = lbin.fit_transform(y)
+                if Y_multi.shape[1] == 1:
+                    Y_multi = np.hstack([1 - Y_multi, Y_multi])
+                Y_multi = Y_multi.astype(X.dtype, copy=False)
+[/REPLACE]
+
+sklearn/linear_model/_logistic.py
+[SEARCH]
+        if solver == "lbfgs":
+
+            def func(x, *args):
+                return _multinomial_loss_grad(x, *args)[0:2]
+[/SEARCH]
+[REPLACE]
+        if solver == "lbfgs":
+
+            def func(x, *args):
+                loss, grad, _ = _multinomial_loss_grad(x, *args)
+                return loss, grad
+[/REPLACE]
+
+sklearn/linear_model/_logistic.py
+[SEARCH]
+    coefs = list()
+    n_iter = np.zeros(len(Cs), dtype=np.int32)
+    for i, C in enumerate(Cs):
+[/SEARCH]
+[REPLACE]
+    coefs = list()
+    n_iter = np.zeros(len(Cs), dtype=np.int32)
+    if solver == "lbfgs":
+        iprint = [-1, 50, 1, 100, 101][np.searchsorted(np.array([0, 1, 2, 3]), verbose)]
+        _lbfgs_options = {"iprint": iprint, "gtol": tol, "maxiter": max_iter}
+    for i, C in enumerate(Cs):
+[/REPLACE]
+
+sklearn/linear_model/_logistic.py
+[SEARCH]
+        if solver == "lbfgs":
+            iprint = [-1, 50, 1, 100, 101][
+                np.searchsorted(np.array([0, 1, 2, 3]), verbose)
+            ]
+            opt_res = optimize.minimize(
+                func,
+                w0,
+                method="L-BFGS-B",
+                jac=True,
+                args=(X, target, 1.0 / C, sample_weight),
+                options={"iprint": iprint, "gtol": tol, "maxiter": max_iter},
+            )
+[/SEARCH]
+[REPLACE]
+        if solver == "lbfgs":
+            opt_res = optimize.minimize(
+                func,
+                w0,
+                method="L-BFGS-B",
+                jac=True,
+                args=(X, target, 1.0 / C, sample_weight),
+                options=_lbfgs_options,
+            )
+[/REPLACE]
+
+sklearn/linear_model/_logistic.py
+[SEARCH]
+    grad = np.zeros((n_classes, n_features + bool(fit_intercept)), dtype=X.dtype)
+[/SEARCH]
+[REPLACE]
+    grad = np.empty((n_classes, n_features + bool(fit_intercept)), dtype=X.dtype)
+[/REPLACE]
+
+sklearn/linear_model/_logistic.py
+[SEARCH]
+        hessProd = np.zeros((n_classes, n_features + bool(fit_intercept)))
+[/SEARCH]
+[REPLACE]
+        hessProd = np.empty((n_classes, n_features + bool(fit_intercept)))
+[/REPLACE]

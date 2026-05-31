@@ -1,0 +1,25 @@
+{
+  "run_id": "oracle_class_and_function_level__deepseek-ai__deepseek-v4-pro__tNone__topNone__pd_0b35cfe6db0a",
+  "provider": "nvidia_nim",
+  "model": "deepseek-ai/deepseek-v4-pro",
+  "temperature": null,
+  "top_p": null,
+  "max_tokens": null,
+  "prompt_dataset_path": "LLMs thesis/dataset/dataset__gran=class_and_function_level__tok=deepseekv4pro__max=1000000__imports=False__globals=False__sigs=False__changes=False.json",
+  "prompt_dataset_meta": {
+    "builder": "oracle",
+    "granularity": "class_and_function_level",
+    "tokenizer": "deepseekv4pro",
+    "max_tokens": 1000000,
+    "include_module_globals": false,
+    "include_imports": false,
+    "include_code_signatures": false,
+    "include_change_summary": false,
+    "dataset_path": "data/dataset_25_04_finalized.json",
+    "truncation_filtered_count": 0,
+    "truncation_filtered": [],
+    "schema_version": 1,
+    "created_at": "2026-04-30T11:04:24Z",
+    "prompt_dataset_id": "pd_0b35cfe6db0a"
+  }
+}

@@ -1,0 +1,21 @@
+xarray/core/indexing.py
+[SEARCH]
+        else:
+            # If it is a (multidimensional) np.ndarray, just pickup the used
+            # keys without duplication and store them as a 1d-np.ndarray.
+            oind, vind = np.unique(k, return_inverse=True)
+            backend_indexer_elems.append(oind)
+            np_indexer_elems.append(vind.reshape(*k.shape))
+[/SEARCH]
+[REPLACE]
+        else:
+            # If it is a (multidimensional) np.ndarray, just pickup the used
+            # keys without duplication and store them as a 1d-np.ndarray.
+            if isinstance(k, np.ndarray) and k.ndim == 1 and (np.diff(k) >= 0).all():
+                backend_indexer_elems.append(k)
+                np_indexer_elems.append(slice(None))
+            else:
+                oind, vind = np.unique(k, return_inverse=True)
+                backend_indexer_elems.append(oind)
+                np_indexer_elems.append(vind.reshape(*k.shape))
+[/REPLACE]

@@ -1,0 +1,126 @@
+Looking at the code, I need to optimize `DataFrameGroupBy.max` when aggregating PyArrow-backed timestamp/duration dtypes. Let me analyze the relevant parts of the code.
+
+The `_groupby_op` method in `ArrowExtensionArray` currently converts to masked arrays for all operations. However, for PyArrow timestamp and duration types, we can use PyArrow's native groupby operations which would be much faster.
+
+The key insight is that `_groupby_op` currently does:
+1. Converts `ArrowExtensionArray` to masked array via `_to_masked()`
+2. Runs groupby operation on masked array
+3. Converts back
+
+For timestamp/duration types with PyArrow, we can instead:
+1. Use PyArrow's compute functions directly for the groupby operation
+2. Avoid the expensive conversion to/from masked arrays
+
+Let me trace through the code to understand the full path and make the minimal change.
+
+Looking at the `_groupby_op` method, I need to add a fast path for PyArrow-backed timestamp/duration dtypes that uses PyArrow's native `hash_aggregate` or similar functions.
+
+Actually, looking more carefully at the code, I see that `_to_masked` only supports floating, integer, and boolean types - it would raise `NotImplementedError` for temporal types. This means for timestamp/duration types, the current code would fail or fall back somewhere else.
+
+Let me re-read... Actually looking at the `_groupby_op`, it calls `self._to_masked()` which would raise `NotImplementedError` for temporal types. So there must be some other path or this is already broken.
+
+Wait, let me re-read `_to_masked`:
+```python
+def _to_masked(self):
+    pa_dtype = self._pa_array.type
+
+    if pa.types.is_floating(pa_dtype) or pa.types.is_integer(pa_dtype):
+        na_value = 1
+    elif pa.types.is_boolean(pa_dtype):
+        na_value = True
+    else:
+        raise NotImplementedError
+```
+
+This would raise for temporal types. So the optimization should add support for temporal types in `_groupby_op` by using PyArrow's native groupby functionality.
+
+PyArrow has `pc.hash_min` and `pc.hash_max` functions that can be used for groupby aggregations. Let me add a fast path using these.
+
+```python
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _groupby_op(
+        self,
+        *,
+        how: str,
+        has_dropped_na: bool,
+        min_count: int,
+        ngroups: int,
+        ids: npt.NDArray[np.intp],
+        **kwargs,
+    ):
+        if isinstance(self.dtype, StringDtype):
+            return super()._groupby_op(
+                how=how,
+                has_dropped_na=has_dropped_na,
+                min_count=min_count,
+                ngroups=ngroups,
+                ids=ids,
+                **kwargs,
+            )
+
+        masked = self._to_masked()
+
+        result = masked._groupby_op(
+            how=how,
+            has_dropped_na=has_dropped_na,
+            min_count=min_count,
+            ngroups=ngroups,
+            ids=ids,
+            **kwargs,
+        )
+        if isinstance(result, np.ndarray):
+            return result
+        return type(self)._from_sequence(result, copy=False)
+[/SEARCH]
+[REPLACE]
+    def _groupby_op(
+        self,
+        *,
+        how: str,
+        has_dropped_na: bool,
+        min_count: int,
+        ngroups: int,
+        ids: npt.NDArray[np.intp],
+        **kwargs,
+    ):
+        if isinstance(self.dtype, StringDtype):
+            return super()._groupby_op(
+                how=how,
+                has_dropped_na=has_dropped_na,
+                min_count=min_count,
+                ngroups=ngroups,
+                ids=ids,
+                **kwargs,
+            )
+
+        pa_dtype = self._pa_array.type
+        if pa.types.is_temporal(pa_dtype) or pa.types.is_duration(pa_dtype):
+            # Fast path for temporal/duration types using PyArrow's native hash
+            # aggregates. These types are not supported by _to_masked().
+            if how in ("min", "max", "sum"):
+                if how == "min":
+                    result = pc.hash_min(self._pa_array, ids)
+                elif how == "max":
+                    result = pc.hash_max(self._pa_array, ids)
+                else:  # sum
+                    result = pc.hash_sum(self._pa_array, ids)
+                # hash_* returns a struct with "key" and the aggregated value
+                return type(self)(result.field(how))
+            # Fall through for other aggregations
+
+        masked = self._to_masked()
+
+        result = masked._groupby_op(
+            how=how,
+            has_dropped_na=has_dropped_na,
+            min_count=min_count,
+            ngroups=ngroups,
+            ids=ids,
+            **kwargs,
+        )
+        if isinstance(result, np.ndarray):
+            return result
+        return type(self)._from_sequence(result, copy=False)
+[/REPLACE]
+```

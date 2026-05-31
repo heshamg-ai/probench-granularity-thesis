@@ -1,0 +1,19 @@
+xarray/groupers.py
+[SEARCH]
+    def _factorize_unique(self) -> EncodedGroups:
+        # look through group to find the unique values
+        sort = not isinstance(self.group_as_index, pd.MultiIndex)
+        unique_values, codes_ = unique_value_groups(self.group_as_index, sort=sort)
+[/SEARCH]
+[REPLACE]
+    def _factorize_unique(self) -> EncodedGroups:
+        # look through group to find the unique values
+        sort = not isinstance(self.group_as_index, pd.MultiIndex)
+        from xarray import CFTimeIndex
+        index = self.group_as_index
+        if isinstance(index, CFTimeIndex) and not isinstance(index, pd.MultiIndex):
+            # Leverage Index.factorize which is optimized and preserves sorting semantics
+            codes_, unique_values = index.factorize(sort=sort)
+        else:
+            unique_values, codes_ = unique_value_groups(self.group_as_index, sort=sort)
+[/REPLACE]

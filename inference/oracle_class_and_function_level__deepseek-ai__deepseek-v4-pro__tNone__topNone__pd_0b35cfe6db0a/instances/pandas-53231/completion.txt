@@ -1,0 +1,40 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+    if isinstance(lk.dtype, DatetimeTZDtype) and isinstance(rk.dtype, DatetimeTZDtype):
+        # Extract the ndarray (UTC-localized) values
+        # Note: we dont need the dtypes to match, as these can still be compared
+        lk, rk = cast("DatetimeArray", lk)._ensure_matching_resos(rk)
+        lk = cast("DatetimeArray", lk)._ndarray
+        rk = cast("DatetimeArray", rk)._ndarray
+
+    elif (
+        isinstance(lk.dtype, CategoricalDtype)
+        and isinstance(rk.dtype, CategoricalDtype)
+        and lk.dtype == rk.dtype
+    ):
+[/SEARCH]
+[REPLACE]
+    if isinstance(lk.dtype, DatetimeTZDtype) and isinstance(rk.dtype, DatetimeTZDtype):
+        # Extract the ndarray (UTC-localized) values
+        # Note: we dont need the dtypes to match, as these can still be compared
+        lk, rk = cast("DatetimeArray", lk)._ensure_matching_resos(rk)
+        lk = cast("DatetimeArray", lk)._ndarray
+        rk = cast("DatetimeArray", rk)._ndarray
+
+    elif isinstance(lk.dtype, (DatetimeTZDtype, PeriodDtype)):
+        # For datetime64 (non-tz) and period dtypes, convert to integer
+        # representation early to avoid the overhead of object-based
+        # factorization in the generic path. This preserves sort order
+        # and equality semantics while using significantly less memory
+        # and CPU than hashing Python objects.
+        if hasattr(lk, "asi8"):
+            lk = lk.asi8
+        if hasattr(rk, "asi8"):
+            rk = rk.asi8
+
+    elif (
+        isinstance(lk.dtype, CategoricalDtype)
+        and isinstance(rk.dtype, CategoricalDtype)
+        and lk.dtype == rk.dtype
+    ):
+[/REPLACE]

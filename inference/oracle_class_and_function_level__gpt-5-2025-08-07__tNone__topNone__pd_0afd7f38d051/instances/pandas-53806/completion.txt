@@ -1,0 +1,60 @@
+pandas/core/sorting.py
+[SEARCH]
+    size_hint = len(group_index)
+    table = hashtable.Int64HashTable(size_hint)
+
+    group_index = ensure_int64(group_index)
+
+    # note, group labels come out ascending (ie, 1,2,3 etc)
+    comp_ids, obs_group_ids = table.get_labels_groupby(group_index)
+
+    if sort and len(obs_group_ids) > 0:
+        obs_group_ids, comp_ids = _reorder_by_uniques(obs_group_ids, comp_ids)
+
+    return ensure_int64(comp_ids), ensure_int64(obs_group_ids)
+[/SEARCH]
+[REPLACE]
+    size_hint = len(group_index)
+
+    group_index = ensure_int64(group_index)
+
+    # fastpath: if group_index is already nondecreasing (sorted with possible runs),
+    # we can compute comp_ids and obs_group_ids without hashing
+    n = len(group_index)
+    if n == 0:
+        empty = np.array([], dtype=np.int64)
+        return ensure_int64(empty), ensure_int64(empty)
+
+    # Check monotonic nondecreasing
+    if n == 1 or not (group_index[1:] < group_index[:-1]).any():
+        if n == 1:
+            obs_group_ids = group_index[:1].copy()
+            comp_ids = np.zeros(1, dtype=np.int64)
+        else:
+            neq = group_index[1:] != group_index[:-1]
+            n_groups = int(neq.sum()) + 1
+            # indices where a new group starts
+            idx = np.empty(n_groups, dtype=np.intp)
+            idx[0] = 0
+            if n_groups > 1:
+                idx[1:] = np.nonzero(neq)[0] + 1
+            obs_group_ids = group_index[idx]
+            # compute run lengths
+            boundaries = np.empty(n_groups + 1, dtype=np.intp)
+            boundaries[:-1] = idx
+            boundaries[-1] = n
+            run_lengths = np.diff(boundaries)
+            comp_ids = np.repeat(np.arange(n_groups, dtype=np.int64), run_lengths)
+        # For sort=True, obs_group_ids are already in ascending order by construction.
+        return ensure_int64(comp_ids), ensure_int64(obs_group_ids)
+
+    # fallback general path
+    table = hashtable.Int64HashTable(size_hint)
+    # note, group labels come out ascending (ie, 1,2,3 etc)
+    comp_ids, obs_group_ids = table.get_labels_groupby(group_index)
+
+    if sort and len(obs_group_ids) > 0:
+        obs_group_ids, comp_ids = _reorder_by_uniques(obs_group_ids, comp_ids)
+
+    return ensure_int64(comp_ids), ensure_int64(obs_group_ids)
+[/REPLACE]

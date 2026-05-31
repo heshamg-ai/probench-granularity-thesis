@@ -1,0 +1,11 @@
+
+
+Let me start by examining the current implementation more closely to understand what we're working with.
+
+pandas/core/indexes/range.py
+[SEARCH]
+class RangeIndex(Index):
+[/SEARCH]
+[REPLACE]
+class RangeIndex(Index):
+[/REPLACE]

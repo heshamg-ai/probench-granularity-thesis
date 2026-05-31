@@ -1,0 +1,115 @@
+sklearn/utils/stats.py
+[SEARCH]
+    # When sample_weight 1D, repeat for each array.shape[1]
+    if array.shape != sample_weight.shape and array.shape[0] == sample_weight.shape[0]:
+        sample_weight = xp.tile(sample_weight, (array.shape[1], 1)).T
+    # Sort `array` and `sample_weight` along axis=0:
+    sorted_idx = xp.argsort(array, axis=0)
+    sorted_weights = xp.take_along_axis(sample_weight, sorted_idx, axis=0)
+[/SEARCH]
+[REPLACE]
+    # Sort `array` and `sample_weight` along axis=0:
+    sorted_idx = xp.argsort(array, axis=0)
+    # Efficiently gather sorted weights without materializing a tiled copy when
+    # `sample_weight` is 1D.
+    if sample_weight.ndim == 1:
+        sorted_weights = xp.take(sample_weight, sorted_idx, axis=0)
+    else:
+        # When `sample_weight` matches `array`'s shape, gather per-column.
+        if array.shape != sample_weight.shape and array.shape[0] == sample_weight.shape[0]:
+            # Backward compatibility: if `sample_weight` is 2D but does not
+            # match `array` exactly while sharing the first dimension, tile it.
+            sample_weight = xp.tile(sample_weight, (array.shape[1], 1)).T
+        sorted_weights = xp.take_along_axis(sample_weight, sorted_idx, axis=0)
+[/REPLACE]
+
+sklearn/utils/stats.py
+[SEARCH]
+def _averaged_weighted_percentile(array, sample_weight, percentile_rank=50, xp=None):
+    return (
+        _weighted_percentile(array, sample_weight, percentile_rank, xp=xp)
+        - _weighted_percentile(-array, sample_weight, 100 - percentile_rank, xp=xp)
+    ) / 2
+[/SEARCH]
+[REPLACE]
+def _averaged_weighted_percentile(array, sample_weight, percentile_rank=50, xp=None):
+    xp, _, device = get_namespace_and_device(array)
+    floating_dtype = _find_matching_floating_dtype(array, xp=xp)
+    array = xp.asarray(array, dtype=floating_dtype, device=device)
+    sample_weight = xp.asarray(sample_weight, dtype=floating_dtype, device=device)
+
+    n_dim = array.ndim
+    if n_dim == 0:
+        return array
+    if array.ndim == 1:
+        array = xp.reshape(array, (-1, 1))
+
+    # Sort indices along axis=0
+    sorted_idx = xp.argsort(array, axis=0)
+
+    # Gather sorted weights without unnecessary tiling for 1D weights
+    if sample_weight.ndim == 1:
+        sorted_weights = xp.take(sample_weight, sorted_idx, axis=0)
+    else:
+        if array.shape != sample_weight.shape and array.shape[0] == sample_weight.shape[0]:
+            sample_weight = xp.tile(sample_weight, (array.shape[1], 1)).T
+        sorted_weights = xp.take_along_axis(sample_weight, sorted_idx, axis=0)
+
+    # Set NaN values in `sample_weight` to 0 in a column-isolated manner
+    n_features = array.shape[1]
+    largest_value_per_column = array[
+        sorted_idx[-1, ...], xp.arange(n_features, device=device)
+    ]
+    if xp.any(xp.isnan(largest_value_per_column)):
+        sorted_nan_mask = xp.take_along_axis(xp.isnan(array), sorted_idx, axis=0)
+        sorted_weights[sorted_nan_mask] = 0
+
+    # Compute forward and reverse cumulative sums of the sorted weights
+    weight_cdf_fwd = xp.cumulative_sum(sorted_weights, axis=0)
+    totals = weight_cdf_fwd[-1, ...]
+
+    # Targets for lower and upper percentiles
+    r1 = percentile_rank / 100 * totals
+    r2 = (100 - percentile_rank) / 100 * totals
+
+    # Ignore leading/trailing zero-weight observations for the 0th percentile targets
+    if xp.any(r1 == 0):
+        mask = r1 == 0
+        r1 = r1.copy()
+        r1[mask] = xp.nextafter(r1[mask], r1[mask] + 1)
+    if xp.any(r2 == 0):
+        mask = r2 == 0
+        r2 = r2.copy()
+        r2[mask] = xp.nextafter(r2[mask], r2[mask] + 1)
+
+    # Find indices for the forward CDF (lower value)
+    idx_fwd = xp.stack(
+        [
+            xp.searchsorted(weight_cdf_fwd[:, j], r1[j])
+            for j in range(n_features)
+        ],
+    )
+    max_idx = sorted_idx.shape[0] - 1
+    idx_fwd = xp.clip(idx_fwd, 0, max_idx)
+
+    # Find indices for the reverse CDF (upper value) using reversed cumulative sums
+    weight_cdf_rev_revorder = xp.cumulative_sum(sorted_weights[::-1, ...], axis=0)
+    idx_in_rev = xp.stack(
+        [
+            xp.searchsorted(weight_cdf_rev_revorder[:, j], r2[j])
+            for j in range(n_features)
+        ],
+    )
+    idx_rev = max_idx - xp.clip(idx_in_rev, 0, max_idx)
+
+    col_indices = xp.arange(n_features, device=device)
+    lower_idx = sorted_idx[idx_fwd, col_indices]
+    upper_idx = sorted_idx[idx_rev, col_indices]
+
+    lower_vals = array[lower_idx, col_indices]
+    upper_vals = array[upper_idx, col_indices]
+
+    result = (lower_vals + upper_vals) / 2
+
+    return result[0] if n_dim == 1 else result
+[/REPLACE]

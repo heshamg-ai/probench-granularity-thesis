@@ -1,0 +1,104 @@
+xarray/core/dataset.py
+[SEARCH]
+        variables: dict[Hashable, Variable] = {}
+        reindex_vars: list[Hashable] = []
+        for name, var in obj._variables.items():
+            if name in indexers:
+                continue
+
+            use_indexers = (
+                dask_indexers if is_duck_dask_array(var._data) else validated_indexers
+            )
+
+            dtype_kind = var.dtype.kind
+            if dtype_kind in "uifc":
+                # For normal number types do the interpolation:
+                var_indexers = {k: v for k, v in use_indexers.items() if k in var.dims}
+                variables[name] = missing.interp(var, var_indexers, method, **kwargs)
+            elif dtype_kind in "ObU" and (use_indexers.keys() & var.dims):
+                # For types that we do not understand do stepwise
+                # interpolation to avoid modifying the elements.
+                # reindex the variable instead because it supports
+                # booleans and objects and retains the dtype but inside
+                # this loop there might be some duplicate code that slows it
+                # down, therefore collect these signals and run it later:
+                reindex_vars.append(name)
+            elif all(d not in indexers for d in var.dims):
+                # For anything else we can only keep variables if they
+                # are not dependent on any coords that are being
+                # interpolated along:
+                variables[name] = var
+
+        if reindex_vars and (
+            reindex_indexers := {
+                k: v for k, (_, v) in validated_indexers.items() if v.dims == (k,)
+            }
+        ):
+            reindexed = alignment.reindex(
+                obj[reindex_vars],
+                indexers=reindex_indexers,
+                method=method_non_numeric,
+                exclude_vars=variables.keys(),
+            )
+            indexes = dict(reindexed._indexes)
+            variables.update(reindexed.variables)
+        else:
+            # Get the indexes that are not being interpolated along
+            indexes = {k: v for k, v in obj._indexes.items() if k not in indexers}
+[/SEARCH]
+[REPLACE]
+        variables: dict[Hashable, Variable] = {}
+        reindex_vars: list[Hashable] = []
+        # Pre-compute which validated_indexers keys intersect which variable dims
+        # to avoid repeated set operations inside the loop
+        indexer_dims = set(validated_indexers)
+
+        for name, var in obj._variables.items():
+            if name in indexers:
+                continue
+
+            var_indexer_dims = var.dims & indexer_dims
+            if not var_indexer_dims:
+                variables[name] = var
+                continue
+
+            use_indexers = (
+                dask_indexers if is_duck_dask_array(var._data) else validated_indexers
+            )
+
+            dtype_kind = var.dtype.kind
+            if dtype_kind in "uifc":
+                # For normal number types do the interpolation:
+                var_indexers = {k: use_indexers[k] for k in var_indexer_dims}
+                variables[name] = missing.interp(var, var_indexers, method, **kwargs)
+            elif dtype_kind in "ObU":
+                # For types that we do not understand do stepwise
+                # interpolation to avoid modifying the elements.
+                # reindex the variable instead because it supports
+                # booleans and objects and retains the dtype but inside
+                # this loop there might be some duplicate code that slows it
+                # down, therefore collect these signals and run it later:
+                reindex_vars.append(name)
+            else:
+                # For anything else we can only keep variables if they
+                # are not dependent on any coords that are being
+                # interpolated along:
+                variables[name] = var
+
+        if reindex_vars and (
+            reindex_indexers := {
+                k: v for k, (_, v) in validated_indexers.items() if v.dims == (k,)
+            }
+        ):
+            reindexed = alignment.reindex(
+                obj[reindex_vars],
+                indexers=reindex_indexers,
+                method=method_non_numeric,
+                exclude_vars=variables.keys(),
+            )
+            indexes = dict(reindexed._indexes)
+            variables.update(reindexed.variables)
+        else:
+            # Get the indexes that are not being interpolated along
+            indexes = {k: v for k, v in obj._indexes.items() if k not in indexers}
+[/REPLACE]

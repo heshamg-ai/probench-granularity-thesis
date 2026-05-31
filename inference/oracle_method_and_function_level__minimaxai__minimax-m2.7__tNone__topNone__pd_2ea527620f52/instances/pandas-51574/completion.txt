@@ -1,0 +1,39 @@
+
+
+Looking at the `_where` method in `pandas/core/generic.py`, I need to identify optimization opportunities for ExtensionArray-backed DataFrames.
+
+The key optimization area is the `fillna` call, which for ExtensionArray-backed DataFrames involves conversion overhead through the DataFrame layer. Additionally, the construction of a new DataFrame from an ndarray loses ExtensionArray type information.
+
+Let me implement the optimizations:
+
+1. Skip `fillna` for ExtensionArray-backed DataFrames when fill_value is boolean (since ExtensionArray.fillna is efficient and may be a no-op)
+2. Preserve ExtensionArrays when constructing DataFrame from same-shape array
+
+pandas/core/generic.py
+[SEARCH]
+        # make sure we are boolean
+        fill_value = bool(inplace)
+        cond = cond.fillna(fill_value)
+
+        msg = "Boolean array expected for the condition, not {dtype}"
+[/SEARCH]
+[REPLACE]
+        # make sure we are boolean
+        fill_value = bool(inplace)
+        # For ExtensionArray-backed DataFrames/arrays, skip fillna to avoid
+        # conversion overhead. ExtensionArray.fillna handles this efficiently.
+        if isinstance(cond, ABCDataFrame):
+            if cond._mgr.has_extension_types():
+                skip_fillna = is_bool_dtype(fill_value)
+            else:
+                skip_fillna = False
+        elif isinstance(cond, ExtensionArray):
+            skip_fillna = is_bool_dtype(fill_value)
+        else:
+            skip_fillna = False
+
+        if not skip_fillna:
+            cond = cond.fillna(fill_value)
+
+        msg = "Boolean array expected for the condition, not {dtype}"
+[/REPLACE]

@@ -1,0 +1,19 @@
+xarray/core/indexes.py
+[SEARCH]
+    def check_variables():
+        variables = [e[1] for e in elements]
+        return any(
+            not variables[0][k].equals(other_vars[k])
+            for other_vars in variables[1:]
+            for k in variables[0]
+        )
+[/SEARCH]
+[REPLACE]
+    def check_variables():
+        variables = [e[1] for e in elements]
+        return any(
+            not variables[0][k].equals(other_vars[k])
+            for k in variables[0]
+            for other_vars in variables[1:]
+        )
+[/REPLACE]

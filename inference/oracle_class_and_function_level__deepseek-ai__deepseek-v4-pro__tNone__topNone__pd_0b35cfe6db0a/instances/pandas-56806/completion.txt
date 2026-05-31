@@ -1,0 +1,40 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        # Note: we discard fill_value and use self._na_value, only relevant
+        #  in the case where allow_fill is True and fill_value is not None
+        values = self._values
+        if isinstance(values, np.ndarray):
+            taken = algos.take(
+                values, indices, allow_fill=allow_fill, fill_value=self._na_value
+            )
+        else:
+            # algos.take passes 'axis' keyword which not all EAs accept
+            taken = values.take(
+                indices, allow_fill=allow_fill, fill_value=self._na_value
+            )
+        return self._constructor._simple_new(taken, name=self.name)
+[/SEARCH]
+[REPLACE]
+        # Note: we discard fill_value and use self._na_value, only relevant
+        #  in the case where allow_fill is True and fill_value is not None
+        values = self._values
+        if isinstance(values, np.ndarray):
+            taken = algos.take(
+                values, indices, allow_fill=allow_fill, fill_value=self._na_value
+            )
+        else:
+            # algos.take passes 'axis' keyword which not all EAs accept
+            taken = values.take(
+                indices, allow_fill=allow_fill, fill_value=self._na_value
+            )
+        # fast path: if the result is a view due to full-range indices,
+        # return a shallow copy to avoid unnecessary allocations
+        if (
+            isinstance(taken, np.ndarray)
+            and taken.base is values
+            and taken.shape == values.shape
+            and taken.dtype == values.dtype
+        ):
+            return self._shallow_copy(taken, name=self.name)
+        return self._constructor._simple_new(taken, name=self.name)
+[/REPLACE]

@@ -1,0 +1,86 @@
+
+
+Looking at the `nunique` method, I can see opportunities to optimize for large group cardinality by reducing temporary array allocations and using more efficient numpy operations.
+
+The main optimizations:
+1. Combine the boundary detection and uniqueness check into a single pass
+2. Use in-place operations where possible
+3. Reduce intermediate array creations (`np.r_` calls create new arrays)
+
+Let me implement the optimization:
+
+pandas/core/groupby/generic.py
+[SEARCH]
+        ids, _, _ = self.grouper.group_info
+
+        val = self.obj._values
+
+        codes, _ = algorithms.factorize(val, sort=False)
+        sorter = np.lexsort((codes, ids))
+        codes = codes[sorter]
+        ids = ids[sorter]
+
+        # group boundaries are where group ids change
+        # unique observations are where sorted values change
+        idx = np.r_[0, 1 + np.nonzero(ids[1:] != ids[:-1])[0]]
+        inc = np.r_[1, codes[1:] != codes[:-1]]
+
+        # 1st item of each group is a new unique observation
+        mask = codes == -1
+        if dropna:
+            inc[idx] = 1
+            inc[mask] = 0
+        else:
+            inc[mask & np.r_[False, mask[:-1]]] = 0
+            inc[idx] = 1
+
+        out = np.add.reduceat(inc, idx).astype("int64", copy=False)
+[/SEARCH]
+[REPLACE]
+        ids, _, _ = self.grouper.group_info
+
+        val = self.obj._values
+
+        codes, _ = algorithms.factorize(val, sort=False)
+        sorter = np.lexsort((codes, ids))
+        codes = codes[sorter]
+        ids = ids[sorter]
+
+        n = len(codes)
+        # Handle empty case early
+        if n == 0:
+            ri = self.grouper.result_index
+            result = self.obj._constructor(
+                np.array([], dtype="int64"), index=ri, name=self.obj.name
+            )
+            if not self.as_index:
+                result = self._insert_inaxis_grouper(result)
+                result.index = default_index(len(result))
+            return self._reindex_output(result, fill_value=0)
+
+        # Compute where group ids change and where codes change in one pass
+        ids_diff = ids[1:] != ids[:-1]
+        codes_diff = codes[1:] != codes[:-1]
+
+        # Build indices of group boundaries
+        idx = np.zeros(n, dtype=np.intp)
+        idx[0] = 1  # Mark first element as boundary
+        idx[1:] = ids_diff  # Mark positions where group changes
+        idx = np.append(np.array([0], dtype=np.intp), np.nonzero(idx)[0])
+
+        # Compute increments (1 for new unique value, 0 otherwise)
+        inc = np.zeros(n, dtype=np.int8)
+        inc[0] = 1  # First element is always new
+        inc[1:] = codes_diff  # New unique if code differs from previous
+
+        # 1st item of each group is a new unique observation
+        mask = codes == -1
+        if dropna:
+            inc[idx] = 1
+            inc[mask] = 0
+        else:
+            inc[mask & np.concatenate(([False], mask[:-1]))] = 0
+            inc[idx] = 1
+
+        out = np.add.reduceat(inc, idx).astype("int64", copy=False)
+[/REPLACE]

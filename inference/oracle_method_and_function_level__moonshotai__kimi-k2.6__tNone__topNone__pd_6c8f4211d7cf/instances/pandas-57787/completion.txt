@@ -1,0 +1,24 @@
+ pandas/core/arrays/categorical.py
+[SEARCH]
+        if not isinstance(values, ABCIndex):
+            # in particular RangeIndex xref test_index_equal_range_categories
+            values = sanitize_array(values, None)
+        try:
+            codes, categories = factorize(values, sort=True)
+        except TypeError as err:
+            codes, categories = factorize(values, sort=False)
+[/SEARCH]
+[REPLACE]
+        if not isinstance(values, ABCIndex):
+            # in particular RangeIndex xref test_index_equal_range_categories
+            values = sanitize_array(values, None)
+        try:
+            codes, categories = factorize(values, sort=True)
+        except TypeError as err:
+            codes, categories = factorize(values, sort=False)
+        # Preserve RangeIndex when possible for memory efficiency
+        if hasattr(categories, "_is_compatible_with_rng") and categories._is_compatible_with_rng:
+            categories = categories._simple_new(
+                categories._range, name=categories.name
+            )
+[/REPLACE]

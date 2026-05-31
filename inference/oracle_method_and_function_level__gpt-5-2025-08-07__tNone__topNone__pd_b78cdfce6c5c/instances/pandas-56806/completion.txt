@@ -1,0 +1,29 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+
+        # Note: we discard fill_value and use self._na_value, only relevant
+        #  in the case where allow_fill is True and fill_value is not None
+        values = self._values
+[/SEARCH]
+[REPLACE]
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+
+        # Fastpath: if indices represent a full-range selection (0..n-1) with no fills,
+        # avoid materializing a copy and return a new Index referencing the same data.
+        n = len(self)
+        if (
+            getattr(indices, "ndim", 1) == 1
+            and len(indices) == n
+            and (n == 0 or (
+                indices[0] == 0
+                and indices[-1] == n - 1
+                and (n == 1 or np.all(indices[1:] == indices[:-1] + 1))
+            ))
+        ):
+            return self._constructor._simple_new(self._values, name=self.name)
+
+        # Note: we discard fill_value and use self._na_value, only relevant
+        #  in the case where allow_fill is True and fill_value is not None
+        values = self._values
+[/REPLACE]

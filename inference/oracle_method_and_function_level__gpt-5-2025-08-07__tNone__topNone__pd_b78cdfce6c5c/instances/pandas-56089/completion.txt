@@ -1,0 +1,21 @@
+pandas/core/reshape/encoding.py
+[SEARCH]
+    # Series avoids inconsistent NaN handling
+    codes, levels = factorize_from_iterable(Series(data, copy=False))
+[/SEARCH]
+[REPLACE]
+    # Series avoids inconsistent NaN handling
+    from pandas.core.dtypes.common import is_categorical_dtype
+    if isinstance(data, Series) and is_categorical_dtype(data.dtype):
+        cat = data._values
+        try:
+            codes = np.asarray(cat.codes)
+            levels = cat.categories
+        except AttributeError:
+            codes, levels = factorize_from_iterable(Series(data, copy=False))
+        else:
+            if not isinstance(levels, Index):
+                levels = Index(levels)
+    else:
+        codes, levels = factorize_from_iterable(Series(data, copy=False))
+[/REPLACE]

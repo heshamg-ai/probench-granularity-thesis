@@ -1,0 +1,15 @@
+sklearn/ensemble/_hist_gradient_boosting/binning.py
+[SEARCH]
+    # ignore missing values when computing bin thresholds
+    missing_mask = np.isnan(col_data)
+    if missing_mask.any():
+        col_data = col_data[~missing_mask]
+    col_data = np.ascontiguousarray(col_data, dtype=X_DTYPE)
+[/SEARCH]
+[REPLACE]
+    # ignore missing values when computing bin thresholds
+    # Check for NaNs without allocating a full boolean mask via np.isnan
+    if np.any(np.isnan(col_data)):
+        col_data = col_data[~np.isnan(col_data)]
+    col_data = np.ascontiguousarray(col_data, dtype=X_DTYPE)
+[/REPLACE]

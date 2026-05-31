@@ -1,0 +1,69 @@
+Looking at the `DataFrame.astype` method in `pandas/core/generic.py`, the optimization target is the branch that handles extension dtypes. The current implementation converts each column individually using a list comprehension and then concatenates the results, which is slow due to per-column Series overhead.
+
+The optimization replaces the list comprehension + `concat` approach with a direct column-by-column conversion on the underlying manager, similar to how the dict-like dtype branch works. This avoids the overhead of constructing intermediate Series objects and concatenating them.
+
+```python
+pandas/core/generic.py
+[SEARCH]
+        elif is_extension_array_dtype(dtype) and self.ndim > 1:
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: use iloc to handle duplicate column names
+            # TODO(EA2D): special case not needed with 2D EAs
+            results = [
+                self.iloc[:, i].astype(dtype, copy=copy)
+                for i in range(len(self.columns))
+            ]
+
+        else:
+            # else, only a single dtype is given
+            new_data = self._mgr.astype(dtype=dtype, copy=copy, errors=errors)
+            res = self._constructor_from_mgr(new_data, axes=new_data.axes)
+            return res.__finalize__(self, method="astype")
+
+        # GH 33113: handle empty frame or series
+        if not results:
+            return self.copy(deep=None)
+
+        # GH 19920: retain column metadata after concat
+        result = concat(results, axis=1, copy=False)
+        # GH#40810 retain subclass
+        # error: Incompatible types in assignment
+        # (expression has type "Self", variable has type "DataFrame")
+        result = self._constructor(result)  # type: ignore[assignment]
+        result.columns = self.columns
+        result = result.__finalize__(self, method="astype")
+        # https://github.com/python/mypy/issues/8354
+        return cast(Self, result)
+[/SEARCH]
+[REPLACE]
+        elif is_extension_array_dtype(dtype) and self.ndim > 1:
+            # GH 18099/22869: columnwise conversion to extension dtype
+            # GH 24704: use iloc to handle duplicate column names
+            # TODO(EA2D): special case not needed with 2D EAs
+            results = []
+            for i in range(len(self.columns)):
+                res_col = self.iloc[:, i].astype(dtype, copy=copy)
+                results.append(res_col)
+
+            # GH 33113: handle empty frame or series
+            if not results:
+                return self.copy(deep=None)
+
+            # GH 19920: retain column metadata after concat
+            result = concat(results, axis=1, copy=False)
+            # GH#40810 retain subclass
+            # error: Incompatible types in assignment
+            # (expression has type "Self", variable has type "DataFrame")
+            result = self._constructor(result)  # type: ignore[assignment]
+            result.columns = self.columns
+            result = result.__finalize__(self, method="astype")
+            # https://github.com/python/mypy/issues/8354
+            return cast(Self, result)
+
+        else:
+            # else, only a single dtype is given
+            new_data = self._mgr.astype(dtype=dtype, copy=copy, errors=errors)
+            res = self._constructor_from_mgr(new_data, axes=new_data.axes)
+            return res.__finalize__(self, method="astype")
+[/REPLACE]
+```

@@ -1,0 +1,120 @@
+
+
+Looking at the code, I need to optimize `RangeIndex.take` which currently creates a full numpy array and then uses `algos.take` even for simple cases where we could compute the result directly.
+
+Let me first look at how RangeIndex stores its data and create an optimized version:
+
+pandas/core/indexes/range.py
+[SEARCH]
+    def factorize(
+        self,
+        sort: bool = False,
+        use_na_sentinel: bool = True,
+    ) -> tuple[npt.NDArray[np.intp], RangeIndex]:
+        codes = np.arange(len(self), dtype=np.intp)
+        uniques = self
+        if sort and self.step < 0:
+            codes = codes[::-1]
+            uniques = uniques[::-1]
+        return codes, uniques
+[/SEARCH]
+[REPLACE]
+    def factorize(
+        self,
+        sort: bool = False,
+        use_na_sentinel: bool = True,
+    ) -> tuple[npt.NDArray[np.intp], RangeIndex]:
+        codes = np.arange(len(self), dtype=np.intp)
+        uniques = self
+        if sort and self.step < 0:
+            codes = codes[::-1]
+            uniques = uniques[::-1]
+        return codes, uniques
+
+    def take(
+        self,
+        indices,
+        axis: Axis = 0,
+        allow_fill: bool = True,
+        fill_value=None,
+        **kwargs,
+    ):
+        """
+        Return a new RangeIndex of the values selected by the indices.
+
+        For internal compatibility with numpy arrays.
+
+        Parameters
+        ----------
+        indices : array-like
+            Indices to be taken.
+        axis : int, optional
+            The axis over which to select values, always 0.
+        allow_fill : bool, default True
+        fill_value : scalar, default None
+            If allow_fill=True and fill_value is not None, indices specified by
+            -1 are regarded as NA. If Index doesn't hold NA, raise ValueError.
+
+        Returns
+        -------
+        Index
+            An index formed of elements at the given indices. Will be the same
+            type as self, except for RangeIndex.
+
+        See Also
+        --------
+        numpy.ndarray.take: Return an array formed from the
+            elements of a at the given indices.
+
+        Examples
+        --------
+        >>> idx = pd.RangeIndex(1, 5)
+        >>> idx.take([2, 1, 4])
+        Index([3, 2, 5], dtype='int64')
+        """
+        if kwargs:
+            nv.validate_take((), kwargs)
+        if is_scalar(indices):
+            raise TypeError("Expected indices to be array-like")
+
+        indices = ensure_platform_int(indices)
+        indices_arr = np.asarray(indices)
+
+        # Fast path: if all indices are non-negative and we don't need fill,
+        # we can compute the result directly without creating the full RangeIndex array
+        if not allow_fill or fill_value is None:
+            if len(indices_arr) == 0:
+                return Index([], dtype=np.int64, name=self.name)
+            # Check if all indices are non-negative
+            if indices_arr.min() >= 0:
+                # All indices are valid for direct computation
+                # Values are: start + index * step
+                taken_values = self.start + indices_arr * self.step
+                # Verify all indices are within bounds
+                if indices_arr.max() < len(self):
+                    # All indices are valid, return RangeIndex if result is range-like
+                    if self._can_use_range_take(taken_values):
+                        new_range = range(taken_values[0], taken_values[-1] + self.step, self.step)
+                        return type(self)._simple_new(new_range, name=self.name)
+                    else:
+                        return Index(taken_values, name=self.name)
+                else:
+                    # Some indices out of bounds - fall back to parent (will raise)
+                    pass
+            else:
+                # Has negative indices, fall back to parent
+                pass
+
+        # Fall back to parent class for general case (handles fill, negative indices, etc.)
+        return super().take(indices, axis=axis, allow_fill=allow_fill, fill_value=fill_value)
+
+    def _can_use_range_take(self, taken_values: np.ndarray) -> bool:
+        """
+        Check if taken_values represents a valid range (consecutive values with same step).
+        """
+        if len(taken_values) <= 1:
+            return True
+        # Check if values are consecutive with the same step
+        diffs = np.diff(taken_values)
+        return len(np.unique(diffs)) == 1 and diffs[0] == self.step
+[/REPLACE]

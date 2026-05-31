@@ -1,0 +1,30 @@
+
+
+Looking at the code, I need to optimize the `IntegerArrays.reshape` method. The `IntegerArray` class inherits from `BaseMaskedArray` which has the `reshape` method in `pandas/core/arrays/masked.py`.
+
+The current implementation in `masked.py` is:
+
+```python
+def reshape(self, *args, **kwargs) -> Self:
+    data = self._data.reshape(*args, **kwargs)
+    mask = self._mask.reshape(*args, **kwargs)
+    return type(self)(data, mask)
+```
+
+The optimization opportunity is that `reshape` on numpy arrays returns a view when possible (no copy), and the constructor creates a new instance. We can avoid some overhead by simplifying the implementation.
+
+However, the most effective optimization is to leverage the fact that when we just need to return a reshaped view wrapped in a new instance, we can create the instance more directly. The current constructor does shape validation and type checks which are redundant since reshape guarantees valid inputs.
+
+Let me provide the optimization:
+
+pandas/core/arrays/masked.py
+[SEARCH]
+    def reshape(self, *args, **kwargs) -> Self:
+        data = self._data.reshape(*args, **kwargs)
+        mask = self._mask.reshape(*args, **kwargs)
+        return type(self)(data, mask)
+[/SEARCH]
+[REPLACE]
+    def reshape(self, *args, **kwargs) -> Self:
+        return type(self)(self._data.reshape(*args, **kwargs), self._mask.reshape(*args, **kwargs), copy=False)
+[/REPLACE]

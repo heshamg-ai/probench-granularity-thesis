@@ -1,0 +1,154 @@
+
+
+Let me analyze the `equals` method to identify optimization opportunities.
+
+The key bottlenecks I see:
+1. For each level, we extract values via `take()` even when codes are identical
+2. For each level, we compute masks and filter arrays even when codes match
+3. For simple numeric levels, comparing codes directly is much faster than extracting values
+
+Let me implement optimizations:
+
+pandas/core/indexes/multi.py
+[SEARCH]
+    def equals(self, other: object) -> bool:
+        """
+        Determines if two MultiIndex objects have the same labeling information
+        (the levels themselves do not necessarily have to be the same)
+
+        See Also
+        --------
+        equal_levels
+        """
+        if self.is_(other):
+            return True
+
+        if not isinstance(other, Index):
+            return False
+
+        if len(self) != len(other):
+            return False
+
+        if not isinstance(other, MultiIndex):
+            # d-level MultiIndex can equal d-tuple Index
+            if not self._should_compare(other):
+                # object Index or Categorical[object] may contain tuples
+                return False
+            return array_equivalent(self._values, other._values)
+
+        if self.nlevels != other.nlevels:
+            return False
+
+        for i in range(self.nlevels):
+            self_codes = self.codes[i]
+            other_codes = other.codes[i]
+            self_mask = self_codes == -1
+            other_mask = other_codes == -1
+            if not np.array_equal(self_mask, other_mask):
+                return False
+            self_codes = self_codes[~self_mask]
+            self_values = self.levels[i]._values.take(self_codes)
+
+            other_codes = other_codes[~other_mask]
+            other_values = other.levels[i]._values.take(other_codes)
+
+            # since we use NaT both datetime64 and timedelta64 we can have a
+            # situation where a level is typed say timedelta64 in self (IOW it
+            # has other values than NaT) but types datetime64 in other (where
+            # its all NaT) but these are equivalent
+            if len(self_values) == 0 and len(other_values) == 0:
+                continue
+
+            if not isinstance(self_values, np.ndarray):
+                # i.e. ExtensionArray
+                if not self_values.equals(other_values):
+                    return False
+            elif not isinstance(other_values, np.ndarray):
+                # i.e. other is ExtensionArray
+                if not other_values.equals(self_values):
+                    return False
+            else:
+                if not array_equivalent(self_values, other_values):
+                    return False
+
+        return True
+[/SEARCH]
+[REPLACE]
+    def equals(self, other: object) -> bool:
+        """
+        Determines if two MultiIndex objects have the same labeling information
+        (the levels themselves do not necessarily have to be the same)
+
+        See Also
+        --------
+        equal_levels
+        """
+        if self.is_(other):
+            return True
+
+        if not isinstance(other, Index):
+            return False
+
+        if len(self) != len(other):
+            return False
+
+        if not isinstance(other, MultiIndex):
+            # d-level MultiIndex can equal d-tuple Index
+            if not self._should_compare(other):
+                # object Index or Categorical[object] may contain tuples
+                return False
+            return array_equivalent(self._values, other._values)
+
+        if self.nlevels != other.nlevels:
+            return False
+
+        # Fast path: check if all codes are identical first
+        # If codes match, values must match (same codes map to same level values)
+        codes_match = True
+        for i in range(self.nlevels):
+            if not np.array_equal(self.codes[i], other.codes[i]):
+                codes_match = False
+                break
+        if codes_match:
+            return True
+
+        # Slower path: codes differ, need to compare actual values
+        for i in range(self.nlevels):
+            self_codes = self.codes[i]
+            other_codes = other.codes[i]
+
+            # Quick check: if codes are identical, skip value comparison
+            if np.array_equal(self_codes, other_codes):
+                continue
+
+            self_mask = self_codes == -1
+            other_mask = other_codes == -1
+            if not np.array_equal(self_mask, other_mask):
+                return False
+            self_codes = self_codes[~self_mask]
+            self_values = self.levels[i]._values.take(self_codes)
+
+            other_codes = other_codes[~other_mask]
+            other_values = other.levels[i]._values.take(other_codes)
+
+            # since we use NaT both datetime64 and timedelta64 we can have a
+            # situation where a level is typed say timedelta64 in self (IOW it
+            # has other values than NaT) but types datetime64 in other (where
+            # its all NaT) but these are equivalent
+            if len(self_values) == 0 and len(other_values) == 0:
+                continue
+
+            if not isinstance(self_values, np.ndarray):
+                # i.e. ExtensionArray
+                if not self_values.equals(other_values):
+                    return False
+            elif not isinstance(other_values, np.ndarray):
+                # i.e. other is ExtensionArray
+                if not other_values.equals(self_values):
+                    return False
+            else:
+                if not array_equivalent(self_values, other_values):
+                    return False
+
+        return True
+[/REPLACE]

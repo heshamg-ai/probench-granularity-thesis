@@ -1,0 +1,34 @@
+pandas/core/algorithms.py
+[SEARCH]
+    if ndtype == "object":
+        # it's cheaper to use a String Hash Table than Object; we infer
+        # including nulls because that is the only difference between
+        # StringHashTable and ObjectHashtable
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+[/SEARCH]
+[REPLACE]
+    if ndtype == "object":
+        # Fast path: quickly rule out non-string object arrays without full dtype inference.
+        # We need to consider nulls as allowable alongside strings.
+        from pandas._libs import missing as libmissing
+
+        seen_string = False
+        # Iterate and early-exit on first definitive non-string, non-missing value
+        for obj in values.ravel():
+            if libmissing.checknull(obj):
+                continue
+            if isinstance(obj, str):
+                seen_string = True
+            else:
+                # Found a non-string non-missing object: keep using object hashtable
+                return ndtype
+
+        # If we saw at least one string and no non-strings (ignoring nulls), we can use string hashtable
+        if seen_string:
+            return "string"
+
+        # Fallback to original inference for cases like all-missing arrays
+        if lib.infer_dtype(values, skipna=False) in ["string"]:
+            ndtype = "string"
+[/REPLACE]

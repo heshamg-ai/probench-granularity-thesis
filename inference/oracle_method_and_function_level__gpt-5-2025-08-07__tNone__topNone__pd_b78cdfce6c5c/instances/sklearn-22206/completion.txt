@@ -1,0 +1,69 @@
+sklearn/linear_model/_quantile.py
+[SEARCH]
+        else:
+            solver_options = self.solver_options
+[/SEARCH]
+[REPLACE]
+        else:
+            solver_options = self.solver_options
+
+        highs_solver = self.solver in ("highs-ds", "highs-ipm", "highs")
+[/REPLACE]
+
+sklearn/linear_model/_quantile.py
+[SEARCH]
+        if sparse.issparse(X):
+            if self.solver not in ["highs-ds", "highs-ipm", "highs"]:
+                raise ValueError(
+                    f"Solver {self.solver} does not support sparse X. "
+                    "Use solver 'highs' for example."
+                )
+            # Note that highs methods do convert to csc.
+            # Therefore, we work with csc matrices as much as possible.
+            eye = sparse.eye(n_indices, dtype=X.dtype, format="csc")
+            if self.fit_intercept:
+                ones = sparse.csc_matrix(np.ones(shape=(n_indices, 1), dtype=X.dtype))
+                A_eq = sparse.hstack([ones, X, -ones, -X, eye, -eye], format="csc")
+            else:
+                A_eq = sparse.hstack([X, -X, eye, -eye], format="csc")
+        else:
+            eye = np.eye(n_indices)
+            if self.fit_intercept:
+                ones = np.ones((n_indices, 1))
+                A_eq = np.concatenate([ones, X, -ones, -X, eye, -eye], axis=1)
+            else:
+                A_eq = np.concatenate([X, -X, eye, -eye], axis=1)
+[/SEARCH]
+[REPLACE]
+        if sparse.issparse(X):
+            if not highs_solver:
+                raise ValueError(
+                    f"Solver {self.solver} does not support sparse X. "
+                    "Use solver 'highs' for example."
+                )
+            # Note that highs methods do convert to csc.
+            # Therefore, we work with csc matrices as much as possible.
+            eye = sparse.eye(n_indices, dtype=X.dtype, format="csc")
+            if self.fit_intercept:
+                ones = sparse.csc_matrix(np.ones(shape=(n_indices, 1), dtype=X.dtype))
+                A_eq = sparse.hstack([ones, X, -ones, -X, eye, -eye], format="csc")
+            else:
+                A_eq = sparse.hstack([X, -X, eye, -eye], format="csc")
+        else:
+            if highs_solver:
+                # Build A_eq as sparse to reduce memory use when using highs-family solvers
+                X_csc = sparse.csc_matrix(X)
+                eye = sparse.eye(n_indices, dtype=X.dtype, format="csc")
+                if self.fit_intercept:
+                    ones = sparse.csc_matrix(np.ones(shape=(n_indices, 1), dtype=X.dtype))
+                    A_eq = sparse.hstack([ones, X_csc, -ones, -X_csc, eye, -eye], format="csc")
+                else:
+                    A_eq = sparse.hstack([X_csc, -X_csc, eye, -eye], format="csc")
+            else:
+                eye = np.eye(n_indices)
+                if self.fit_intercept:
+                    ones = np.ones((n_indices, 1))
+                    A_eq = np.concatenate([ones, X, -ones, -X, eye, -eye], axis=1)
+                else:
+                    A_eq = np.concatenate([X, -X, eye, -eye], axis=1)
+[/REPLACE]

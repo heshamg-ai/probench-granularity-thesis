@@ -1,0 +1,206 @@
+pandas/core/groupby/generic.py
+[SEARCH]
+    def nunique(self, dropna: bool = True) -> Series | DataFrame:
+        """
+        Return number of unique elements in the group.
+
+        Returns
+        -------
+        Series
+            Number of unique values within each group.
+
+        Examples
+        --------
+        For SeriesGroupby:
+
+        >>> lst = ['a', 'a', 'b', 'b']
+        >>> ser = pd.Series([1, 2, 3, 3], index=lst)
+        >>> ser
+        a    1
+        a    2
+        b    3
+        b    3
+        dtype: int64
+        >>> ser.groupby(level=0).nunique()
+        a    2
+        b    1
+        dtype: int64
+
+        For Resampler:
+
+        >>> ser = pd.Series([1, 2, 3, 3], index=pd.DatetimeIndex(
+        ...                 ['2023-01-01', '2023-01-15', '2023-02-01', '2023-02-15']))
+        >>> ser
+        2023-01-01    1
+        2023-01-15    2
+        2023-02-01    3
+        2023-02-15    3
+        dtype: int64
+        >>> ser.resample('MS').nunique()
+        2023-01-01    2
+        2023-02-01    1
+        Freq: MS, dtype: int64
+        """
+        ids, _, _ = self.grouper.group_info
+
+        val = self.obj._values
+
+        codes, _ = algorithms.factorize(val, sort=False)
+        sorter = np.lexsort((codes, ids))
+        codes = codes[sorter]
+        ids = ids[sorter]
+
+        # group boundaries are where group ids change
+        # unique observations are where sorted values change
+        idx = np.r_[0, 1 + np.nonzero(ids[1:] != ids[:-1])[0]]
+        inc = np.r_[1, codes[1:] != codes[:-1]]
+
+        # 1st item of each group is a new unique observation
+        mask = codes == -1
+        if dropna:
+            inc[idx] = 1
+            inc[mask] = 0
+        else:
+            inc[mask & np.r_[False, mask[:-1]]] = 0
+            inc[idx] = 1
+
+        out = np.add.reduceat(inc, idx).astype("int64", copy=False)
+        if len(ids):
+            # NaN/NaT group exists if the head of ids is -1,
+            # so remove it from res and exclude its index from idx
+            if ids[0] == -1:
+                res = out[1:]
+                idx = idx[np.flatnonzero(idx)]
+            else:
+                res = out
+        else:
+            res = out[1:]
+        ri = self.grouper.result_index
+
+        # we might have duplications among the bins
+        if len(res) != len(ri):
+            res, out = np.zeros(len(ri), dtype=out.dtype), res
+            if len(ids) > 0:
+                # GH#21334s
+                res[ids[idx]] = out
+
+        result: Series | DataFrame = self.obj._constructor(
+            res, index=ri, name=self.obj.name
+        )
+        if not self.as_index:
+            result = self._insert_inaxis_grouper(result)
+            result.index = default_index(len(result))
+        return self._reindex_output(result, fill_value=0)
+[/SEARCH]
+[REPLACE]
+    def nunique(self, dropna: bool = True) -> Series | DataFrame:
+        """
+        Return number of unique elements in the group.
+
+        Returns
+        -------
+        Series
+            Number of unique values within each group.
+
+        Examples
+        --------
+        For SeriesGroupby:
+
+        >>> lst = ['a', 'a', 'b', 'b']
+        >>> ser = pd.Series([1, 2, 3, 3], index=lst)
+        >>> ser
+        a    1
+        a    2
+        b    3
+        b    3
+        dtype: int64
+        >>> ser.groupby(level=0).nunique()
+        a    2
+        b    1
+        dtype: int64
+
+        For Resampler:
+
+        >>> ser = pd.Series([1, 2, 3, 3], index=pd.DatetimeIndex(
+        ...                 ['2023-01-01', '2023-01-15', '2023-02-01', '2023-02-15']))
+        >>> ser
+        2023-01-01    1
+        2023-01-15    2
+        2023-02-01    3
+        2023-02-15    3
+        dtype: int64
+        >>> ser.resample('MS').nunique()
+        2023-01-01    2
+        2023-02-01    1
+        Freq: MS, dtype: int64
+        """
+        ids, _, ngroups = self.grouper.group_info
+        val = self.obj._values
+
+        codes, _ = algorithms.factorize(val, sort=False)
+
+        # sort by ids then codes; this groups identical values within each group
+        sorter = np.lexsort((codes, ids))
+        ids = ids[sorter]
+        codes = codes[sorter]
+
+        # mask for where group id changes
+        group_change = np.empty(len(ids) + 1, dtype=bool)
+        group_change[0] = True
+        group_change[1:] = ids[0:1] != ids[:1] if len(ids) > 0 else ids[:0] != ids[:0]
+        np.not_equal(ids[1:], ids[:-1], out=group_change[2:])
+        group_change[-1] = True
+
+        # mask for where code changes (unique values within groups)
+        code_change = np.empty(len(codes) + 1, dtype=bool)
+        code_change[0] = True
+        code_change[1:] = codes[0:1] != codes[:1] if len(codes) > 0 else codes[:0] != codes[:0]
+        np.not_equal(codes[1:], codes[:-1], out=code_change[2:])
+        code_change[-1] = True
+
+        # handle NA values
+        mask = codes == -1
+        if dropna:
+            code_change[mask] = False
+        else:
+            # consecutive NAs in the sorted order within the same group
+            # count as a single unique value only at the first occurrence
+            mask_with_prev = mask & np.roll(mask, 1)
+            code_change[:-1][mask_with_prev] = False
+
+        # group starts always count as code changes
+        code_change |= group_change
+
+        # compute group start indices
+        idx = np.flatnonzero(group_change[:-1])
+
+        # sum code changes per group using reduceat
+        if len(ids) > 0:
+            out = np.add.reduceat(code_change[:-1].astype("int64"), idx)
+            if ids[0] == -1:
+                res = out[1:]
+                idx = idx[1:]
+            else:
+                res = out
+        else:
+            res = np.array([], dtype="int64")
+            idx = np.array([], dtype=np.intp)
+
+        ri = self.grouper.result_index
+
+        # we might have duplications among the bins
+        if len(res) != len(ri):
+            out = np.zeros(len(ri), dtype="int64")
+            if len(ids) > 0 and len(idx) > 0:
+                # GH#21334
+                out[ids[idx]] = res
+            res = out
+
+        result: Series | DataFrame = self.obj._constructor(
+            res, index=ri, name=self.obj.name
+        )
+        if not self.as_index:
+            result = self._insert_inaxis_grouper(result)
+            result.index = default_index(len(result))
+        return self._reindex_output(result, fill_value=0)
+[/REPLACE]

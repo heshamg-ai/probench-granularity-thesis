@@ -1,0 +1,50 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+        if verify_integrity:
+            new_codes = self._verify_integrity(levels=new_levels)
+            self._codes = new_codes
+[/SEARCH]
+[REPLACE]
+        if verify_integrity:
+            if level is None:
+                new_codes = self._verify_integrity(levels=new_levels)
+                self._codes = new_codes
+            else:
+                # fast-path: validate only the affected levels and avoid rebuilding codes
+                level_numbers = [self._get_level_number(lev) for lev in level]
+                new_codes_list = list(self._codes)
+                codes_length = len(new_codes_list[0]) if new_codes_list else 0
+                for lev_num in level_numbers:
+                    level_idx = new_levels[lev_num]
+                    level_codes = new_codes_list[lev_num]
+                    if len(level_codes) != codes_length:
+                        raise ValueError(
+                            f"Unequal code lengths: {[len(code_) for code_ in new_codes_list]}"
+                        )
+                    if len(level_codes):
+                        max_code = level_codes.max()
+                        if max_code >= len(level_idx):
+                            raise ValueError(
+                                f"On level {lev_num}, code max ({max_code}) >= length of "
+                                f"level ({len(level_idx)}). NOTE: this index is in an "
+                                "inconsistent state"
+                            )
+                        min_code = level_codes.min()
+                        if min_code < -1:
+                            raise ValueError(
+                                f"On level {lev_num}, code value ({min_code}) < -1"
+                            )
+                    if not level_idx.is_unique:
+                        raise ValueError(
+                            f"Level values must be unique: {list(level_idx)} on level {lev_num}"
+                        )
+                    new_codes_list[lev_num] = self._validate_codes(level_idx, level_codes)
+                if self.sortorder is not None:
+                    if self.sortorder > _lexsort_depth(self.codes, self.nlevels):
+                        raise ValueError(
+                            "Value for sortorder must be inferior or equal to actual "
+                            f"lexsort_depth: sortorder {self.sortorder} "
+                            f"with lexsort_depth {_lexsort_depth(self.codes, self.nlevels)}"
+                        )
+                self._codes = FrozenList(new_codes_list)
+[/REPLACE]

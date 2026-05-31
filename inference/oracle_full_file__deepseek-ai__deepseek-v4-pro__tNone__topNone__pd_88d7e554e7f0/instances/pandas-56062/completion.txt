@@ -1,0 +1,23 @@
+pandas/core/indexing.py
+[SEARCH]
+    def _getitem_axis(
+        self, key, axis: AxisInt
+    ) -> Index | np.ndarray | Series | tuple | None:
+[/SEARCH]
+[REPLACE]
+    def _getitem_axis(
+        self, key, axis: AxisInt
+    ) -> Index | np.ndarray | Series | tuple | None:
+        if isinstance(key, tuple) and isinstance(self.obj.index, MultiIndex):
+            return self._getitem_multilevel(key)
+[/REPLACE]
+
+pandas/core/indexing.py
+[SEARCH]
+    def _get_list_axis(self, key, axis: AxisInt):
+[/SEARCH]
+[REPLACE]
+    def _get_list_axis(self, key, axis: AxisInt):
+        if isinstance(self.obj.index, MultiIndex) and len(key) > 0 and isinstance(key[0], tuple):
+            return self._get_list_multilevel(key, axis=axis)
+[/REPLACE]

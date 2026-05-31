@@ -1,0 +1,50 @@
+{
+  "id": 96,
+  "scenario_id": "xarray-7578",
+  "repo": "pydata/xarray",
+  "pr_number": 7578,
+  "baseline_sha": "2b444af78cef1aaf4bbd9e4bded246d1d0defddb",
+  "reference_sha": "e0533a6a394dedc8372f04fc0f9d5891a5095b58",
+  "task": "Optimize DatasetRolling.construct with stride on Datasets without indexes",
+  "entry_point": "xarray.computation.rolling.DatasetRolling.construct",
+  "whats_new": "Fix :py:meth:`~core.rolling.DatasetRolling.construct` with stride on Datasets without indexes.",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/xarray-7578:baseline",
+      "digest": "sha256:b1d40321af4432f38fbd402c7a7e6cdfd8a12fde20e23b535c6e74e00cd047e6"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/xarray-7578:reference",
+      "digest": "sha256:f04eb188313bbfa477d711bc2447085acbabc8d96be50de4a764f5a0719c05fa"
+    }
+  },
+  "params": [
+    {
+      "name": "n_time",
+      "short_indicator": "nt",
+      "explanation": "Size of rolling dimension",
+      "values": [
+        "1000",
+        "10000",
+        "100000"
+      ]
+    },
+    {
+      "name": "stride",
+      "short_indicator": "str",
+      "explanation": "Stride for construct",
+      "values": [
+        "5",
+        "10"
+      ]
+    }
+  ],
+  "core_tests": [
+    "xarray/tests/test_rolling.py::TestDatasetRolling::test_rolling_construct",
+    "xarray/tests/test_rolling.py::TestDatasetRolling::test_ndrolling_construct",
+    "xarray/tests/test_rolling.py::TestDataArrayRolling::test_rolling_construct",
+    "xarray/tests/test_rolling.py::TestDataArrayRolling::test_ndrolling_construct"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize xarray.computation.rolling.DatasetRolling.construct for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize DatasetRolling.construct with stride on Datasets without indexes\nOptimization function: xarray.computation.rolling.DatasetRolling.construct\n\n\n[start of xarray/core/rolling.py]\n### Relevant context\n#### Class `xarray.core.rolling.DatasetRolling`\n**Class Signature**\n```python\nclass DatasetRolling(Rolling['Dataset']):\n```\n**Class Attributes**\n```python\n    __slots__ = (\"rollings\",)\n```\n**Class __init__ method**\n```python\n    def __init__(\n        self,\n        obj: Dataset,\n        windows: Mapping[Any, int],\n        min_periods: int | None = None,\n        center: bool | Mapping[Any, bool] = False,\n    ) -> None:\n        \"\"\"\n        Moving window object for Dataset.\n        You should use Dataset.rolling() method to construct this object\n        instead of the class constructor.\n\n        Parameters\n        ----------\n        obj : Dataset\n            Object to window.\n        windows : mapping of hashable to int\n            A mapping from the name of the dimension to create the rolling\n            exponential window along (e.g. `time`) to the size of the moving window.\n        min_periods : int, default: None\n            Minimum number of observations in window required to have a value\n            (otherwise result is NA). The default, None, is equivalent to\n            setting min_periods equal to the size of the window.\n        center : bool or mapping of hashable to bool, default: False\n            Set the labels at the center of the window.\n\n        Returns\n        -------\n        rolling : type of input argument\n\n        See Also\n        --------\n        xarray.Dataset.rolling\n        xarray.DataArray.rolling\n        xarray.Dataset.groupby\n        xarray.DataArray.groupby\n        \"\"\"\n        super().__init__(obj, windows, min_periods, center)\n\n        # Keep each Rolling object as a dictionary\n        self.rollings = {}\n        for key, da in self.obj.data_vars.items():\n            # keeps rollings only for the dataset depending on self.dim\n            dims, center = [], {}\n            for i, d in enumerate(self.dim):\n                if d in da.dims:\n                    dims.append(d)\n                    center[d] = self.center[i]\n\n            if dims:\n                w = {d: windows[d] for d in dims}\n                self.rollings[key] = DataArrayRolling(da, w, min_periods, center)\n```\n##### Method `xarray.core.rolling.DatasetRolling.construct`\n```python\ndef construct(\n        self,\n        window_dim: Hashable | Mapping[Any, Hashable] | None = None,\n        stride: int | Mapping[Any, int] = 1,\n        fill_value: Any = dtypes.NA,\n        keep_attrs: bool | None = None,\n        **window_dim_kwargs: Hashable,\n    ) -> Dataset:\n        \"\"\"\n        Convert this rolling object to xr.Dataset,\n        where the window dimension is stacked as a new dimension\n\n        Parameters\n        ----------\n        window_dim : str or mapping, optional\n            A mapping from dimension name to the new window dimension names.\n            Just a string can be used for 1d-rolling.\n        stride : int, optional\n            size of stride for the rolling window.\n        fill_value : Any, default: dtypes.NA\n            Filling value to match the dimension size.\n        **window_dim_kwargs : {dim: new_name, ...}, optional\n            The keyword arguments form of ``window_dim``.\n\n        Returns\n        -------\n        Dataset with variables converted from rolling object.\n        \"\"\"\n\n        from xarray.core.dataset import Dataset\n\n        keep_attrs = self._get_keep_attrs(keep_attrs)\n\n        if window_dim is None:\n            if len(window_dim_kwargs) == 0:\n                raise ValueError(\n                    \"Either window_dim or window_dim_kwargs need to be specified.\"\n                )\n            window_dim = {d: window_dim_kwargs[str(d)] for d in self.dim}\n\n        window_dims = self._mapping_to_list(\n            window_dim, allow_default=False, allow_allsame=False\n        )\n        strides = self._mapping_to_list(stride, default=1)\n\n        dataset = {}\n        for key, da in self.obj.data_vars.items():\n            # keeps rollings only for the dataset depending on self.dim\n            dims = [d for d in self.dim if d in da.dims]\n            if dims:\n                wi = {d: window_dims[i] for i, d in enumerate(self.dim) if d in da.dims}\n                st = {d: strides[i] for i, d in enumerate(self.dim) if d in da.dims}\n\n                dataset[key] = self.rollings[key].construct(\n                    window_dim=wi,\n                    fill_value=fill_value,\n                    stride=st,\n                    keep_attrs=keep_attrs,\n                )\n            else:\n                dataset[key] = da.copy()\n\n            # as the DataArrays can be copied we need to delete the attrs\n            if not keep_attrs:\n                dataset[key].attrs = {}\n\n        attrs = self.obj.attrs if keep_attrs else {}\n\n        return Dataset(dataset, coords=self.obj.coords, attrs=attrs).isel(\n            {d: slice(None, None, s) for d, s in zip(self.dim, strides)}\n        )\n```\n[end of xarray/core/rolling.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

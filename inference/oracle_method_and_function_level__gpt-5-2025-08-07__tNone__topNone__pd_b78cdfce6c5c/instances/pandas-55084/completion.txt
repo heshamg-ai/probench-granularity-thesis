@@ -1,0 +1,19 @@
+pandas/core/indexes/api.py
+[SEARCH]
+        for other in indexes[1:]:
+            result = result.union(other, sort=None if sort else False)
+        return result
+[/SEARCH]
+[REPLACE]
+        if all(isinstance(ind, Index) for ind in indexes):
+            dtype = _find_common_index_dtype(indexes)
+            result = _unique_indices(indexes, dtype)
+            name = get_unanimous_names(*indexes)[0]
+            if name != result.name:
+                result = result.rename(name)
+            return result
+        else:
+            for other in indexes[1:]:
+                result = result.union(other, sort=None if sort else False)
+            return result
+[/REPLACE]

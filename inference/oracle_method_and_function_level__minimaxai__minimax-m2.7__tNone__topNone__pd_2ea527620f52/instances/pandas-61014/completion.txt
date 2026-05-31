@@ -1,0 +1,90 @@
+
+
+Looking at the code, I can identify several optimization opportunities in the `_where` method that would improve performance when the condition is a DataFrame with many columns.
+
+The main bottlenecks are:
+1. `fillna` on the entire condition DataFrame
+2. `infer_objects` conversion 
+3. Per-column dtype checking loop
+4. Unnecessary reindex when columns are already aligned
+
+Let me implement optimizations:
+
+pandas/core/generic.py
+[SEARCH]
+        # make sure we are boolean
+        fill_value = bool(inplace)
+        cond = cond.fillna(fill_value)
+        cond = cond.infer_objects()
+
+        msg = "Boolean array expected for the condition, not {dtype}"
+
+        if not cond.empty:
+            if not isinstance(cond, ABCDataFrame):
+                # This is a single-dimensional object.
+                if not is_bool_dtype(cond):
+                    raise TypeError(msg.format(dtype=cond.dtype))
+            else:
+                for _dt in cond.dtypes:
+                    if not is_bool_dtype(_dt):
+                        raise TypeError(msg.format(dtype=_dt))
+                if cond._mgr.any_extension_types:
+                    # GH51574: avoid object ndarray conversion later on
+                    cond = cond._constructor(
+                        cond.to_numpy(dtype=bool, na_value=fill_value),
+                        **cond._construct_axes_dict(),
+                    )
+        else:
+            # GH#21947 we have an empty DataFrame/Series, could be object-dtype
+            cond = cond.astype(bool)
+
+        cond = -cond if inplace else cond
+        cond = cond.reindex(self._info_axis, axis=self._info_axis_number)
+[/SEARCH]
+[REPLACE]
+        # make sure we are boolean
+        fill_value = bool(inplace)
+
+        msg = "Boolean array expected for the condition, not {dtype}"
+
+        if not cond.empty:
+            if not isinstance(cond, ABCDataFrame):
+                # This is a single-dimensional object.
+                if not is_bool_dtype(cond):
+                    raise TypeError(msg.format(dtype=cond.dtype))
+                cond = cond.fillna(fill_value)
+                cond = cond.infer_objects()
+            else:
+                # Fast path: check if all columns are already boolean and aligned
+                all_bool = all(is_bool_dtype(_dt) for _dt in cond.dtypes)
+                same_columns = cond.columns.equals(self.columns)
+                same_index = cond.index.equals(self.index)
+
+                if all_bool and not cond.isna().any().any() and same_columns and same_index:
+                    # Already properly formatted, skip expensive operations
+                    pass
+                else:
+                    # Need to process: fill NA, check dtypes, align
+                    cond = cond.fillna(fill_value)
+                    cond = cond.infer_objects()
+
+                    for _dt in cond.dtypes:
+                        if not is_bool_dtype(_dt):
+                            raise TypeError(msg.format(dtype=_dt))
+
+                    if cond._mgr.any_extension_types:
+                        # GH51574: avoid object ndarray conversion later on
+                        cond = cond._constructor(
+                            cond.to_numpy(dtype=bool, na_value=fill_value),
+                            **cond._construct_axes_dict(),
+                        )
+
+                    # Only reindex if actually needed
+                    if not cond.columns.equals(self.columns) or not cond.index.equals(self.index):
+                        cond = cond.reindex(self._info_axis, axis=self._info_axis_number)
+        else:
+            # GH#21947 we have an empty DataFrame/Series, could be object-dtype
+            cond = cond.astype(bool)
+
+        cond = -cond if inplace else cond
+[/REPLACE]

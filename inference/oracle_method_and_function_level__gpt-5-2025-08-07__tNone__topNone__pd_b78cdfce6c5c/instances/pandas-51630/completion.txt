@@ -1,0 +1,15 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        return self._data.is_null().to_numpy()
+[/SEARCH]
+[REPLACE]
+        # Fast-path for zero-null and all-null arrays to avoid constructing
+        # an intermediate Arrow boolean array.
+        nulls = self._data.null_count
+        length = len(self)
+        if nulls == 0:
+            return np.zeros(length, dtype=np.bool_)
+        if nulls == length:
+            return np.ones(length, dtype=np.bool_)
+        return self._data.is_null().to_numpy()
+[/REPLACE]

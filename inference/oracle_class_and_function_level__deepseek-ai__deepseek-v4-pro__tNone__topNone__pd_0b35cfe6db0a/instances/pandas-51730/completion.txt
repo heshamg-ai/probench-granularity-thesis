@@ -1,0 +1,22 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        elif pa.types.is_boolean(pa_type):
+            from pandas.core.arrays import BooleanArray
+
+            scalars = BooleanArray._from_sequence_of_strings(strings).to_numpy()
+[/SEARCH]
+[REPLACE]
+        elif pa.types.is_boolean(pa_type):
+            # Use pyarrow compute to parse strings to boolean, which is
+            # significantly faster and more memory efficient than creating
+            # an intermediate BooleanArray + NumPy array.
+            if not isinstance(strings, (pa.Array, pa.ChunkedArray)):
+                strings = pa.array(strings, type=pa.string(), from_pandas=True)
+            scalars = pc.utf8_lower(strings)
+            scalars = pc.if_else(
+                pc.equal(scalars, "true"),
+                True,
+                pc.if_else(pc.equal(scalars, "false"), False, None),
+            )
+            scalars = scalars.cast(pa.bool_())
+[/REPLACE]

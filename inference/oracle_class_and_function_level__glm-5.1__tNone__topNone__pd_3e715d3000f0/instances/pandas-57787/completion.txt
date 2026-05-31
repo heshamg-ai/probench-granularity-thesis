@@ -1,0 +1,22 @@
+Looking at the optimization request, the goal is to ensure that `Categorical.categories` preserves/returns `RangeIndex` when possible instead of converting it to a regular `Index`.
+
+The `categories` property in `Categorical` simply returns `self.dtype.categories`. The categories are stored inside `CategoricalDtype`. Looking at how categories are set, the `_set_categories` method creates a new `CategoricalDtype` which, in its constructor, validates the categories through `CategoricalDtype._validate_categories`. This validation method currently casts any `RangeIndex` into a plain `Index`, losing the memory-efficient `RangeIndex` representation.
+
+The fix is to update `_validate_categories` in `CategoricalDtype` to pass through `RangeIndex` objects without converting them, since `RangeIndex` is a valid subclass of `Index` that already satisfies all the uniqueness and null-value constraints required for categories.
+
+pandas/core/dtypes/dtypes.py
+[SEARCH]
+            if not isinstance(categories, Index):
+                categories = Index(categories)
+            if not categories.is_unique:
+                raise ValueError("Categorical categories must be unique")
+[/SEARCH]
+[REPLACE]
+            if not isinstance(categories, Index):
+                categories = Index(categories)
+            elif isinstance(categories, RangeIndex):
+                # Preserve RangeIndex for memory efficiency
+                pass
+            if not categories.is_unique:
+                raise ValueError("Categorical categories must be unique")
+[/REPLACE]

@@ -1,0 +1,58 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    _values: np.ndarray
+[/SEARCH]
+[REPLACE]
+    _values: np.ndarray
+
+    def value_counts(
+        self,
+        normalize: bool = False,
+        sort: bool = True,
+        ascending: bool = False,
+        bins=None,
+        dropna: bool = True,
+    ) -> Series:
+        from pandas import Series
+
+        if bins is not None:
+            return super().value_counts(
+                normalize=normalize,
+                sort=sort,
+                ascending=ascending,
+                bins=bins,
+                dropna=dropna,
+            )
+
+        # RangeIndex has no NA values, so dropna has no effect
+        rng = self._range
+        n_unique = len(rng)
+
+        if n_unique == 0:
+            index = self[:0]
+            counts_arr = np.array([], dtype=np.intp)
+        elif n_unique == len(self):
+            # All unique values; counts are all 1
+            index = self
+            counts_arr = np.ones(n_unique, dtype=np.intp)
+        else:
+            # Duplicates present; some values have count > 1
+            n_total = len(self)
+            n_dups = n_total - n_unique
+            index = self
+            counts_arr = np.ones(n_unique, dtype=np.intp)
+            counts_arr[-1] += n_dups
+
+        if sort:
+            if ascending:
+                index = index[::-1]
+                counts_arr = counts_arr[::-1]
+
+        name = "proportion" if normalize else "count"
+        result = Series(counts_arr, index=index, name=name, copy=False)
+
+        if normalize:
+            result /= len(self)
+
+        return result
+[/REPLACE]

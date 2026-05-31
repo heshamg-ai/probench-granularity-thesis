@@ -1,0 +1,46 @@
+pandas/io/formats/csvs.py
+[SEARCH]
+    def _save_chunk(self, start_i: int, end_i: int) -> None:
+        # create the data for a chunk
+        slicer = slice(start_i, end_i)
+        df = self.obj.iloc[slicer]
+
+        res = df._get_values_for_csv(**self._number_format)
+        data = list(res._iter_column_arrays())
+
+        ix = self.data_index[slicer]._get_values_for_csv(**self._number_format)
+        libwriters.write_csv_rows(
+            data,
+            ix,
+            self.nlevels,
+            self.cols,
+            self.writer,
+        )
+[/SEARCH]
+[REPLACE]
+    def _save_chunk(self, start_i: int, end_i: int) -> None:
+        # create the data for a chunk
+        slicer = slice(start_i, end_i)
+        df = self.obj.iloc[slicer]
+
+        res = df._get_values_for_csv(**self._number_format)
+        data = list(res._iter_column_arrays())
+
+        if self.index:
+            ix = self.data_index[slicer]._get_values_for_csv(**self._number_format)
+            libwriters.write_csv_rows(
+                data,
+                ix,
+                self.nlevels,
+                self.cols,
+                self.writer,
+            )
+        else:
+            libwriters.write_csv_rows(
+                data,
+                np.empty((0, 0), dtype=object),
+                0,
+                self.cols,
+                self.writer,
+            )
+[/REPLACE]

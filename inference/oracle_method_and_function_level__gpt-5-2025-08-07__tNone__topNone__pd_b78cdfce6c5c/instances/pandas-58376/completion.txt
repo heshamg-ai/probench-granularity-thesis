@@ -1,0 +1,65 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def value_counts(
+        self,
+        normalize: bool = False,
+        sort: bool = True,
+        ascending: bool = False,
+        bins=None,
+        dropna: bool = True,
+    ) -> Series:
+[/SEARCH]
+[REPLACE]
+    def value_counts(
+        self,
+        normalize: bool = False,
+        sort: bool = True,
+        ascending: bool = False,
+        bins=None,
+        dropna: bool = True,
+    ) -> Series:
+        # Fast-path for RangeIndex without binning: all elements are unique and non-NA.
+        # Preserve exact semantics of IndexOpsMixin.value_counts regarding
+        # normalize/sort/ascending/dropna while avoiding materializing the index values.
+        if bins is not None:
+            # Binning semantics are delegated to the generic implementation.
+            return super().value_counts(
+                normalize=normalize,
+                sort=sort,
+                ascending=ascending,
+                bins=bins,
+                dropna=dropna,
+            )
+
+        n = len(self)
+        if n == 0:
+            # Delegate to generic implementation for empty cases to preserve edge semantics.
+            return super().value_counts(
+                normalize=normalize,
+                sort=sort,
+                ascending=ascending,
+                bins=bins,
+                dropna=dropna,
+            )
+
+        # RangeIndex cannot contain NA values, so dropna has no effect.
+        import numpy as np
+        from pandas.core.series import Series as _Series
+
+        if normalize:
+            name = "proportion"
+            val = 1.0 / float(n)
+            values = np.empty(n, dtype=np.float64)
+            values.fill(val)
+        else:
+            name = "count"
+            values = np.ones(n, dtype=np.int64)
+
+        # When all counts are equal, sorting by frequency (ascending or descending)
+        # is a stable operation that preserves the original order of appearance.
+        # For sort=False we must also preserve the original order.
+        # Therefore, the labels are always in the same order as self.
+        result_index = self
+
+        return _Series(values, index=result_index, name=name)
+[/REPLACE]

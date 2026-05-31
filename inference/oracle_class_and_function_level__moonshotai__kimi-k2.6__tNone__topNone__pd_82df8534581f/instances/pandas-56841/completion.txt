@@ -1,0 +1,340 @@
+ I need to optimize `DataFrame.join` for sorted joins, specifically left join many:1 (right unique) and right join 1:many (left unique) cases. Looking at the code, I can see that `Index.join` has a `_join_monotonic` method that handles monotonic joins, and there's already a `_left_indexer_unique` method that's optimized for left joins when the right side is unique.
+
+Let me analyze the current `_join_monotonic` method to see where the optimization can be applied.
+
+The key insight is in `_join_monotonic`:
+- When `self.is_unique and other.is_unique`, it uses `_left_indexer_unique` for left/right joins
+- But when only one side is unique (not both), it falls through to the general `_left_indexer` path
+
+For the cases mentioned:
+1. **Left join many:1 (right unique)**: `how='left'`, `other.is_unique` is True, but `self.is_unique` may be False
+2. **Right join 1:many (left unique)**: `how='right'`, `self.is_unique` is True, but `other.is_unique` may be False
+
+In both these cases, we can still use `_left_indexer_unique` because:
+- For left join with right unique: We need to find where each left element matches in the right. Since right is unique and sorted, `other._left_indexer_unique(self)` gives us the positions in `other` for each element in `self`.
+- For right join with left unique: Similarly, `self._left_indexer_unique(other)` gives us positions.
+
+Wait, let me re-read the code more carefully.
+
+For `how='left'` with `self.is_unique and other.is_unique`:
+- `join_index = self`, `lidx = None`, `ridx = self._left_indexer_unique(other)`
+
+For `how='right'` with `self.is_unique and other.is_unique`:
+- `join_index = other`, `lidx = other._left_indexer_unique(self)`, `ridx = None`
+
+The `_left_indexer_unique` is called as `self._left_indexer_unique(other)` which returns positions in `other` for elements in `self`.
+
+Looking at the comment for `_left_indexer_unique`: "similar but not identical to ov.searchsorted(sv)" - so it returns, for each element in `self`, its position in `other`.
+
+For left join with right unique (but left may have duplicates):
+- We want `ridx` such that for each element in `self` (left), we find where it is in `other` (right)
+- This is exactly `self._left_indexer_unique(other)` if `other` is unique and both are monotonic
+
+For right join with left unique (but right may have duplicates):
+- We want `lidx` such that for each element in `other` (right), we find where it is in `self` (left)
+- This is exactly `other._left_indexer_unique(self)` if `self` is unique and both are monotonic
+
+Let me check the current else branch - it goes to `_left_indexer` which does a full merge and is more expensive.
+
+I need to expand the condition to handle:
+- `how='left'` when `other.is_unique` (regardless of `self.is_unique`)
+- `how='right'` when `self.is_unique` (regardless of `other.is_unique`)
+
+Let me verify this is correct by thinking through:
+- Left join with right unique: For each row in left, we want at most one match in right. Since right is unique and sorted, binary search works.
+- Right join with left unique: For each row in right, we want at most one match in left. Since left is unique and sorted, binary search works.
+
+Here's my optimization:
+
+```python
+pandas/core/indexes/base.py
+[SEARCH]
+        if self.is_unique and other.is_unique:
+            # We can perform much better than the general case
+            if how == "left":
+                join_index = self
+                lidx = None
+                ridx = self._left_indexer_unique(other)
+            elif how == "right":
+                join_index = other
+                lidx = other._left_indexer_unique(self)
+                ridx = None
+            elif how == "inner":
+                join_array, lidx, ridx = self._inner_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+            elif how == "outer":
+                join_array, lidx, ridx = self._outer_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+        else:
+[/SEARCH]
+[REPLACE]
+        if how == "left" and other.is_unique:
+            # left join with unique right: many-to-one or one-to-one
+            join_index = self
+            lidx = None
+            ridx = self._left_indexer_unique(other)
+        elif how == "right" and self.is_unique:
+            # right join with unique left: one-to-many or one-to-one
+            join_index = other
+            lidx = other._left_indexer_unique(self)
+            ridx = None
+        elif self.is_unique and other.is_unique:
+            # We can perform much better than the general case
+            if how == "inner":
+                join_array, lidx, ridx = self._inner_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+            elif how == "outer":
+                join_array, lidx, ridx = self._outer_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+        else:
+[/REPLACE]
+```
+
+Wait, I need to also handle inner/outer when both are unique. Let me re-check. The original code has inner/outer in both branches (unique and non-unique). Let me trace through more carefully.
+
+Original code:
+- If both unique: special cases for left/right/inner/outer
+- Else (at least one not unique): left/right use `_left_indexer`, inner/outer use `_inner_indexer`/`_outer_indexer`
+
+For inner/outer, even if both are unique, the current code uses `_inner_indexer`/`_outer_indexer`. My change needs to preserve this.
+
+Actually wait - I need to re-read. In the original:
+- `if self.is_unique and other.is_unique:` - handles all 4 cases
+- `else:` - handles left/right with `_left_indexer`, inner/outer with `_inner_indexer`/`_outer_indexer`
+
+But `_left_indexer` works for non-unique case too? Let me check. Actually `_left_indexer` is a general left join, and `_inner_indexer`/`_outer_indexer` are general inner/outer joins.
+
+For my optimization:
+- When `how='left'` and `other.is_unique`: use `_left_indexer_unique` (fast path)
+- When `how='right'` and `self.is_unique`: use `_left_indexer_unique` (fast path)  
+- When both unique: use the original fast paths for inner/outer
+- Else: use the general paths
+
+But I need to be careful - the original "both unique" case also used `_left_indexer_unique` for left/right. So my change is just expanding when we can use `_left_indexer_unique`.
+
+Actually, let me re-check: can `_left_indexer_unique` be used when `self` has duplicates?
+
+Looking at `_left_indexer_unique`:
+```python
+def _left_indexer_unique(self, other: Self) -> npt.NDArray[np.intp]:
+    # Caller is responsible for ensuring other.dtype == self.dtype
+    sv = self._get_join_target()
+    ov = other._get_join_target()
+    # similar but not identical to ov.searchsorted(sv)
+    return libjoin.left_join_indexer_unique(sv, ov)
+```
+
+The comment says "similar but not identical to ov.searchsorted(sv)". This returns, for each element in `sv` (self), the position in `ov` (other) where it would be found.
+
+For left join: we want, for each row in left (self), the matching row in right (other). If right is unique and sorted, this is exactly `left_join_indexer_unique`.
+
+If left has duplicates, we still want to find the match in right for each left row. Since right is unique, each left row matches at most one right row. The `left_join_indexer_unique` handles this correctly - it does searchsorted-like operation for each element.
+
+So yes, `_left_indexer_unique` works correctly when `self` (left) has duplicates and `other` (right) is unique.
+
+Similarly for right join with `self.is_unique`: we call `other._left_indexer_unique(self)` which gives, for each element in `other` (right), its position in `self` (left). Since `self` is unique, each right element matches at most one left element.
+
+Now I need to make sure I don't break the inner/outer cases. When both are unique, inner/outer used `_inner_indexer`/`_outer_indexer`. In my modified code, I need to ensure these still use those paths.
+
+Let me trace through my proposed logic:
+- `how='left'`, `other.is_unique=True`: use `_left_indexer_unique` ✓
+- `how='right'`, `self.is_unique=True`: use `_left_indexer_unique` ✓
+- `how='inner'`, both unique: fall through to `elif self.is_unique and other.is_unique` → use `_inner_indexer` ✓
+- `how='outer'`, both unique: fall through to `elif self.is_unique and other.is_unique` → use `_outer_indexer` ✓
+- `how='left'`, `other.is_unique=False`, both unique: would match first condition? No, `other.is_unique` is False. Then check `elif self.is_unique and other.is_unique`: both unique is true? No wait, if `other.is_unique` is False, then both can't be unique. So falls to `else:` → `_left_indexer` ✓
+- `how='left'`, both unique: first condition `other.is_unique=True`, so matches! Uses `_left_indexer_unique` ✓ (same as before)
+- `how='right'`, both unique: second condition `self.is_unique=True`, so matches! Uses `_left_indexer_unique` ✓ (same as before)
+
+Wait, I need to re-check. If both are unique and `how='left'`, my code hits the first condition, not the `elif self.is_unique and other.is_unique`. That's fine - the result is the same.
+
+But what about `how='inner'` or `'outer'` when both unique? It would hit `elif self.is_unique and other.is_unique`. Good.
+
+But wait - what if `how='inner'` and only `other.is_unique`? Then:
+- First condition: `how=='left'`? No
+- Second condition: `how=='right'`? No  
+- Third: `self.is_unique and other.is_unique`? Maybe not if only other is unique
+- Else: uses `_left_indexer` for left/right, but for inner/outer uses... wait, let me re-check the else branch.
+
+Looking at original else:
+```python
+else:
+    if how == "left":
+        join_array, lidx, ridx = self._left_indexer(other)
+    elif how == "right":
+        join_array, ridx, lidx = other._left_indexer(self)
+    elif how == "inner":
+        join_array, lidx, ridx = self._inner_indexer(other)
+    elif how == "outer":
+        join_array, lidx, ridx = self._outer_indexer(other)
+```
+
+So inner/outer in the else branch still use `_inner_indexer`/`_outer_indexer`. Good.
+
+But wait, I need to check: does `_left_indexer` work correctly when `other` is not unique?
+
+Looking at `_left_indexer`:
+```python
+def _left_indexer(self, other):
+    sv = self._get_join_target()
+    ov = other._get_join_target()
+    joined_ndarray, lidx, ridx = libjoin.left_join_indexer(sv, ov)
+```
+
+This is the general left join - handles duplicates on both sides. So yes it works.
+
+Now, one more check: the `_left_indexer_unique` name is a bit misleading. It says "unique" but I need to verify it means "right side is unique".
+
+Looking at the libjoin call: `left_join_indexer_unique(sv, ov)`. The "unique" suffix suggests this is optimized for when `ov` (other) is unique. Let me verify by checking if there are any assertions.
+
+I don't see the Cython code, but based on usage patterns and the comment "similar but not identical to ov.searchsorted(sv)", it seems like this assumes `ov` is unique (so searchsorted gives correct results).
+
+Actually, looking more carefully: the comment says "ov.searchsorted(sv)" which would be searching for elements of `sv` in `ov`. For searchsorted to give correct "find this element" behavior (not just insertion point), `ov` needs to be unique.
+
+So `_left_indexer_unique` assumes `other` (the argument) is unique. The caller is responsible for ensuring this.
+
+In the original code, it's only called when `self.is_unique and other.is_unique`, so both are unique. But actually for left join, we only need `other` to be unique!
+
+For `how='left'` with `self._left_indexer_unique(other)`: need `other` unique ✓
+For `how='right'` with `other._left_indexer_unique(self)`: need `self` unique ✓
+
+Great, my optimization is correct.
+
+One more edge case: what about when `how='inner'` and `other.is_unique` but not `self.is_unique`? Currently it goes to `else` and uses `_inner_indexer`. Could we optimize this?
+
+For inner join with one side unique: we could theoretically use `_left_indexer_unique` and filter, but that's more complex. The PR specifically asks for left join and right join optimization, so I'll focus on those.
+
+Actually wait, let me re-read the PR description: "left join many:1 (right unique) and right join 1:many (left unique)". So yes, just left and right joins.
+
+Let me also check if there are any MultiIndex considerations. The `_join_monotonic` is called after checking `not self._is_multi and not other._is_multi`. Good, no MultiIndex concerns.
+
+Here's my final change:
+
+```python
+pandas/core/indexes/base.py
+[SEARCH]
+        if self.is_unique and other.is_unique:
+            # We can perform much better than the general case
+            if how == "left":
+                join_index = self
+                lidx = None
+                ridx = self._left_indexer_unique(other)
+            elif how == "right":
+                join_index = other
+                lidx = other._left_indexer_unique(self)
+                ridx = None
+            elif how == "inner":
+                join_array, lidx, ridx = self._inner_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+            elif how == "outer":
+                join_array, lidx, ridx = self._outer_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+        else:
+[/SEARCH]
+[REPLACE]
+        if how == "left" and other.is_unique:
+            # many:1 join (right unique) - use binary search
+            join_index = self
+            lidx = None
+            ridx = self._left_indexer_unique(other)
+        elif how == "right" and self.is_unique:
+            # 1:many join (left unique) - use binary search
+            join_index = other
+            lidx = other._left_indexer_unique(self)
+            ridx = None
+        elif self.is_unique and other.is_unique:
+            # We can perform much better than the general case
+            if how == "inner":
+                join_array, lidx, ridx = self._inner_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+            elif how == "outer":
+                join_array, lidx, ridx = self._outer_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+        else:
+[/REPLACE]
+```
+
+Wait, I need to double-check one thing. When both are unique and how is 'inner' or 'outer', my code now hits the `elif self.is_unique and other.is_unique` branch. But in the original code, when both were unique, left/right were also handled in that same if block.
+
+With my change:
+- `how='left'`, both unique: hits first condition `how == "left" and other.is_unique` → True, uses `_left_indexer_unique`
+- `how='right'`, both unique: hits second condition `how == "right" and self.is_unique` → True, uses `_left_indexer_unique`
+
+So left/right when both unique work correctly, just through a different path.
+
+But wait - what if `how='left'`, both unique, but `self.is_unique` is False? No, that's impossible if both unique.
+
+Hmm, but there's a subtle issue. What if `how='left'`, both unique, but we want the original behavior? Let me check if `_left_indexer_unique` and the original `_left_indexer` give the same result when both are unique.
+
+For left join with both unique:
+- Original: `ridx = self._left_indexer_unique(other)` - same as my new code
+- My new code: same
+
+So results are identical. Good.
+
+Let me also verify the else branch still handles all remaining cases correctly:
+- `how='left'` with `other.is_unique=False`: falls to else → `_left_indexer` ✓
+- `how='right'` with `self.is_unique=False`: falls to else → `other._left_indexer(self)` ✓
+- `how='inner'` with not both unique: falls to else → `_inner_indexer` ✓
+- `how='outer'` with not both unique: falls to else → `_outer_indexer` ✓
+
+Actually wait, I need to re-check. What about `how='inner'` with `other.is_unique=True` but `self.is_unique=False`?
+- First: `how=='left'`? No
+- Second: `how=='right'`? No
+- Third: `self.is_unique and other.is_unique`? False (self not unique)
+- Else: `_inner_indexer` ✓
+
+Correct.
+
+What about `how='outer'` with `self.is_unique=True` but `other.is_unique=False`?
+- First: No
+- Second: No (how is not 'right')
+- Third: False
+- Else: `_outer_indexer` ✓
+
+Correct.
+
+I'm confident this change is correct. Let me format it properly.
+
+```python
+pandas/core/indexes/base.py
+[SEARCH]
+        if self.is_unique and other.is_unique:
+            # We can perform much better than the general case
+            if how == "left":
+                join_index = self
+                lidx = None
+                ridx = self._left_indexer_unique(other)
+            elif how == "right":
+                join_index = other
+                lidx = other._left_indexer_unique(self)
+                ridx = None
+            elif how == "inner":
+                join_array, lidx, ridx = self._inner_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+            elif how == "outer":
+                join_array, lidx, ridx = self._outer_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+        else:
+[/SEARCH]
+[REPLACE]
+        if how == "left" and other.is_unique:
+            # many:1 join (right unique) - use binary search
+            join_index = self
+            lidx = None
+            ridx = self._left_indexer_unique(other)
+        elif how == "right" and self.is_unique:
+            # 1:many join (left unique) - use binary search
+            join_index = other
+            lidx = other._left_indexer_unique(self)
+            ridx = None
+        elif self.is_unique and other.is_unique:
+            # We can perform much better than the general case
+            if how == "inner":
+                join_array, lidx, ridx = self._inner_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+            elif how == "outer":
+                join_array, lidx, ridx = self._outer_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+        else:
+[/REPLACE]
+```

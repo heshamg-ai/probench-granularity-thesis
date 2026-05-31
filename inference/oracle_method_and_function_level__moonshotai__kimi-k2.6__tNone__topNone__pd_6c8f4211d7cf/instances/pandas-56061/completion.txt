@@ -1,0 +1,744 @@
+ pandas/core/groupby/generic.py
+[SEARCH]
+    def nunique(self, dropna: bool = True) -> Series | DataFrame:
+        """
+        Return number of unique elements in the group.
+
+        Returns
+        -------
+        Series
+            Number of unique values within each group.
+
+        Examples
+        --------
+        For SeriesGroupby:
+
+        >>> lst = ['a', 'a', 'b', 'b']
+        >>> ser = pd.Series([1, 2, 3, 3], index=lst)
+        >>> ser
+        a    1
+        a    2
+        b    3
+        b    3
+        dtype: int64
+
+        >>> ser.groupby(level=0).nunique()
+        a    2
+        b    1
+        dtype: int64
+
+        For Resampler:
+
+        >>> ser = pd.Series([1, 2, 3, 3], index=pd.DatetimeIndex(
+        ... ['2023-01-01', '2023-01-15', '2023-02-01', '2023-02-15']))
+        >>> ser
+        2023-01-01    1
+        2023-01-15    2
+        2023-02-01    3
+        2023-02-15    3
+        dtype: int64
+
+        >>> ser.resample('MS').nunique()
+        2023-01-01    2
+        2023-02-01    1
+        Freq: MS, dtype: int64
+        """
+        ids, _, _ = self.grouper.group_info
+        val = self.obj._values
+
+        codes, _ = algorithms.factorize(val, sort=False)
+        sorter = np.lexsort((codes, ids))
+        codes = codes[sorter]
+        ids = ids[sorter]
+
+        # group boundaries are where group ids change
+        # unique observations are where sorted values change
+        idx = np.r_[0, 1 + np.nonzero(ids[1:] != ids[:-1])[0]]
+        inc = np.r_[1, codes[1:] != codes[:-1]]
+
+        # 1st item of each group is a new unique observation
+        mask = codes == -1
+        if dropna:
+            inc[idx] = 1
+            inc[mask] = 0
+        else:
+            inc[mask & np.r_[False, mask[:-1]]] = 0
+            inc[idx] = 1
+
+        out = np.add.reduceat(inc, idx).astype("int64", copy=False)
+
+        if len(ids):
+            # NaN/NaT group exists if the head of ids is -1,
+            # so remove it from res and exclude its index from idx
+            if ids[0] == -1:
+                res = out[1:]
+                idx = idx[np.flatnonzero(idx)]
+            else:
+                res = out
+        else:
+            res = out[1:]
+
+        ri = self.grouper.result_index
+
+        # we might have duplications among the bins
+        if len(res) != len(ri):
+            res, out = np.zeros(len(ri), dtype=out.dtype), res
+            if len(ids) > 0:  # GH#21334s
+                res[ids[idx]] = out
+
+        result: Series | DataFrame = self.obj._constructor(
+            res, index=ri, name=self.obj.name
+        )
+        if not self.as_index:
+            result = self._insert_inaxis_grouper(result)
+            result.index = default_index(len(result))
+
+        return self._reindex_output(result, fill_value=0)
+[/SEARCH]
+[REPLACE]
+    def nunique(self, dropna: bool = True) -> Series | DataFrame:
+        """
+        Return number of unique elements in the group.
+
+        Returns
+        -------
+        Series
+            Number of unique values within each group.
+
+        Examples
+        --------
+        For SeriesGroupby:
+
+        >>> lst = ['a', 'a', 'b', 'b']
+        >>> ser = pd.Series([1, 2, 3, 3], index=lst)
+        >>> ser
+        a    1
+        a    2
+        b    3
+        b    3
+        dtype: int64
+
+        >>> ser.groupby(level=0).nunique()
+        a    2
+        b    1
+        dtype: int64
+
+        For Resampler:
+
+        >>> ser = pd.Series([1, 2, 3, 3], index=pd.DatetimeIndex(
+        ... ['2023-01-01', '2023-01-15', '2023-02-01', '2023-02-15']))
+        >>> ser
+        2023-01-01    1
+        2023-01-15    2
+        2023-02-01    3
+        2023-02-15    3
+        dtype: int64
+
+        >>> ser.resample('MS').nunique()
+        2023-01-01    2
+        2023-02-01    1
+        Freq: MS, dtype: int64
+        """
+        ids, _, _ = self.grouper.group_info
+        val = self.obj._values
+
+        # Check if we can use the fast path for numeric types
+        # This avoids factorize + lexsort overhead for common types
+        if dropna and (
+            lib.is_integer_array(val)
+            or lib.is_float_array(val)
+            or lib.is_bool_array(val)
+        ):
+            # Fast path: use a hash-based approach for numeric data
+            # Build (group_id, value) pairs and count unique combinations
+            # We use pandas hashtable for efficient deduplication
+            
+            # Get the number of groups
+            ngroups = self.grouper.ngroups
+            
+            # Use Int64/Float64 hash tables depending on dtype
+            if lib.is_integer_array(val):
+                from pandas._libs.hashtable import Int64HashTable
+                # For integer arrays, we can use a more efficient approach
+                # by using value as key and tracking seen (group, value) pairs
+                
+                # Flatten to numpy array
+                arr = np.asarray(val)
+                
+                # Use a dictionary-like approach with numpy
+                # For large group cardinality, use argsort on combined key
+                
+                # Combine group and value into a single 128-bit comparable
+                # or use a structured array approach
+                if ngroups < 2**32 and len(arr) > 0:
+                    # Use uint64 combined key when possible
+                    max_val = np.max(arr) if len(arr) > 0 else 0
+                    min_val = np.min(arr) if len(arr) > 0 else 0
+                    
+                    # Check if we can safely combine into int64
+                    val_range = max_val - min_val if len(arr) > 0 else 0
+                    
+                    # If values are small enough, we can use a direct approach
+                    # with a single sort instead of factorize
+                    if val_range < 2**52 and ngroups < 2**52:
+                        # Use argsort with combined key via float64 bit-hack
+                        # or use stable sort on (ids, arr) directly
+                        
+                        # Actually, for integer types, we can often avoid
+                        # factorize by using the values directly if they're
+                        # small enough, or by using a faster hash
+                        pass  # Fall through to optimized generic path
+            
+            # Try to use a more efficient factorization for numeric types
+            # For arrays without NA, factorize is faster
+            if notna(val).all():
+                # No NAs to worry about, can use simpler logic
+                sorter = np.argsort(ids, kind="mergesort")
+                sorted_ids = ids[sorter]
+                sorted_vals = val[sorter]
+                
+                # Find group boundaries
+                group_changes = np.r_[True, sorted_ids[1:] != sorted_ids[:-1]]
+                idx_bounds = np.nonzero(group_changes)[0]
+                
+                # Count unique values per group
+                out = np.empty(len(idx_bounds), dtype=np.int64)
+                
+                for i in range(len(idx_bounds)):
+                    start = idx_bounds[i]
+                    end = idx_bounds[i + 1] if i + 1 < len(idx_bounds) else len(sorted_ids)
+                    group_vals = sorted_vals[start:end]
+                    
+                    # Fast unique count for sorted values
+                    if len(group_vals) <= 1:
+                        out[i] = len(group_vals)
+                    else:
+                        out[i] = 1 + np.count_nonzero(group_vals[1:] != group_vals[:-1])
+                
+                # Build result
+                ri = self.grouper.result_index
+                res = np.zeros(len(ri), dtype=np.int64)
+                
+                # Map to result positions
+                unique_ids = sorted_ids[idx_bounds]
+                # Filter out -1 (NA group) if present
+                valid_mask = unique_ids >= 0
+                valid_ids = unique_ids[valid_mask]
+                valid_out = out[valid_mask]
+                
+                if len(valid_ids):
+                    res[valid_ids] = valid_out
+                
+                result: Series | DataFrame = self.obj._constructor(
+                    res, index=ri, name=self.obj.name
+                )
+                if not self.as_index:
+                    result = self._insert_inaxis_grouper(result)
+                    result.index = default_index(len(result))
+                
+                return self._reindex_output(result, fill_value=0)
+        
+        # Original path for non-numeric or NA-containing data
+        codes, _ = algorithms.factorize(val, sort=False)
+        sorter = np.lexsort((codes, ids))
+        codes = codes[sorter]
+        ids = ids[sorter]
+
+        # group boundaries are where group ids change
+        # unique observations are where sorted values change
+        idx = np.r_[0, 1 + np.nonzero(ids[1:] != ids[:-1])[0]]
+        inc = np.r_[1, codes[1:] != codes[:-1]]
+
+        # 1st item of each group is a new unique observation
+        mask = codes == -1
+        if dropna:
+            inc[idx] = 1
+            inc[mask] = 0
+        else:
+            inc[mask & np.r_[False, mask[:-1]]] = 0
+            inc[idx] = 1
+
+        out = np.add.reduceat(inc, idx).astype("int64", copy=False)
+
+        if len(ids):
+            # NaN/NaT group exists if the head of ids is -1,
+            # so remove it from res and exclude its index from idx
+            if ids[0] == -1:
+                res = out[1:]
+                idx = idx[np.flatnonzero(idx)]
+            else:
+                res = out
+        else:
+            res = out[1:]
+
+        ri = self.grouper.result_index
+
+        # we might have duplications among the bins
+        if len(res) != len(ri):
+            res, out = np.zeros(len(ri), dtype=out.dtype), res
+            if len(ids) > 0:  # GH#21334s
+                res[ids[idx]] = out
+
+        result = self.obj._constructor(res, index=ri, name=self.obj.name)
+        if not self.as_index:
+            result = self._insert_inaxis_grouper(result)
+            result.index = default_index(len(result))
+
+        return self._reindex_output(result, fill_value=0)
+[/REPLACE]
+
+pandas/core/groupby/generic.py
+[SEARCH]
+        # Original path for non-numeric or NA-containing data
+        codes, _ = algorithms.factorize(val, sort=False)
+        sorter = np.lexsort((codes, ids))
+        codes = codes[sorter]
+        ids = ids[sorter]
+
+        # group boundaries are where group ids change
+        # unique observations are where sorted values change
+        idx = np.r_[0, 1 + np.nonzero(ids[1:] != ids[:-1])[0]]
+        inc = np.r_[1, codes[1:] != codes[:-1]]
+
+        # 1st item of each group is a new unique observation
+        mask = codes == -1
+        if dropna:
+            inc[idx] = 1
+            inc[mask] = 0
+        else:
+            inc[mask & np.r_[False, mask[:-1]]] = 0
+            inc[idx] = 1
+
+        out = np.add.reduceat(inc, idx).astype("int64", copy=False)
+
+        if len(ids):
+            # NaN/NaT group exists if the head of ids is -1,
+            # so remove it from res and exclude its index from idx
+            if ids[0] == -1:
+                res = out[1:]
+                idx = idx[np.flatnonzero(idx)]
+            else:
+                res = out
+        else:
+            res = out[1:]
+
+        ri = self.grouper.result_index
+
+        # we might have duplications among the bins
+        if len(res) != len(ri):
+            res, out = np.zeros(len(ri), dtype=out.dtype), res
+            if len(ids) > 0:  # GH#21334s
+                res[ids[idx]] = out
+
+        result = self.obj._constructor(res, index=ri, name=self.obj.name)
+        if not self.as_index:
+            result = self._insert_inaxis_grouper(result)
+            result.index = default_index(len(result))
+
+        return self._reindex_output(result, fill_value=0)
+[/SEARCH]
+[REPLACE]
+        # Original path for non-numeric or NA-containing data, or when dropna=False
+        codes, _ = algorithms.factorize(val, sort=False)
+        sorter = np.lexsort((codes, ids))
+        codes = codes[sorter]
+        ids = ids[sorter]
+
+        # group boundaries are where group ids change
+        # unique observations are where sorted values change
+        idx = np.r_[0, 1 + np.nonzero(ids[1:] != ids[:-1])[0]]
+        inc = np.r_[1, codes[1:] != codes[:-1]]
+
+        # 1st item of each group is a new unique observation
+        mask = codes == -1
+        if dropna:
+            inc[idx] = 1
+            inc[mask] = 0
+        else:
+            inc[mask & np.r_[False, mask[:-1]]] = 0
+            inc[idx] = 1
+
+        out = np.add.reduceat(inc, idx).astype("int64", copy=False)
+
+        if len(ids):
+            # NaN/NaT group exists if the head of ids is -1,
+            # so remove it from res and exclude its index from idx
+            if ids[0] == -1:
+                res = out[1:]
+                idx = idx[np.flatnonzero(idx)]
+            else:
+                res = out
+        else:
+            res = out[1:]
+
+        ri = self.grouper.result_index
+
+        # we might have duplications among the bins
+        if len(res) != len(ri):
+            res, out = np.zeros(len(ri), dtype=out.dtype), res
+            if len(ids) > 0:  # GH#21334s
+                res[ids[idx]] = out
+
+        result = self.obj._constructor(res, index=ri, name=self.obj.name)
+        if not self.as_index:
+            result = self._insert_inaxis_grouper(result)
+            result.index = default_index(len(result))
+
+        return self._reindex_output(result, fill_value=0)
+[/REPLACE]
+
+pandas/core/groupby/generic.py
+[SEARCH]
+    def nunique(self, dropna: bool = True) -> Series | DataFrame:
+        """
+        Return number of unique elements in the group.
+
+        Returns
+        -------
+        Series
+            Number of unique values within each group.
+
+        Examples
+        --------
+        For SeriesGroupby:
+
+        >>> lst = ['a', 'a', 'b', 'b']
+        >>> ser = pd.Series([1, 2, 3, 3], index=lst)
+        >>> ser
+        a    1
+        a    2
+        b    3
+        b    3
+        dtype: int64
+
+        >>> ser.groupby(level=0).nunique()
+        a    2
+        b    1
+        dtype: int64
+
+        For Resampler:
+
+        >>> ser = pd.Series([1, 2, 3, 3], index=pd.DatetimeIndex(
+        ... ['2023-01-01', '2023-01-15', '2023-02-01', '2023-02-15']))
+        >>> ser
+        2023-01-01    1
+        2023-01-15    2
+        2023-02-01    3
+        2023-02-15    3
+        dtype: int64
+
+        >>> ser.resample('MS').nunique()
+        2023-01-01    2
+        2023-02-01    1
+        Freq: MS, dtype: int64
+        """
+        ids, _, _ = self.grouper.group_info
+        val = self.obj._values
+
+        # Check if we can use the fast path for numeric types
+        # This avoids factorize + lexsort overhead for common types
+        if dropna and (
+            lib.is_integer_array(val)
+            or lib.is_float_array(val)
+            or lib.is_bool_array(val)
+        ):
+            # Fast path: use a hash-based approach for numeric data
+            # Build (group_id, value) pairs and count unique combinations
+            # We use pandas hashtable for efficient deduplication
+            
+            # Get the number of groups
+            ngroups = self.grouper.ngroups
+            
+            # Use Int64/Float64 hash tables depending on dtype
+            if lib.is_integer_array(val):
+                from pandas._libs.hashtable import Int64HashTable
+                # For integer arrays, we can use a more efficient approach
+                # by using value as key and tracking seen (group, value) pairs
+                
+                # Flatten to numpy array
+                arr = np.asarray(val)
+                
+                # Use a dictionary-like approach with numpy
+                # For large group cardinality, use argsort on combined key
+                
+                # Combine group and value into a single 128-bit comparable
+                # or use a structured array approach
+                if ngroups < 2**32 and len(arr) > 0:
+                    # Use uint64 combined key when possible
+                    max_val = np.max(arr) if len(arr) > 0 else 0
+                    min_val = np.min(arr) if len(arr) > 0 else 0
+                    
+                    # Check if we can safely combine into int64
+                    val_range = max_val - min_val if len(arr) > 0 else 0
+                    
+                    # If values are small enough, we can use a direct approach
+                    # with a single sort instead of factorize
+                    if val_range < 2**52 and ngroups < 2**52:
+                        # Use argsort with combined key via float64 bit-hack
+                        # or use stable sort on (ids, arr) directly
+                        
+                        # Actually, for integer types, we can often avoid
+                        # factorize by using the values directly if they're
+                        # small enough, or by using a faster hash
+                        pass  # Fall through to optimized generic path
+            
+            # Try to use a more efficient factorization for numeric types
+            # For arrays without NA, factorize is faster
+            if notna(val).all():
+                # No NAs to worry about, can use simpler logic
+                sorter = np.argsort(ids, kind="mergesort")
+                sorted_ids = ids[sorter]
+                sorted_vals = val[sorter]
+                
+                # Find group boundaries
+                group_changes = np.r_[True, sorted_ids[1:] != sorted_ids[:-1]]
+                idx_bounds = np.nonzero(group_changes)[0]
+                
+                # Count unique values per group
+                out = np.empty(len(idx_bounds), dtype=np.int64)
+                
+                for i in range(len(idx_bounds)):
+                    start = idx_bounds[i]
+                    end = idx_bounds[i + 1] if i + 1 < len(idx_bounds) else len(sorted_ids)
+                    group_vals = sorted_vals[start:end]
+                    
+                    # Fast unique count for sorted values
+                    if len(group_vals) <= 1:
+                        out[i] = len(group_vals)
+                    else:
+                        out[i] = 1 + np.count_nonzero(group_vals[1:] != group_vals[:-1])
+                
+                # Build result
+                ri = self.grouper.result_index
+                res = np.zeros(len(ri), dtype=np.int64)
+                
+                # Map to result positions
+                unique_ids = sorted_ids[idx_bounds]
+                # Filter out -1 (NA group) if present
+                valid_mask = unique_ids >= 0
+                valid_ids = unique_ids[valid_mask]
+                valid_out = out[valid_mask]
+                
+                if len(valid_ids):
+                    res[valid_ids] = valid_out
+                
+                result: Series | DataFrame = self.obj._constructor(
+                    res, index=ri, name=self.obj.name
+                )
+                if not self.as_index:
+                    result = self._insert_inaxis_grouper(result)
+                    result.index = default_index(len(result))
+                
+                return self._reindex_output(result, fill_value=0)
+        
+        # Original path for non-numeric or NA-containing data, or when dropna=False
+        codes, _ = algorithms.factorize(val, sort=False)
+        sorter = np.lexsort((codes, ids))
+        codes = codes[sorter]
+        ids = ids[sorter]
+
+        # group boundaries are where group ids change
+        # unique observations are where sorted values change
+        idx = np.r_[0, 1 + np.nonzero(ids[1:] != ids[:-1])[0]]
+        inc = np.r_[1, codes[1:] != codes[:-1]]
+
+        # 1st item of each group is a new unique observation
+        mask = codes == -1
+        if dropna:
+            inc[idx] = 1
+            inc[mask] = 0
+        else:
+            inc[mask & np.r_[False, mask[:-1]]] = 0
+            inc[idx] = 1
+
+        out = np.add.reduceat(inc, idx).astype("int64", copy=False)
+
+        if len(ids):
+            # NaN/NaT group exists if the head of ids is -1,
+            # so remove it from res and exclude its index from idx
+            if ids[0] == -1:
+                res = out[1:]
+                idx = idx[np.flatnonzero(idx)]
+            else:
+                res = out
+        else:
+            res = out[1:]
+
+        ri = self.grouper.result_index
+
+        # we might have duplications among the bins
+        if len(res) != len(ri):
+            res, out = np.zeros(len(ri), dtype=out.dtype), res
+            if len(ids) > 0:  # GH#21334s
+                res[ids[idx]] = out
+
+        result = self.obj._constructor(res, index=ri, name=self.obj.name)
+        if not self.as_index:
+            result = self._insert_inaxis_grouper(result)
+            result.index = default_index(len(result))
+
+        return self._reindex_output(result, fill_value=0)
+[/SEARCH]
+[REPLACE]
+    def nunique(self, dropna: bool = True) -> Series | DataFrame:
+        """
+        Return number of unique elements in the group.
+
+        Returns
+        -------
+        Series
+            Number of unique values within each group.
+
+        Examples
+        --------
+        For SeriesGroupby:
+
+        >>> lst = ['a', 'a', 'b', 'b']
+        >>> ser = pd.Series([1, 2, 3, 3], index=lst)
+        >>> ser
+        a    1
+        a    2
+        b    3
+        b    3
+        dtype: int64
+
+        >>> ser.groupby(level=0).nunique()
+        a    2
+        b    1
+        dtype: int64
+
+        For Resampler:
+
+        >>> ser = pd.Series([1, 2, 3, 3], index=pd.DatetimeIndex(
+        ... ['2023-01-01', '2023-01-15', '2023-02-01', '2023-02-15']))
+        >>> ser
+        2023-01-01    1
+        2023-01-15    2
+        2023-02-01    3
+        2023-02-15    3
+        dtype: int64
+
+        >>> ser.resample('MS').nunique()
+        2023-01-01    2
+        2023-02-01    1
+        Freq: MS, dtype: int64
+        """
+        ids, _, _ = self.grouper.group_info
+        val = self.obj._values
+
+        # Fast path for numeric/bool data with dropna=True and no missing values
+        # This avoids the factorize + lexsort overhead which is expensive for
+        # large group cardinality. Instead we use argsort on group ids and
+        # count unique values within each group directly.
+        if (
+            dropna
+            and len(ids) > 0
+            and (
+                lib.is_integer_array(val)
+                or lib.is_float_array(val)
+                or lib.is_bool_array(val)
+            )
+            and notna(val).all()
+        ):
+            # Sort by group id to bring same groups together
+            # Use mergesort for stability though stability doesn't matter here
+            sorter = np.argsort(ids, kind="mergesort")
+            sorted_ids = ids[sorter]
+            sorted_vals = val[sorter]
+
+            # Find group boundaries - where group id changes
+            group_changes = np.r_[True, sorted_ids[1:] != sorted_ids[:-1]]
+            idx_bounds = np.nonzero(group_changes)[0]
+
+            # Count unique values per group
+            out = np.empty(len(idx_bounds), dtype=np.int64)
+
+            for i in range(len(idx_bounds)):
+                start = idx_bounds[i]
+                end = (
+                    idx_bounds[i + 1]
+                    if i + 1 < len(idx_bounds)
+                    else len(sorted_ids)
+                )
+                group_vals = sorted_vals[start:end]
+
+                # Fast unique count for sorted values
+                if len(group_vals) <= 1:
+                    out[i] = len(group_vals)
+                else:
+                    # Values are sorted by group but not by value within group
+                    # We need to count unique values in this slice
+                    # Use numpy unique which is faster than Python set for arrays
+                    out[i] = len(np.unique(group_vals))
+
+            # Build result array indexed by result_index position
+            ri = self.grouper.result_index
+            res = np.zeros(len(ri), dtype=np.int64)
+
+            # Map to result positions; filter out -1 (NA group) if present
+            unique_ids = sorted_ids[idx_bounds]
+            valid_mask = unique_ids >= 0
+            valid_ids = unique_ids[valid_mask]
+            valid_out = out[valid_mask]
+
+            if len(valid_ids):
+                res[valid_ids] = valid_out
+
+            result: Series | DataFrame = self.obj._constructor(
+                res, index=ri, name=self.obj.name
+            )
+            if not self.as_index:
+                result = self._insert_inaxis_grouper(result)
+                result.index = default_index(len(result))
+
+            return self._reindex_output(result, fill_value=0)
+
+        # Standard path: factorize values, then use lexsort + reduceat
+        # This handles all dtypes including strings, datetimes, and cases with NA
+        codes, _ = algorithms.factorize(val, sort=False)
+        sorter = np.lexsort((codes, ids))
+        codes = codes[sorter]
+        ids = ids[sorter]
+
+        # group boundaries are where group ids change
+        # unique observations are where sorted values change
+        idx = np.r_[0, 1 + np.nonzero(ids[1:] != ids[:-1])[0]]
+        inc = np.r_[1, codes[1:] != codes[:-1]]
+
+        # 1st item of each group is a new unique observation
+        mask = codes == -1
+        if dropna:
+            inc[idx] = 1
+            inc[mask] = 0
+        else:
+            inc[mask & np.r_[False, mask[:-1]]] = 0
+            inc[idx] = 1
+
+        out = np.add.reduceat(inc, idx).astype("int64", copy=False)
+
+        if len(ids):
+            # NaN/NaT group exists if the head of ids is -1,
+            # so remove it from res and exclude its index from idx
+            if ids[0] == -1:
+                res = out[1:]
+                idx = idx[np.flatnonzero(idx)]
+            else:
+                res = out
+        else:
+            res = out[1:]
+
+        ri = self.grouper.result_index
+
+        # we might have duplications among the bins
+        if len(res) != len(ri):
+            res, out = np.zeros(len(ri), dtype=out.dtype), res
+            if len(ids) > 0:  # GH#21334s
+                res[ids[idx]] = out
+
+        result = self.obj._constructor(res, index=ri, name=self.obj.name)
+        if not self.as_index:
+            result = self._insert_inaxis_grouper(result)
+            result.index = default_index(len(result))
+
+        return self._reindex_output(result, fill_value=0)
+[/REPLACE]

@@ -1,0 +1,76 @@
+{
+  "id": 42,
+  "scenario_id": "pandas-54883",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 54883,
+  "baseline_sha": "e3e1325efadaf5fb4b5b09c180e8a3bc9732de68",
+  "reference_sha": "eafceae6e889b74b0eeaf1c74c27e46e49ca5b4c",
+  "task": "Optimize DataFrame.sort_index and Series.sort_index when the MultiIndex is monotonic",
+  "entry_point": "pandas.DataFrame.sort_index",
+  "whats_new": "Performance improvement in DataFrame.sort_index and Series.sort_index when the MultiIndex is already monotonic, by returning early before the full lexsort computation",
+  "optimization_target": "Runtime, Memory",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-54883:baseline",
+      "digest": "sha256:058af17d478b16e491c7be112cd3e7370be068340a8d88770e9c990e68d065cc"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-54883:reference",
+      "digest": "sha256:c5d055b03b8e9fe6dbaa79af25d348cc4354857bc44ee02b4ad25a84faa4a319"
+    }
+  },
+  "params": [
+    {
+      "name": "Num Rows",
+      "short_indicator": "N",
+      "explanation": "Number of rows in the DataFrame",
+      "values": [
+        "500000",
+        "1000000"
+      ]
+    },
+    {
+      "name": "Num Levels",
+      "short_indicator": "L",
+      "explanation": "Number of levels in the MultiIndex",
+      "values": [
+        "2",
+        "3"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndex::test_sort_index_and_reconstruction",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndex::test_sort_index_and_reconstruction_doc_example",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndex::test_sort_index_ascending_tuple",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndex::test_sort_index_categorical_multiindex",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndex::test_sort_index_different_sortorder",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndex::test_sort_index_ignore_index_multi_index",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndex::test_sort_index_level",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndex::test_sort_index_level2",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndex::test_sort_index_level_by_name",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndex::test_sort_index_level_large_cardinality",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndex::test_sort_index_level_mixed",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndex::test_sort_index_multi_index",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndex::test_sort_index_multiindex",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndex::test_sort_index_multilevel_repr_8017",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndex::test_sort_index_nan_multiindex",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndex::test_sort_index_non_existent_label_multiindex",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndex::test_sort_index_preserve_levels",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndex::test_sort_index_reorder_on_ops",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndexKey::test_sort_index_multiindex_sort_remaining",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndexKey::test_sort_index_multiindex_sparse_column",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndexKey::test_sort_index_na_position",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndexKey::test_sort_multi_index_key",
+    "pandas/tests/frame/methods/test_sort_index.py::TestDataFrameSortIndexKey::test_sort_multi_index_key_str",
+    "pandas/tests/series/methods/test_sort_index.py::TestSeriesSortIndex::test_sort_index_ascending_list",
+    "pandas/tests/series/methods/test_sort_index.py::TestSeriesSortIndex::test_sort_index_level",
+    "pandas/tests/series/methods/test_sort_index.py::TestSeriesSortIndex::test_sort_index_multiindex",
+    "pandas/tests/series/methods/test_sort_index.py::TestSeriesSortIndexKey::test_sort_index_multiindex_key",
+    "pandas/tests/series/methods/test_sort_index.py::TestSeriesSortIndexKey::test_sort_index_multiindex_key_multi_level",
+    "pandas/tests/test_multilevel.py::TestSorted::test_sort_non_lexsorted",
+    "pandas/tests/indexes/multi/test_sorting.py::test_unsortedindex",
+    "pandas/tests/indexing/multiindex/test_sorted.py::TestMultiIndexSorted::test_frame_getitem_not_sorted2"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.DataFrame.sort_index for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize DataFrame.sort_index and Series.sort_index when the MultiIndex is monotonic\nOptimization function: pandas.DataFrame.sort_index\n\n\n[start of pandas/core/sorting.py]\n### Relevant context\n#### Function `pandas.core.sorting.get_indexer_indexer`\n```python\ndef get_indexer_indexer(\n    target: Index,\n    level: Level | list[Level] | None,\n    ascending: list[bool] | bool,\n    kind: SortKind,\n    na_position: NaPosition,\n    sort_remaining: bool,\n    key: IndexKeyFunc,\n) -> npt.NDArray[np.intp] | None:\n    \"\"\"\n    Helper method that return the indexer according to input parameters for\n    the sort_index method of DataFrame and Series.\n\n    Parameters\n    ----------\n    target : Index\n    level : int or level name or list of ints or list of level names\n    ascending : bool or list of bools, default True\n    kind : {'quicksort', 'mergesort', 'heapsort', 'stable'}\n    na_position : {'first', 'last'}\n    sort_remaining : bool\n    key : callable, optional\n\n    Returns\n    -------\n    Optional[ndarray[intp]]\n        The indexer for the new index.\n    \"\"\"\n\n    # error: Incompatible types in assignment (expression has type\n    # \"Union[ExtensionArray, ndarray[Any, Any], Index, Series]\", variable has\n    # type \"Index\")\n    target = ensure_key_mapped(target, key, levels=level)  # type:ignore[assignment]\n    target = target._sort_levels_monotonic()\n\n    if level is not None:\n        _, indexer = target.sortlevel(\n            level,\n            ascending=ascending,\n            sort_remaining=sort_remaining,\n            na_position=na_position,\n        )\n    elif isinstance(target, ABCMultiIndex):\n        codes = [lev.codes for lev in target._get_codes_for_sorting()]\n        indexer = lexsort_indexer(\n            codes, orders=ascending, na_position=na_position, codes_given=True\n        )\n    else:\n        # Check monotonic-ness before sort an index (GH 11080)\n        if (ascending and target.is_monotonic_increasing) or (\n            not ascending and target.is_monotonic_decreasing\n        ):\n            return None\n\n        # ascending can only be a Sequence for MultiIndex\n        indexer = nargsort(\n            target,\n            kind=kind,\n            ascending=cast(bool, ascending),\n            na_position=na_position,\n        )\n    return indexer\n```\n[end of pandas/core/sorting.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

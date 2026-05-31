@@ -1,0 +1,45 @@
+
+
+Looking at the code, I can see the `_from_sequence_of_strings` method handles boolean types by:
+1. Importing `BooleanArray`
+2. Calling `BooleanArray._from_sequence_of_strings(strings)` 
+3. Converting the result to numpy with `.to_numpy()`
+
+This involves creating a `BooleanArray` object and then converting it, which adds overhead. I can optimize this by using PyArrow's `pc.is_in` and `pc.if_else` directly, avoiding the intermediate `BooleanArray` conversion.
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        elif pa.types.is_boolean(pa_type):
+            from pandas.core.arrays import BooleanArray
+
+            scalars = BooleanArray._from_sequence_of_strings(strings).to_numpy()
+[/SEARCH]
+[REPLACE]
+        elif pa.types.is_boolean(pa_type):
+            if not isinstance(strings, (pa.Array, pa.ChunkedArray)):
+                str_array = pa.array(strings, type=pa.string(), from_pandas=True)
+            else:
+                str_array = strings
+
+            true_vals = pa.scalar(True, type=pa.bool_())
+            false_vals = pa.scalar(False, type=pa.bool_())
+
+            true_set = pa.array(["true", "True", "TRUE", "1", "yes", "Yes", "YES"])
+            false_set = pa.array(
+                ["false", "False", "FALSE", "0", "no", "No", "NO"]
+            )
+
+            true_mask = pc.is_in(str_array, value_set=true_set)
+            false_mask = pc.is_in(str_array, value_set=false_set)
+            valid_mask = pc.is_valid(str_array) & (true_mask | false_mask)
+
+            scalars = pc.if_else(
+                true_mask,
+                true_vals,
+                pc.if_else(false_mask, false_vals, pa.scalar(None, type=pa.bool_())),
+            )
+            # Re-apply null from original strings to handle from_pandas NaN/None
+            scalars = pc.if_else(
+                valid_mask, scalars, pa.scalar(None, type=pa.bool_())
+            )
+[/REPLACE]

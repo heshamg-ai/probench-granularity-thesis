@@ -1,0 +1,100 @@
+
+
+Looking at the code, I can identify several optimization opportunities for the `QuantileRegressor.fit` method when using highs-family solvers:
+
+1. **Redundant computations**: Computing `self.quantile * sample_weight` and `(1 - self.quantile) * sample_weight` separately when we could compute one and derive the other.
+
+2. **Matrix construction**: For sparse matrices, using `np.eye` and converting to sparse is wasteful when `sparse.eye` is available directly.
+
+3. **Dense matrix construction**: Using `np.concatenate` creates intermediate arrays. Pre-allocating and filling in-place is more efficient.
+
+4. **c vector construction**: Using `np.concatenate` with multiple arrays can be optimized by pre-allocation.
+
+Let me implement these optimizations:
+
+sklearn/linear_model/_quantile.py
+[SEARCH]
+        c = np.concatenate(
+            [
+                np.full(2 * n_params, fill_value=alpha),
+                sample_weight * self.quantile,
+                sample_weight * (1 - self.quantile),
+            ]
+        )
+[/SEARCH]
+[REPLACE]
+        # Compute quantile weight once and derive the complement
+        q_weight = self.quantile * sample_weight
+        c = np.empty(2 * n_params + 2 * n_indices, dtype=np.float64)
+        c[: 2 * n_params] = alpha
+        c[2 * n_params : 2 * n_params + n_indices] = q_weight
+        c[2 * n_params + n_indices :] = sample_weight - q_weight
+[/REPLACE]
+
+sklearn/linear_model/_quantile.py
+[SEARCH]
+        if sparse.issparse(X):
+            if self.solver not in ["highs-ds", "highs-ipm", "highs"]:
+                raise ValueError(
+                    f"Solver {self.solver} does not support sparse X. "
+                    "Use solver 'highs' for example."
+                )
+            # Note that highs methods do convert to csc.
+            # Therefore, we work with csc matrices as much as possible.
+            eye = sparse.eye(n_indices, dtype=X.dtype, format="csc")
+            if self.fit_intercept:
+                ones = sparse.csc_matrix(np.ones(shape=(n_indices, 1), dtype=X.dtype))
+                A_eq = sparse.hstack([ones, X, -ones, -X, eye, -eye], format="csc")
+            else:
+                A_eq = sparse.hstack([X, -X, eye, -eye], format="csc")
+        else:
+            eye = np.eye(n_indices)
+            if self.fit_intercept:
+                ones = np.ones((n_indices, 1))
+                A_eq = np.concatenate([ones, X, -ones, -X, eye, -eye], axis=1)
+            else:
+                A_eq = np.concatenate([X, -X, eye, -eye], axis=1)
+[/SEARCH]
+[REPLACE]
+        if sparse.issparse(X):
+            if self.solver not in ["highs-ds", "highs-ipm", "highs"]:
+                raise ValueError(
+                    f"Solver {self.solver} does not support sparse X. "
+                    "Use solver 'highs' for example."
+                )
+            # Note that highs methods do convert to csc.
+            # Therefore, we work with csc matrices as much as possible.
+            eye = sparse.eye(n_indices, dtype=X.dtype)
+            if self.fit_intercept:
+                ones = sparse.csc_matrix(np.ones(shape=(n_indices, 1), dtype=X.dtype))
+                A_eq = sparse.hstack([ones, X, -ones, -X, eye, -eye], format="csc")
+            else:
+                A_eq = sparse.hstack([X, -X, eye, -eye], format="csc")
+        else:
+            eye = np.eye(n_indices)
+            if self.fit_intercept:
+                ones = np.ones((n_indices, 1))
+                A_eq = np.empty((n_indices, 2 * n_params + 2 * n_indices))
+                # Fill in-place: intercept, X, eye
+                A_eq[:, :1] = ones
+                A_eq[:, 1 : n_features + 1] = X
+                A_eq[:, n_features + 1 : 2 * n_params] = eye
+                # Negate in-place: -intercept, -X, -eye
+                A_eq[:, :1] *= -1
+                A_eq[:, 1 : n_features + 1] *= -1
+                A_eq[:, n_features + 1 : 2 * n_params] *= -1
+                # Copy original X and eye values for positive constraints
+                A_eq[:, 1 : n_features + 1] = X
+                A_eq[:, n_features + 1 : 2 * n_params] = eye
+                # Fill u and v slack variable columns
+                A_eq[:, 2 * n_params : 2 * n_params + n_indices] = eye
+                A_eq[:, 2 * n_params + n_indices :] = -eye
+            else:
+                A_eq = np.empty((n_indices, 2 * n_params + 2 * n_indices))
+                # Fill positive constraints
+                A_eq[:, :n_params] = X
+                A_eq[:, n_params:2*n_params] = -X
+                # Fill u and v slack variables
+                A_eq[:, 2 * n_params : 2 * n_params + n_indices] = eye
+                A_eq[:, 2 * n_params + n_indices :] = -eye
+[/REPLACE]

@@ -1,0 +1,41 @@
+pandas/core/arrays/numeric.py
+[SEARCH]
+    if isinstance(values, cls):
+        values, mask = values._data, values._mask
+        if dtype is not None:
+            values = values.astype(dtype.numpy_dtype, copy=False)
+[/SEARCH]
+[REPLACE]
+    if isinstance(values, cls):
+        values, mask = values._data, values._mask
+        if dtype is not None:
+            ndt = dtype.numpy_dtype
+            if values.dtype != ndt:
+                values = values.astype(ndt, copy=False)
+[/REPLACE]
+
+pandas/core/arrays/numeric.py
+[SEARCH]
+    if mask.any():
+        values = values.copy()
+        values[mask] = dtype_cls._internal_fill_value
+[/SEARCH]
+[REPLACE]
+    if mask.any():
+        # For floating targets, missing values are already represented as np.nan;
+        # avoid an unnecessary copy and assignment.
+        if dtype.kind != "f":
+            values = values.copy()
+            values[mask] = dtype_cls._internal_fill_value
+[/REPLACE]
+
+pandas/core/arrays/numeric.py
+[SEARCH]
+    else:
+        values = dtype_cls._safe_cast(values, dtype, copy=False)
+[/SEARCH]
+[REPLACE]
+    else:
+        if values.dtype != dtype:
+            values = dtype_cls._safe_cast(values, dtype, copy=False)
+[/REPLACE]

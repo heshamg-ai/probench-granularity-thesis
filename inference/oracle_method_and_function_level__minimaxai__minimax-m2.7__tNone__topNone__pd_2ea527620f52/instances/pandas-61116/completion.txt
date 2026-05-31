@@ -1,0 +1,42 @@
+
+
+pandas/core/methods/selectn.py
+[SEARCH]
+        if self.keep != "all":
+            inds = inds[:n]
+            findex = nbase
+        else:
+            if len(inds) < nbase <= len(nan_index) + len(inds):
+                findex = len(nan_index) + len(inds)
+            else:
+                findex = len(inds)
+
+        if self.keep == "last":
+            # reverse indices
+            inds = narr - 1 - inds
+
+        return concat([dropped.iloc[inds], nan_index]).iloc[:findex]
+[/SEARCH]
+[REPLACE]
+        if self.keep == "last":
+            # reverse indices
+            inds = narr - 1 - inds
+
+        if self.keep != "all":
+            inds = inds[:n]
+            findex = nbase
+        else:
+            if len(inds) < nbase <= len(nan_index) + len(inds):
+                findex = len(nan_index) + len(inds)
+            else:
+                findex = len(inds)
+
+        if len(nan_index) == 0:
+            return dropped.iloc[inds[:findex]]
+        else:
+            res_idx = dropped.index[inds[:findex]].append(nan_index.index)
+            res_val = np.concatenate(
+                [dropped._values[inds[:findex]], nan_index._values]
+            )
+            return Series(res_val, index=res_idx)
+[/REPLACE]

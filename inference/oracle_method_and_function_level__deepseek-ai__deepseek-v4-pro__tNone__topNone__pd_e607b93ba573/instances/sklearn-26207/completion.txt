@@ -1,0 +1,53 @@
+sklearn/linear_model/_base.py
+[SEARCH]
+        sample_weight_sqrt = np.sqrt(sample_weight)
+        sw_matrix = sparse.dia_matrix((sample_weight_sqrt, 0), shape=(n_samples, n_samples))
+        X = safe_sparse_dot(sw_matrix, X)
+        y = safe_sparse_dot(sw_matrix, y)
+[/SEARCH]
+[REPLACE]
+        sample_weight_sqrt = np.sqrt(sample_weight)
+        if sp.issparse(X):
+            # Rescale in-place by row using diagonal multiplication
+            # sw_matrix = diag(sample_weight_sqrt)
+            # For sparse X, diag*X is X scaled row-wise, same as X.multiply(sample_weight_sqrt[:, None]) 
+            # but avoids creating a DIA matrix and the overhead of safe_sparse_dot.
+            X = X.multiply(sample_weight_sqrt[:, np.newaxis])
+            if sp.issparse(y):
+                y = y.multiply(sample_weight_sqrt[:, np.newaxis])
+            else:
+                y = y * sample_weight_sqrt[:, np.newaxis]
+        else:
+            X = X * sample_weight_sqrt[:, np.newaxis]
+            y = y * sample_weight_sqrt[:, np.newaxis]
+[/REPLACE]
+
+sklearn/linear_model/_base.py
+[SEARCH]
+            if y.ndim < 2:
+                self.coef_ = lsqr(X_centered, y)[0]
+            else:
+                # sparse_lstsq cannot handle y with shape (M, K)
+                outs = Parallel(n_jobs=n_jobs_)(
+                    delayed(lsqr)(X_centered, y[:, j].ravel())
+                    for j in range(y.shape[1])
+                )
+                self.coef_ = np.vstack([out[0] for out in outs])
+[/SEARCH]
+[REPLACE]
+            if y.ndim < 2:
+                self.coef_ = lsqr(X_centered, y)[0]
+            else:
+                # lsqr cannot handle y with shape (M, K)
+                n_targets = y.shape[1]
+                if n_targets > 1 and n_jobs_ != 1:
+                    outs = Parallel(n_jobs=n_jobs_)(
+                        delayed(lsqr)(X_centered, y[:, j].ravel())
+                        for j in range(n_targets)
+                    )
+                    self.coef_ = np.vstack([out[0] for out in outs])
+                else:
+                    self.coef_ = np.zeros((n_targets, X_centered.shape[1]), dtype=y.dtype)
+                    for j in range(n_targets):
+                        self.coef_[j] = lsqr(X_centered, y[:, j].ravel())[0]
+[/REPLACE]

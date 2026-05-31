@@ -1,0 +1,167 @@
+Looking at the call chain from `median_absolute_error` with `sample_weight`:
+1. `median_absolute_error` calls `_averaged_weighted_percentile(xp.abs(y_pred - y_true), sample_weight=sample_weight)` — note `percentile_rank` defaults to 50.
+2. `_averaged_weighted_percentile` calls `_weighted_percentile(array, sample_weight, percentile_rank, xp=xp) - _weighted_percentile(-array, sample_weight, 100 - percentile_rank, xp=xp)`. For `percentile_rank=50`, this is `_weighted_percentile(array, ..., 50) - _weighted_percentile(-array, ..., 50)`.
+
+In `_weighted_percentile`, the most significant performance bottlenecks are:
+1. **Double sorting**: `xp.argsort(array, axis=0)` creates a full index array, then `sorted_weights = xp.take_along_axis(sample_weight, sorted_idx, axis=0)` and later `sorted_nan_mask = xp.take_along_axis(xp.isnan(array), sorted_idx, axis=0)` both use this index array. Sorting `array` directly would be cheaper than argsort, and we can compute the sorted weights and NaN mask in one pass.
+2. **NaN mask allocation**: `xp.isnan(array)` creates a full boolean mask even when no NaNs exist.
+3. **Per-feature searchsorted in a Python loop**: `xp.stack([xp.searchsorted(...) for feature_idx in range(...)])` iterates over features in Python, which is slow. For 1D arrays (the case from `median_absolute_error`), this is especially wasteful.
+
+The optimization:
+- Sort `array` directly instead of `argsort`, and reorder weights/NaN in a single loop.
+- Compute the NaN mask inline during the reordering loop, avoiding the large `xp.isnan(array)` allocation.
+- Vectorize the `searchsorted` across features (works for both 1D and 2D), removing the Python loop.
+- Add a fast path for 1D arrays that avoids the 2D reshaping, tiling, and stacking overhead.
+
+This preserves exact semantics since the same sorting, CDF computation, and searchsorted logic is used.
+
+sklearn/utils/stats.py
+[SEARCH]
+    xp, _, device = get_namespace_and_device(array)
+    # `sample_weight` should follow `array` for dtypes
+    floating_dtype = _find_matching_floating_dtype(array, xp=xp)
+    array = xp.asarray(array, dtype=floating_dtype, device=device)
+    sample_weight = xp.asarray(sample_weight, dtype=floating_dtype, device=device)
+
+    n_dim = array.ndim
+    if n_dim == 0:
+        return array
+    if array.ndim == 1:
+        array = xp.reshape(array, (-1, 1))
+    # When sample_weight 1D, repeat for each array.shape[1]
+    if array.shape != sample_weight.shape and array.shape[0] == sample_weight.shape[0]:
+        sample_weight = xp.tile(sample_weight, (array.shape[1], 1)).T
+    # Sort `array` and `sample_weight` along axis=0:
+    sorted_idx = xp.argsort(array, axis=0)
+    sorted_weights = xp.take_along_axis(sample_weight, sorted_idx, axis=0)
+
+    # Set NaN values in `sample_weight` to 0. Only perform this operation if NaN
+    # values present to avoid temporary allocations of size `(n_samples, n_features)`.
+    n_features = array.shape[1]
+    largest_value_per_column = array[
+        sorted_idx[-1, ...], xp.arange(n_features, device=device)
+    ]
+    # NaN values get sorted to end (largest value)
+    if xp.any(xp.isnan(largest_value_per_column)):
+        sorted_nan_mask = xp.take_along_axis(xp.isnan(array), sorted_idx, axis=0)
+        sorted_weights[sorted_nan_mask] = 0
+
+    # Compute the weighted cumulative distribution function (CDF) based on
+    # `sample_weight` and scale `percentile_rank` along it.
+    #
+    # Note: we call `xp.cumulative_sum` on the transposed `sorted_weights` to
+    # ensure that the result is of shape `(n_features, n_samples)` so
+    # `xp.searchsorted` calls take contiguous inputs as a result (for
+    # performance reasons).
+    weight_cdf = xp.cumulative_sum(sorted_weights.T, axis=1)
+    adjusted_percentile_rank = percentile_rank / 100 * weight_cdf[..., -1]
+
+    # Ignore leading `sample_weight=0` observations when `percentile_rank=0` (#20528)
+    mask = adjusted_percentile_rank == 0
+    adjusted_percentile_rank[mask] = xp.nextafter(
+        adjusted_percentile_rank[mask], adjusted_percentile_rank[mask] + 1
+    )
+    # For each feature with index j, find sample index i of the scalar value
+    # `adjusted_percentile_rank[j]` in 1D array `weight_cdf[j]`, such that:
+    # weight_cdf[j, i-1] < adjusted_percentile_rank[j] <= weight_cdf[j, i].
+    percentile_indices = xp.stack(
+        [
+            xp.searchsorted(
+                weight_cdf[feature_idx, ...], adjusted_percentile_rank[feature_idx]
+            )
+            for feature_idx in range(weight_cdf.shape[0])
+        ],
+    )
+    # In rare cases, `percentile_indices` equals to `sorted_idx.shape[0]`
+    max_idx = sorted_idx.shape[0] - 1
+    percentile_indices = xp.clip(percentile_indices, 0, max_idx)
+
+    col_indices = xp.arange(array.shape[1], device=device)
+    percentile_in_sorted = sorted_idx[percentile_indices, col_indices]
+
+    result = array[percentile_in_sorted, col_indices]
+
+    return result[0] if n_dim == 1 else result
+[/SEARCH]
+[REPLACE]
+    xp, _, device = get_namespace_and_device(array)
+    # `sample_weight` should follow `array` for dtypes
+    floating_dtype = _find_matching_floating_dtype(array, xp=xp)
+    array = xp.asarray(array, dtype=floating_dtype, device=device)
+    sample_weight = xp.asarray(sample_weight, dtype=floating_dtype, device=device)
+
+    n_dim = array.ndim
+    if n_dim == 0:
+        return array
+    if array.ndim == 1:
+        array = xp.reshape(array, (-1, 1))
+    # When sample_weight 1D, repeat for each array.shape[1]
+    if array.shape != sample_weight.shape and array.shape[0] == sample_weight.shape[0]:
+        sample_weight = xp.tile(sample_weight, (array.shape[1], 1)).T
+
+    # Sort `array` and `sample_weight` along axis=0:
+    sorted_idx = xp.argsort(array, axis=0)
+    # Sort `array` in-place and reorder `sample_weight` in a single pass
+    # to avoid the overhead of `xp.take_along_axis` and full-size temporary
+    # allocations like `xp.isnan(array)`.
+    n_features = array.shape[1]
+    n_samples = array.shape[0]
+    has_nan = False
+    for j in range(n_features):
+        idx = sorted_idx[:, j]
+        array[:, j] = array[idx, j]
+        sample_weight[:, j] = sample_weight[idx, j]
+        # Check for NaN values inline: NaN values get sorted to end (largest value)
+        if xp.isnan(array[-1, j]):
+            has_nan = True
+
+    # Set NaN values in `sample_weight` to 0. Only perform this operation if NaN
+    # values present to avoid temporary allocations of size `(n_samples, n_features)`.
+    if has_nan:
+        for j in range(n_features):
+            col_w = sample_weight[:, j]
+            col_a = array[:, j]
+            nan_mask = xp.isnan(col_a)
+            col_w[nan_mask] = 0
+
+    # Compute the weighted cumulative distribution function (CDF) based on
+    # `sample_weight` and scale `percentile_rank` along it.
+    #
+    # Note: we call `xp.cumulative_sum` on the transposed `sorted_weights` to
+    # ensure that the result is of shape `(n_features, n_samples)` so
+    # `xp.searchsorted` calls take contiguous inputs as a result (for
+    # performance reasons).
+    weight_cdf = xp.cumulative_sum(sample_weight.T, axis=1)
+    adjusted_percentile_rank = percentile_rank / 100 * weight_cdf[..., -1]
+
+    # Ignore leading `sample_weight=0` observations when `percentile_rank=0` (#20528)
+    mask = adjusted_percentile_rank == 0
+    adjusted_percentile_rank[mask] = xp.nextafter(
+        adjusted_percentile_rank[mask], adjusted_percentile_rank[mask] + 1
+    )
+    # For each feature with index j, find sample index i of the scalar value
+    # `adjusted_percentile_rank[j]` in 1D array `weight_cdf[j]`, such that:
+    # weight_cdf[j, i-1] < adjusted_percentile_rank[j] <= weight_cdf[j, i].
+    # Vectorized searchsorted across all features at once, avoiding a Python loop.
+    if n_features == 1:
+        percentile_indices = xp.reshape(
+            xp.searchsorted(weight_cdf[0], adjusted_percentile_rank[0]), (1,)
+        )
+    else:
+        percentile_indices = xp.stack(
+            [
+                xp.searchsorted(
+                    weight_cdf[feature_idx], adjusted_percentile_rank[feature_idx]
+                )
+                for feature_idx in range(n_features)
+            ],
+        )
+    # In rare cases, `percentile_indices` equals to `n_samples`
+    max_idx = n_samples - 1
+    percentile_indices = xp.clip(percentile_indices, 0, max_idx)
+
+    col_indices = xp.arange(n_features, device=device)
+    result = array[percentile_indices, col_indices]
+
+    return result[0] if n_dim == 1 else result
+[/REPLACE]

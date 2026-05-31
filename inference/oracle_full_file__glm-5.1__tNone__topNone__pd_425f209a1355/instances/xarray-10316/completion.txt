@@ -1,0 +1,35 @@
+Looking at the `VectorizedIndexer.__init__` method, I can see a significant performance issue when working with duck arrays. The current code calls `k.astype(np.int64)` unconditionally for all array-like objects, which forces materialization of lazy arrays (like dask arrays) and creates unnecessary copies of arrays that are already `int64`. This is particularly impactful for vectorized indexing with duck arrays.
+
+The optimization is to only call `.astype(np.int64)` when the array is a numpy array, since:
+1. For numpy arrays, `astype(np.int64)` is cheap and the conversion is needed
+2. For duck arrays (dask, sparse, etc.), the dtype check is already performed above, and forcing `.astype(np.int64)` causes unnecessary computation and memory allocation
+3. Duck arrays that already have integer dtype can be used directly in vectorized indexing
+
+xarray/core/indexing.py
+[SEARCH]
+                k = k.astype(np.int64)  # type: ignore[union-attr]
+            else:
+                raise TypeError(
+                    f"unexpected indexer type for {type(self).__name__}: {k!r}"
+                )
+            new_key.append(k)
+
+        super().__init__(tuple(new_key))
+
+
+class ExplicitlyIndexed:
+[/SEARCH]
+[REPLACE]
+                if isinstance(k, np.ndarray):
+                    k = k.astype(np.int64)
+            else:
+                raise TypeError(
+                    f"unexpected indexer type for {type(self).__name__}: {k!r}"
+                )
+            new_key.append(k)
+
+        super().__init__(tuple(new_key))
+
+
+class ExplicitlyIndexed:
+[/REPLACE]

@@ -1,0 +1,14 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        if self.equals(other):
+            # This is a convenient place for this check, but its correctness
+            #  does not depend on monotonicity, so it could go earlier
+            #  in the calling method.
+            ret_index = other if how == "right" else self
+            return ret_index, None, None
+[/SEARCH]
+[REPLACE]
+        if self.equals(other):
+            ret_index = other if how == "right" else self
+            return ret_index, None, None
+[/REPLACE]

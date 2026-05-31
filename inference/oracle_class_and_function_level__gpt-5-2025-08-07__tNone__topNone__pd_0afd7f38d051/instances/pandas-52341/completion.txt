@@ -1,0 +1,11 @@
+pandas/core/series.py
+[SEARCH]
+            with np.errstate(all="ignore"):
+                return op(delegate, skipna=skipna, **kwds)
+[/SEARCH]
+[REPLACE]
+            with np.errstate(all="ignore"):
+                if skipna and name in ["any", "all"] and getattr(delegate, "dtype", None) is not None and delegate.dtype.kind == "b":
+                    return delegate.any() if name == "any" else delegate.all()
+                return op(delegate, skipna=skipna, **kwds)
+[/REPLACE]

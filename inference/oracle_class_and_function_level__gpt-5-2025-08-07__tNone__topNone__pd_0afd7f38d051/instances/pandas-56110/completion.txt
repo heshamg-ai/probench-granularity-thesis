@@ -1,0 +1,69 @@
+pandas/core/arrays/string_arrow.py
+[SEARCH]
+    def _str_count(self, pat: str, flags: int = 0):
+        if flags:
+            return super()._str_count(pat, flags)
+        result = pc.count_substring_regex(self._pa_array, pat)
+        return self._convert_int_dtype(result)
+[/SEARCH]
+[REPLACE]
+    def _str_count(self, pat: str, flags: int = 0):
+        if flags:
+            return super()._str_count(pat, flags)
+        result = pc.count_substring_regex(self._pa_array, pat)
+        return self._convert_int_dtype(result)
+
+    def _str_get_dummies(self, sep="|"):
+        # Fast path using pyarrow compute for pyarrow-backed strings.
+        # Fallback to the base implementation for unsupported cases to preserve exact semantics.
+        if not (sep is None or isinstance(sep, str)):
+            fallback_performancewarning()
+            return super()._str_get_dummies(sep)
+
+        try:
+            if sep is None:
+                splits = pc.utf8_split_whitespace(self._pa_array)
+            else:
+                # Use Arrow binary split on the provided separator
+                splits = pc.binary_split_pattern(self._pa_array, pattern=sep)
+        except Exception:
+            # In case the arrow split ops are not available or error, fallback
+            fallback_performancewarning()
+            return super()._str_get_dummies(sep)
+
+        # Compute unique tokens across non-null entries
+        try:
+            non_null_mask = pc.invert(pc.is_null(splits))
+            non_null_splits = pc.filter(splits, non_null_mask)
+            flattened = pc.list_flatten(non_null_splits)
+            if len(flattened) == 0:
+                # No tokens present -> empty DataFrame with matching row count
+                import pandas as pd
+                return pd.DataFrame(index=range(len(self)))
+
+            cats_arr = pc.unique(flattened)
+            cats = cats_arr.to_pylist()
+
+            # Drop empty tokens when a specific separator is used, matching pandas semantics
+            if sep is not None:
+                cats = [c for c in cats if c != ""]
+
+            # Sort categories to preserve stable column ordering
+            cats.sort()
+
+            import pandas as pd
+            import numpy as np
+
+            # Build columns by checking list membership; nulls become False
+            cols = {}
+            for c in cats:
+                col = pc.list_contains(splits, value=c)
+                col = col.fill_null(False)
+                cols[c] = np.array(col, dtype=np.uint8)
+
+            return pd.DataFrame(cols)
+        except Exception:
+            # Any unexpected behavior, fallback to the trusted base path
+            fallback_performancewarning()
+            return super()._str_get_dummies(sep)
+[/REPLACE]

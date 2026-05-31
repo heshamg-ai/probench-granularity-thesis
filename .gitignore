@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.egg
+
+# Environment
+.env
+.env.*
+
+# Results (hosted on Google Drive — see README)
+results/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Repos (checked out locally for evaluation)
+repos/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb

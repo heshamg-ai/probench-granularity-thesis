@@ -1,0 +1,79 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+            # get tuple representation of values if more than one
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+            else:
+                # We get here with non-ndarrays in test_merge_by_col_tz_aware
+                #  and test_merge_groupby_multiple_column_with_categorical_column
+                lbv = flip(left_by_values)
+                rbv = flip(right_by_values)
+                lbv = ensure_object(lbv)
+                rbv = ensure_object(rbv)
+
+            # error: Incompatible types in assignment (expression has type
+            # "Union[ndarray[Any, dtype[Any]], ndarray[Any, dtype[object_]]]",
+            # variable has type "List[Union[Union[ExtensionArray,
+            # ndarray[Any, Any]], Index, Series]]")
+            right_by_values = rbv  # type: ignore[assignment]
+            # error: Incompatible types in assignment (expression has type
+            # "Union[ndarray[Any, dtype[Any]], ndarray[Any, dtype[object_]]]",
+            # variable has type "List[Union[Union[ExtensionArray,
+            # ndarray[Any, Any]], Index, Series]]")
+            left_by_values = lbv  # type: ignore[assignment]
+[/SEARCH]
+[REPLACE]
+            # get tuple representation of values if more than one
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+            else:
+                # Factorize multi-column 'by' keys into integer codes to avoid
+                # constructing Python tuple objects per-row. Ensure that NAs
+                # on left and right do not match by assigning distinct NA codes.
+                llabs: list[npt.NDArray[np.intp]] = []
+                rlabs: list[npt.NDArray[np.intp]] = []
+                shapes: list[int] = []
+                for lb_col, rb_col in zip(left_by_values, right_by_values):
+                    # Factorize this by-column pair together to align codes
+                    llab_i, rlab_i, count_i = _factorize_keys(
+                        lb_col, rb_col, sort=False
+                    )
+                    # Distinguish NA codes across sides so they never match
+                    if isna(lb_col).any() or isna(rb_col).any():
+                        na_code = count_i - 1
+                        if (llab_i == na_code).any():
+                            llab_i = llab_i.copy()
+                            llab_i[llab_i == na_code] = count_i
+                        if (rlab_i == na_code).any():
+                            rlab_i = rlab_i.copy()
+                            rlab_i[rlab_i == na_code] = count_i + 1
+                        shape_i = count_i + 2
+                    else:
+                        shape_i = count_i
+                    llabs.append(llab_i)
+                    rlabs.append(rlab_i)
+                    shapes.append(shape_i)
+
+                lbv, rbv = _get_join_keys(llabs, rlabs, tuple(shapes), sort=False)
+
+            # error: Incompatible types in assignment (expression has type
+            # "Union[ndarray[Any, dtype[Any]], ndarray[Any, dtype[object_]]]",
+            # variable has type "List[Union[Union[ExtensionArray,
+            # ndarray[Any, Any]], Index, Series]]")
+            right_by_values = rbv  # type: ignore[assignment]
+            # error: Incompatible types in assignment (expression has type
+            # "Union[ndarray[Any, dtype[Any]], ndarray[Any, dtype[object_]]]",
+            # variable has type "List[Union[Union[ExtensionArray,
+            # ndarray[Any, Any]], Index, Series]]")
+            left_by_values = lbv  # type: ignore[assignment]
+[/REPLACE]

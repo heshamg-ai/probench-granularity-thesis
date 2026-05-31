@@ -1,0 +1,51 @@
+pandas/core/arrays/string_arrow.py
+[SEARCH]
+    _str_na_value = libmissing.NA  # type: ignore[assignment]
+[/SEARCH]
+[REPLACE]
+    _str_na_value = libmissing.NA  # type: ignore[assignment]
+
+    def _str_get_dummies(self, sep: str = "|") -> tuple[lib.NoDefault, list[str]]:
+        import pyarrow as pa
+
+        from pandas.core.arrays.string_ import StringArray
+
+        # Validate that sep is a single character
+        if len(sep) != 1:
+            raise ValueError("sep must be a single character")
+
+        # Use PyArrow to split strings and create a unique set of categories
+        # This is more efficient than Python-level iteration for Arrow-backed strings
+        pa_array = self._pa_array
+        # Handle dictionary encoded arrays
+        if pa.types.is_dictionary(pa_array.type):
+            pa_array = pa_array.dictionary_decode()
+
+        # Split each string into a list of strings
+        # e.g. ['a|b', 'b|c', None] -> [['a', 'b'], ['b', 'c'], None]
+        split_pa = pc.split_pattern(pa_array, pattern=sep)
+
+        # Flatten to get all elements, then compute unique sorted categories
+        # list_flatten takes e.g. [['a', 'b'], ['b', 'c']] -> ['a', 'b', 'b', 'c']
+        flat_elements = pc.list_flatten(split_pa)
+        # unique+sort gives us the column names
+        unique_elements = pc.unique(flat_elements)
+        # Drop nulls if any (though split shouldn't produce None items, just empty list)
+        unique_elements = pc.drop_null(unique_elements)
+        categories = pc.sort_unique(unique_elements).to_pylist()
+
+        # Build a mask list_of_lists: for each category, a boolean mask of same
+        # shape as original series indicating whether that row contains the category
+        # Approach: for each category, we check if it's present in each split list
+        # We can do this via dictionary encoding / list_contains
+        masks: list[npt.NDArray[np.bool_]] = []
+        for cat in categories:
+            # list_contains checks membership in each list element
+            # Returns a boolean array of same shape as original series
+            contains = pc.list_contains(split_pa, value=cat)
+            # Arrow may return null for null rows; fill with False (no dummy for missing)
+            contains = pc.fill_null(contains, fill_value=False)
+            masks.append(contains.to_pylist())
+
+        return lib.no_default, categories, masks
+[/REPLACE]

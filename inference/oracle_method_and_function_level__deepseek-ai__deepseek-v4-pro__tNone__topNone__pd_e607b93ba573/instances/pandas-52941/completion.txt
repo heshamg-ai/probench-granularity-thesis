@@ -1,0 +1,25 @@
+pandas/core/generic.py
+[SEARCH]
+        if items is not None:
+            name = self._get_axis_name(axis)
+            # error: Keywords must be strings
+            return self.reindex(  # type: ignore[misc]
+                **{name: [r for r in items if r in labels]}  # type: ignore[arg-type]
+            )
+[/SEARCH]
+[REPLACE]
+        if items is not None:
+            name = self._get_axis_name(axis)
+            # Fast path: use Index.intersection to avoid O(len(items)) per-element
+            # membership tests when labels is a pandas Index.
+            # This preserves order of items while skipping non-existent labels.
+            if isinstance(labels, pandas.Index):
+                keep = labels.intersection(items, sort=False)
+            else:
+                labels_set = set(labels)
+                keep = [r for r in items if r in labels_set]
+            # error: Keywords must be strings
+            return self.reindex(  # type: ignore[misc]
+                **{name: keep}  # type: ignore[arg-type]
+            )
+[/REPLACE]

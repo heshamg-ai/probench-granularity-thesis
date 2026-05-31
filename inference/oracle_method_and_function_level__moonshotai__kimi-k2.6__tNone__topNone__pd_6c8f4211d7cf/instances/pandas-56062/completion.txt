@@ -1,0 +1,623 @@
+ pandas/core/indexing.py
+[SEARCH]
+from pandas.util._decorators import (
+    Appender,
+    deprecate_nonkeyword_arguments,
+    doc,
+)
+[/SEARCH]
+[REPLACE]
+from pandas.util._decorators import (
+    Appender,
+    cache_readonly,
+    deprecate_nonkeyword_arguments,
+    doc,
+)
+[/REPLACE]
+
+pandas/core/indexing.py
+[SEARCH]
+class _LocIndexer(_LocationIndexer):
+    """
+    Access a group of rows and columns by label(s) or a boolean array.
+
+    ``.loc[]`` is primarily label based, but may also be used with a
+    boolean array.
+
+    Allowed inputs are:
+
+    - A single label, e.g. ``5`` or ``'a'``, (note that ``5`` is
+      interpreted as a *label* of the index, and **never** as an
+      integer position along the index).
+    - A list or array of labels, e.g. ``['a', 'b', 'c']``.
+    - A slice object with labels, e.g. ``'a':'f'``.
+    - A boolean array of the same length as the axis being sliced,
+      e.g. ``[True, False, True]``.
+    - An alignable boolean Series. The index of the key will be
+      aligned before masking.
+    - An alignable Index. The index of the key will be aligned before
+      masking.
+
+    Not allowed inputs which ksort the TypeError:
+    - Integer, e.g. ``5``.
+    - Integer slice, e.g. ``1:5``.
+
+    See Also
+    --------
+    at : Access a single value for a row/column label pair.
+    DataFrame.iloc : Purely integer-location based indexing
+        for selection by position.
+
+    Examples
+    --------
+    **Getting values**
+
+    >>> df = pd.DataFrame([[1, 2], [4, 5], [7, 8]],
+    ...      index=['cobra', 'viper', 'sidewinder'],
+    ...      columns=['max_speed', 'shield'])
+    >>> df
+                max_speed  shield
+    cobra               1       2
+    viper               4       5
+    sidewinder          7       8
+
+    Single label. Note this returns the row as a Series.
+
+    >>> df.loc['viper']
+    max_speed    4
+    shield       5
+    Name: viper, dtype: int64
+
+    List of labels. Note using ``[[]]`` returns a DataFrame.
+
+    >>> df.loc[['viper', 'sidewinder']]
+                max_speed  shield
+    viper               4       5
+    sidewinder          7       8
+
+    Single label for row and column
+
+    >>> df.loc['cobra', 'shield']
+    2
+
+    Slice with labels for row and single label for column. As mentioned
+    above, note that both the start and stop of the slice are included.
+
+    >>> df.loc['cobra':'viper', 'max_speed']
+    cobra    1
+    viper    4
+    Name: max_speed, dtype: int64
+
+    Boolean list with the same length as the row axis
+
+    >>> df.loc[[False, True, True]]
+                max_speed  shield
+    viper               4       5
+    sidewinder          7       8
+
+    Conditional that returns a boolean Series
+
+    >>> df.loc[df['shield'] > 6]
+                max_speed  shield
+    sidewinder          7       8
+
+    Conditional that returns a boolean Series with column labels specified
+
+    >>> df.loc[df['shield'] > 6, ['max_speed']]
+                max_speed
+    sidewinder          7
+
+    Callable that returns a boolean Series
+
+    >>> df.loc[lambda df: df['shield'] == 8]
+                max_speed  shield
+    sidewinder          7       8
+
+    **Setting values**
+
+    Set value for all items matching the list of labels
+
+    >>> df.loc[['viper', 'sidewinder'], ['shield']] = 50
+    >>> df
+                max_speed  shield
+    cobra               1       2
+    viper               4      50
+    sidewinder          7      50
+
+    Set value for an entire row
+
+    >>> df.loc['cobra'] = 10
+    >>> df
+                max_speed  shield
+    cobra              10      10
+    viper               4      50
+    sidewinder          7      50
+
+    Set value for an entire column
+
+    >>> df.loc[:, 'max_speed'] = 30
+    >>> df
+                max_speed  shield
+    cobra              30      10
+    viper              30      50
+    sidewinder         30      50
+
+    Set value for rows matching callable condition
+
+    >>> df.loc[df['shield'] > 35] = 0
+    >>> df
+                max_speed  shield
+    cobra              30      10
+    viper               0       0
+    sidewinder          0       0
+
+    **Getting values on a DataFrame with an index that has integer labels**
+
+    Another example using integers for the index
+
+    >>> df = pd.DataFrame([[1, 2], [4, 5], [7, 8]],
+    ...      index=[7, 8, 9], columns=['max_speed', 'shield'])
+    >>> df
+       max_speed  shield
+    7          1       2
+    8          4       5
+    9          7       8
+
+    Slice with integer labels for row. As mentioned above, note that both
+    the start and stop of the slice are included.
+
+    >>> df.loc[7:9]
+       max_speed  shield
+    7          1       2
+    8          4       5
+    9          7       8
+
+    **Getting values with a MultiIndex**
+
+    A number of examples using a DataFrame with a MultiIndex
+
+    >>> tuples = [
+    ...    ('cobra', 'mark i'), ('cobra', 'mark ii'),
+    ...    ('sidewinder', 'mark i'), ('sidewinder', 'mark ii'),
+    ...    ('viper', 'mark ii'), ('viper', 'mark iii')
+    ... ]
+    >>> index = pd.MultiIndex.from_tuples(tuples)
+    >>> values = [[12, 2], [0, 4], [10, 20],
+    ...         [1, 4], [7, 1], [16, 36]]
+    >>> df = pd.DataFrame(values, columns=['max_speed', 'shield'], index=index)
+    >>> df
+                         max_speed  shield
+    cobra      mark i           12       2
+               mark ii           0       4
+    sidewinder mark i           10      20
+               mark ii           1       4
+    viper      mark ii           7       1
+               mark iii         16      36
+
+    Single label. Note this returns a DataFrame with a single index.
+
+    >>> df.loc['cobra']
+             max_speed  shield
+    mark i          12       2
+    mark ii          0       4
+
+    Single index tuple. Note this returns a Series.
+
+    >>> df.loc[('cobra', 'mark ii')]
+    max_speed    0
+    shield       4
+    Name: (cobra, mark ii), dtype: int64
+
+    Single label for row and column. Similar to passing in a tuple, but
+    using a list instead.
+
+    >>> df.loc['cobra', 'shield']
+    mark i     2
+    mark ii    4
+    Name: shield, dtype: int64
+
+    Single tuple. Note using ``[[]]`` returns a DataFrame.
+
+    >>> df.loc[[('cobra', 'mark ii')]]
+                   max_speed  shield
+    cobra mark ii          0       4
+
+    Single tuple for the index with a single label for the column
+
+    >>> df.loc[('cobra', 'mark i'), 'shield']
+    2
+
+    Slice from index tuple to index tuple
+
+    >>> df.loc[('cobra', 'mark i'):('viper', 'mark ii')]
+                            max_speed  shield
+    cobra      mark i           12       2
+               mark ii           0       4
+    sidewinder mark i           10      20
+               mark ii           1       4
+    viper      mark ii           7       1
+
+    Please see the :ref:`user guide <advanced>`
+    for more details and explanations of advanced indexing.
+    """
+
+    # -------------------------------------------------------------------
+    # Multi-Index Handling Methods
+
+    def _getitem_axis(
+        self, key: IndexLabel, axis: int
+    ) -> DataFrame | Series | np.ndarray | Scalar:
+        """
+        Return the result of of .loc on a single axis.
+        """
+        values_for_axis = self.obj._get_axis(axis)
+
+        if isinstance(values_for_axis, MultiIndex):
+            # 'index' or 'columns' is a MultiIndex
+
+            try:
+                return values_for_axis.get_loc(key)
+            except KeyError:
+                # TypeError UnsortedIndexError KeyError
+                invalid_key = True
+
+            except (TypeError, InvalidIndexError):
+                # InvalidIndexError e.g. non-hashable, fall back to treating
+                # as a sequence of labels
+                pass
+
+            if invalid_key and not isinstance(key, (slice, list)):
+                # we are not a MultiSlice, so may still be a list of
+                # labels to index in the MI
+                raise KeyError(key)
+
+        if isinstance(key, slice):
+            self._validate_key(key, axis)
+            return self._getitem_axis(key, axis=axis)
+        elif com.is_bool_indexer(key):
+            return self._getitem_axis(key, axis=axis)
+        elif is_list_like_indexer(key):
+            return self._getitem_axis(key, axis=axis)
+
+        # a single label or a single element list-like
+        # GH#13691, GH#15819
+        if is_integer(key):
+            if not values_for_axis.holds_integer():
+                self._raise_invalid_indexer("slice", key, axis)
+            return self._getitem_axis(key, axis=axis)
+
+        return values_for_axis.get_loc(key)
+[/SEARCH]
+[REPLACE]
+class _LocIndexer(_LocationIndexer):
+    """
+    Access a group of rows and columns by label(s) or a boolean array.
+
+    ``.loc[]`` is primarily label based, but may also be used with a
+    boolean array.
+
+    Allowed inputs are:
+
+    - A single label, e.g. ``5`` or ``'a'``, (note that ``5`` is
+      interpreted as a *label* of the index, and **never** as an
+      integer position along the index).
+    - A list or array of labels, e.g. ``['a', 'b', 'c']``.
+    - A slice object with labels, e.g. ``'a':'f'``.
+    - A boolean array of the same length as the axis being sliced,
+      e.g. ``[True, False, True]``.
+    - An alignable boolean Series. The index of the key will be
+      aligned before masking.
+    - An alignable Index. The index of the key will be aligned before
+      masking.
+
+    Not allowed inputs which ksort the TypeError:
+    - Integer, e.g. ``5``.
+    - Integer slice, e.g. ``1:5``.
+
+    See Also
+    --------
+    at : Access a single value for a row/column label pair.
+    DataFrame.iloc : Purely integer-location based indexing
+        for selection by position.
+
+    Examples
+    --------
+    **Getting values**
+
+    >>> df = pd.DataFrame([[1, 2], [4, 5], [7, 8]],
+    ...      index=['cobra', 'viper', 'sidewinder'],
+    ...      columns=['max_speed', 'shield'])
+    >>> df
+                max_speed  shield
+    cobra               1       2
+    viper               4       5
+    sidewinder          7       8
+
+    Single label. Note this returns the row as a Series.
+
+    >>> df.loc['viper']
+    max_speed    4
+    shield       5
+    Name: viper, dtype: int64
+
+    List of labels. Note using ``[[]]`` returns a DataFrame.
+
+    >>> df.loc[['viper', 'sidewinder']]
+                max_speed  shield
+    viper               4       5
+    sidewinder          7       8
+
+    Single label for row and column
+
+    >>> df.loc['cobra', 'shield']
+    2
+
+    Slice with labels for row and single label for column. As mentioned
+    above, note that both the start and stop of the slice are included.
+
+    >>> df.loc['cobra':'viper', 'max_speed']
+    cobra    1
+    viper    4
+    Name: max_speed, dtype: int64
+
+    Boolean list with the same length as the row axis
+
+    >>> df.loc[[False, True, True]]
+                max_speed  shield
+    viper               4       5
+    sidewinder          7       8
+
+    Conditional that returns a boolean Series
+
+    >>> df.loc[df['shield'] > 6]
+                max_speed  shield
+    sidewinder          7       8
+
+    Conditional that returns a boolean Series with column labels specified
+
+    >>> df.loc[df['shield'] > 6, ['max_speed']]
+                max_speed
+    sidewinder          7
+
+    Callable that returns a boolean Series
+
+    >>> df.loc[lambda df: df['shield'] == 8]
+                max_speed  shield
+    sidewinder          7       8
+
+    **Setting values**
+
+    Set value for all items matching the list of labels
+
+    >>> df.loc[['viper', 'sidewinder'], ['shield']] = 50
+    >>> df
+                max_speed  shield
+    cobra               1       2
+    viper               4      50
+    sidewinder          7      50
+
+    Set value for an entire row
+
+    >>> df.loc['cobra'] = 10
+    >>> df
+                max_speed  shield
+    cobra              10      10
+    viper               4      50
+    sidewinder          7      50
+
+    Set value for an entire column
+
+    >>> df.loc[:, 'max_speed'] = 30
+    >>> df
+                max_speed  shield
+    cobra              30      10
+    viper              30      50
+    sidewinder         30      50
+
+    Set value for rows matching callable condition
+
+    >>> df.loc[df['shield'] > 35] = 0
+    >>> df
+                max_speed  shield
+    cobra              30      10
+    viper               0       0
+    sidewinder          0       0
+
+    **Getting values on a DataFrame with an index that has integer labels**
+
+    Another example using integers for the index
+
+    >>> df = pd.DataFrame([[1, 2], [4, 5], [7, 8]],
+    ...      index=[7, 8, 9], columns=['max_speed', 'shield'])
+    >>> df
+       max_speed  shield
+    7          1       2
+    8          4       5
+    9          7       8
+
+    Slice with integer labels for row. As mentioned above, note that both
+    the start and stop of the slice are included.
+
+    >>> df.loc[7:9]
+       max_speed  shield
+    7          1       2
+    8          4       5
+    9          7       8
+
+    **Getting values with a MultiIndex**
+
+    A number of examples using a DataFrame with a MultiIndex
+
+    >>> tuples = [
+    ...    ('cobra', 'mark i'), ('cobra', 'mark ii'),
+    ...    ('sidewinder', 'mark i'), ('sidewinder', 'mark ii'),
+    ...    ('viper', 'mark ii'), ('viper', 'mark iii')
+    ... ]
+    >>> index = pd.MultiIndex.from_tuples(tuples)
+    >>> values = [[12, 2], [0, 4], [10, 20],
+    ...         [1, 4], [7, 1], [16, 36]]
+    >>> df = pd.DataFrame(values, columns=['max_speed', 'shield'], index=index)
+    >>> df
+                         max_speed  shield
+    cobra      mark i           12       2
+               mark ii           0       4
+    sidewinder mark i           10      20
+               mark ii           1       4
+    viper      mark ii           7       1
+               mark iii         16      36
+
+    Single label. Note this returns a DataFrame with a single index.
+
+    >>> df.loc['cobra']
+             max_speed  shield
+    mark i          12       2
+    mark ii          0       4
+
+    Single index tuple. Note this returns a Series.
+
+    >>> df.loc[('cobra', 'mark ii')]
+    max_speed    0
+    shield       4
+    Name: (cobra, mark ii), dtype: int64
+
+    Single label for row and column. Similar to passing in a tuple, but
+    using a list instead.
+
+    >>> df.loc['cobra', 'shield']
+    mark i     2
+    mark ii    4
+    Name: shield, dtype: int64
+
+    Single tuple. Note using ``[[]]`` returns a DataFrame.
+
+    >>> df.loc[[('cobra', 'mark ii')]]
+                   max_speed  shield
+    cobra mark ii          0       4
+
+    Single tuple for the index with a single label for the column
+
+    >>> df.loc[('cobra', 'mark i'), 'shield']
+    2
+
+    Slice from index tuple to index tuple
+
+    >>> df.loc[('cobra', 'mark i'):('viper', 'mark ii')]
+                            max_speed  shield
+    cobra      mark i           12       2
+               mark ii           0       4
+    sidewinder mark i           10      20
+               mark ii           1       4
+    viper      mark ii           7       1
+
+    Please see the :ref:`user guide <advanced>`
+    for more details and explanations of advanced indexing.
+    """
+
+    # -------------------------------------------------------------------
+    # Multi-Index Handling Methods
+
+    @cache_readonly
+    def _multiindex_level_info(self) -> dict:
+        """
+        Pre-compute and cache level information for MultiIndex operations.
+        Returns a dictionary mapping axis to level information.
+        """
+        return {}
+
+    def _get_multiindex_level_info(self, axis: int) -> dict | None:
+        """
+        Get cached level info for a MultiIndex if available.
+        """
+        obj = self.obj
+        values_for_axis = obj._get_axis(axis)
+        if not isinstance(values_for_axis, MultiIndex):
+            return None
+        
+        cache_key = id(obj)
+        level_info_cache = self._multiindex_level_info
+        
+        info = level_info_cache.get(cache_key)
+        if info is None or info.get('axis') != axis or id(info.get('index')) != id(values_for_axis):
+            # Build cached info
+            info = {
+                'axis': axis,
+                'index': values_for_axis,
+                'nlevels': values_for_axis.nlevels,
+                'names': values_for_axis.names,
+                'is_unique': values_for_axis.is_unique,
+                'codes': [values_for_axis.get_level_values(i)._values for i in range(values_for_axis.nlevels)],
+                'levels': values_for_axis.levels,
+            }
+            level_info_cache.clear()  # keep only one entry to limit memory
+            level_info_cache[cache_key] = info
+        
+        return info
+
+    def _getitem_axis(
+        self, key: IndexLabel, axis: int
+    ) -> DataFrame | Series | np.ndarray | Scalar:
+        """
+        Return the result of of .loc on a single axis.
+        """
+        values_for_axis = self.obj._get_axis(axis)
+
+        if isinstance(values_for_axis, MultiIndex):
+            # 'index' or 'columns' is a MultiIndex
+
+            # Fast path: check if key is a tuple that exactly matches levels
+            if isinstance(key, tuple) and not isinstance(key, slice):
+                nlevels = values_for_axis.nlevels
+                if len(key) == nlevels:
+                    # Direct lookup attempt - fastest path
+                    try:
+                        return values_for_axis.get_loc(key)
+                    except KeyError:
+                        # Fall through to slower paths
+                        pass
+                    except (TypeError, InvalidIndexError):
+                        pass
+            
+            # Fast path: single label on first level
+            if not isinstance(key, (slice, list, tuple, np.ndarray)) and values_for_axis.nlevels > 1:
+                try:
+                    # Quick check: is this a label in the first level?
+                    level_0 = values_for_axis.levels[0]
+                    if key in level_0:
+                        # This is a first-level label, do a direct partial lookup
+                        return values_for_axis.get_loc(key)
+                except (KeyError, TypeError, InvalidIndexError):
+                    pass
+
+            try:
+                return values_for_axis.get_loc(key)
+            except KeyError:
+                # TypeError UnsortedIndexError KeyError
+                invalid_key = True
+
+            except (TypeError, InvalidIndexError):
+                # InvalidIndexError e.g. non-hashable, fall back to treating
+                # as a sequence of labels
+                pass
+
+            if invalid_key and not isinstance(key, (slice, list)):
+                # we are not a MultiSlice, so may still be a list of
+                # labels to index in the MI
+                raise KeyError(key)
+
+        if isinstance(key, slice):
+            self._validate_key(key, axis)
+            return self._getitem_axis(key, axis=axis)
+        elif com.is_bool_indexer(key):
+            return self._getitem_axis(key, axis=axis)
+        elif is_list_like_indexer(key):
+            return self._getitem_axis(key, axis=axis)
+
+        # a single label or a single element list-like
+        # GH#13691, GH#15819
+        if is_integer(key):
+            if not values_for_axis.holds_integer():
+                self._raise_invalid_indexer("slice", key, axis)
+            return self._getitem_axis(key, axis=axis)
+
+        return values_for_axis.get_loc(key)
+[/REPLACE]

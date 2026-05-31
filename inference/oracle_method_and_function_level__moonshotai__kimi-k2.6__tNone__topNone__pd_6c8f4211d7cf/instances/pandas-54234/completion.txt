@@ -1,0 +1,962 @@
+pandas/core/groupby/groupby.py
+[SEARCH]
+        try:
+            if self.obj.ndim == 1:
+                result = self._op_via_apply(how, skipna=skipna)
+            else:
+
+                def func(df):
+                    method = getattr(df, how)
+                    return method(axis=axis, skipna=skipna, numeric_only=numeric_only)
+
+                func.__name__ = how
+                result = self._python_apply_general(
+                    func, self._obj_with_exclusions, not_indexed_same=True
+                )
+        except ValueError as err:
+            name = "argmax" if how == "idxmax" else "argmin"
+            if f"attempt to get {name} of an empty sequence" in str(err):
+                raise ValueError(
+                    f"Can't get {how} of an empty group due to unobserved categories. "
+                    "Specify observed=True in groupby instead."
+                ) from None
+            raise
+[/SEARCH]
+[REPLACE]
+        try:
+            if self.obj.ndim == 1:
+                result = self._op_via_apply(how, skipna=skipna)
+            else:
+                # Use a fast path for idxmax/idxmin that avoids the expensive
+                # _python_apply_general when possible. For each column, we can
+                # use the cythonized group_min/group_max on the positional
+                # indices to find the position of the max/min within each group,
+                # then map back to the original index.
+                result = self._idxmax_idxmin_via_cython(how, skipna, numeric_only)
+        except ValueError as err:
+            name = "argmax" if how == "idxmax" else "argmin"
+            if f"attempt to get {name} of an empty sequence" in str(err):
+                raise ValueError(
+                    f"Can't get {how} of an empty group due to unobserved categories. "
+                    "Specify observed=True in groupby instead."
+                ) from None
+            raise
+[/REPLACE]
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+        result = result.astype(self.obj.index.dtype) if result.empty else result
+
+        if not skipna:
+            has_na_value = result.isnull().any(axis=None)
+            if has_na_value:
+                warnings.warn(
+                    f"The behavior of {type(self).__name__}.{how} with all-NA "
+                    "values, or any-NA and skipna=False, is deprecated. In a future "
+                    "version this will raise ValueError",
+                    FutureWarning,
+                    stacklevel=find_stack_level(),
+                )
+
+        return result
+[/SEARCH]
+[REPLACE]
+        if not isinstance(result, DataFrame):
+            result = result.astype(self.obj.index.dtype) if result.empty else result
+
+        if not skipna:
+            has_na_value = result.isnull().any(axis=None)
+            if has_na_value:
+                warnings.warn(
+                    f"The behavior of {type(self).__name__}.{how} with all-NA "
+                    "values, or any-NA and skipna=False, is deprecated. In a future "
+                    "version this will raise ValueError",
+                    FutureWarning,
+                    stacklevel=find_stack_level(),
+                )
+
+        return result
+[/SEARCH]
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+    def _idxmax_idxmin(
+        self,
+        how: Literal["idxmax", "idxmin"],
+        ignore_unobserved: bool = False,
+        axis: Axis | None | lib.NoDefault = lib.no_default,
+        skipna: bool = True,
+        numeric_only: bool = False,
+    ):
+        """Compute idxmax/idxmin.
+
+        Parameters
+        ----------
+        how: {"idxmin", "idxmax"}
+            Whether to compute idxmin or idxmax.
+        axis : {{0 or 'index', 1 or 'columns'}}, default None
+            The axis to use. 0 or 'index' for row-wise, 1 or 'columns' for column-wise.
+            If axis is not provided, grouper's axis is used.
+        numeric_only : bool, default False
+            Include only float, int, boolean columns.
+        skipna : bool, default True
+            Exclude NA/null values. If an entire row/column is NA, the result
+            will be NA.
+        ignore_unobserved : bool, default False
+            When True and an unobserved group is encountered, do not raise. This used
+            for transform where unobserved groups do not play an impact on the result.
+
+        Returns
+        -------
+        Series or DataFrame
+            idxmax or idxmin for the groupby operation.
+        """
+        if axis is not lib.no_default:
+            if axis is None:
+                axis = self.axis
+            axis = self.obj._get_axis_number(axis)
+            self._deprecate_axis(axis, how)
+        else:
+            axis = self.axis
+
+        if not self.observed and any(
+            ping._passed_categorical for ping in self.grouper.groupings
+        ):
+            expected_len = np.prod(
+                [len(ping.group_index) for ping in self.grouper.groupings]
+            )
+            if len(self.grouper.groupings) == 1:
+                result_len = len(self.grouper.groupings[0].grouping_vector.unique())
+            else:
+                # result_index only contains observed groups in this case
+                result_len = len(self.grouper.result_index)
+            assert result_len <= expected_len
+            has_unobserved = result_len < expected_len
+
+            raise_err: bool | np.bool_ = not ignore_unobserved and has_unobserved
+            # Only raise an error if there are columns to compute; otherwise we return
+            # an empty DataFrame with an index (possibly including unobserved) but no
+            # columns
+            data = self._obj_with_exclusions
+            if raise_err and isinstance(data, DataFrame):
+                if numeric_only:
+                    data = data._get_numeric_data()
+                raise_err = len(data.columns) > 0
+        else:
+            raise_err = False
+        if raise_err:
+            raise ValueError(
+                f"Can't get {how} of an empty group due to unobserved categories. "
+                "Specify observed=True in groupby instead."
+            )
+
+        try:
+            if self.obj.ndim == 1:
+                result = self._op_via_apply(how, skipna=skipna)
+            else:
+                # Use a fast path for idxmax/idxmin that avoids the expensive
+                # _python_apply_general when possible. For each column, we can
+                # use the cythonized group_min/group_max on the positional
+                # indices to find the position of the max/min within each group,
+                # then map back to the original index.
+                result = self._idxmax_idxmin_via_cython(how, skipna, numeric_only)
+        except ValueError as err:
+            name = "argmax" if how == "idxmax" else "argmin"
+            if f"attempt to get {name} of an empty sequence" in str(err):
+                raise ValueError(
+                    f"Can't get {how} of an empty group due to unobserved categories. "
+                    "Specify observed=True in groupby instead."
+                ) from None
+            raise
+
+        if not isinstance(result, DataFrame):
+            result = result.astype(self.obj.index.dtype) if result.empty else result
+
+        if not skipna:
+            has_na_value = result.isnull().any(axis=None)
+            if has_na_value:
+                warnings.warn(
+                    f"The behavior of {type(self).__name__}.{how} with all-NA "
+                    "values, or any-NA and skipna=False, is deprecated. In a future "
+                    "version this will raise ValueError",
+                    FutureWarning,
+                    stacklevel=find_stack_level(),
+                )
+
+        return result
+[/SEARCH]
+[REPLACE]
+    def _idxmax_idxmin(
+        self,
+        how: Literal["idxmax", "idxmin"],
+        ignore_unobserved: bool = False,
+        axis: Axis | None | lib.NoDefault = lib.no_default,
+        skipna: bool = True,
+        numeric_only: bool = False,
+    ):
+        """Compute idxmax/idxmin.
+
+        Parameters
+        ----------
+        how: {"idxmin", "idxmax"}
+            Whether to compute idxmin or idxmax.
+        axis : {{0 or 'index', 1 or 'columns'}}, default None
+            The axis to use. 0 or 'index' for row-wise, 1 or 'columns' for column-wise.
+            If axis is not provided, grouper's axis is used.
+        numeric_only : bool, default False
+            Include only float, int, boolean columns.
+        skipna : bool, default True
+            Exclude NA/null values. If an entire row/column is NA, the result
+            will be NA.
+        ignore_unobserved : bool, default False
+            When True and an unobserved group is encountered, do not raise. This used
+            for transform where unobserved groups do not play an impact on the result.
+
+        Returns
+        -------
+        Series or DataFrame
+            idxmax or idxmin for the groupby operation.
+        """
+        if axis is not lib.no_default:
+            if axis is None:
+                axis = self.axis
+            axis = self.obj._get_axis_number(axis)
+            self._deprecate_axis(axis, how)
+        else:
+            axis = self.axis
+
+        if not self.observed and any(
+            ping._passed_categorical for ping in self.grouper.groupings
+        ):
+            expected_len = np.prod(
+                [len(ping.group_index) for ping in self.grouper.groupings]
+            )
+            if len(self.grouper.groupings) == 1:
+                result_len = len(self.grouper.groupings[0].grouping_vector.unique())
+            else:
+                # result_index only contains observed groups in this case
+                result_len = len(self.grouper.result_index)
+            assert result_len <= expected_len
+            has_unobserved = result_len < expected_len
+
+            raise_err: bool | np.bool_ = not ignore_unobserved and has_unobserved
+            # Only raise an error if there are columns to compute; otherwise we return
+            # an empty DataFrame with an index (possibly including unobserved) but no
+            # columns
+            data = self._obj_with_exclusions
+            if raise_err and isinstance(data, DataFrame):
+                if numeric_only:
+                    data = data._get_numeric_data()
+                raise_err = len(data.columns) > 0
+        else:
+            raise_err = False
+        if raise_err:
+            raise ValueError(
+                f"Can't get {how} of an empty group due to unobserved categories. "
+                "Specify observed=True in groupby instead."
+            )
+
+        try:
+            if self.obj.ndim == 1:
+                result = self._op_via_apply(how, skipna=skipna)
+            else:
+                # Use a fast path for idxmax/idxmin that avoids the expensive
+                # _python_apply_general when possible. For each column, we can
+                # use the cythonized group_min/group_max on the positional
+                # indices to find the position of the max/min within each group,
+                # then map back to the original index.
+                result = self._idxmax_idxmin_via_cython(how, skipna, numeric_only)
+        except ValueError as err:
+            name = "argmax" if how == "idxmax" else "argmin"
+            if f"attempt to get {name} of an empty sequence" in str(err):
+                raise ValueError(
+                    f"Can't get {how} of an empty group due to unobserved categories. "
+                    "Specify observed=True in groupby instead."
+                ) from None
+            raise
+
+        if not isinstance(result, DataFrame):
+            result = result.astype(self.obj.index.dtype) if result.empty else result
+
+        if not skipna:
+            has_na_value = result.isnull().any(axis=None)
+            if has_na_value:
+                warnings.warn(
+                    f"The behavior of {type(self).__name__}.{how} with all-NA "
+                    "values, or any-NA and skipna=False, is deprecated. In a future "
+                    "version this will raise ValueError",
+                    FutureWarning,
+                    stacklevel=find_stack_level(),
+                )
+
+        return result
+
+    def _idxmax_idxmin_via_cython(
+        self,
+        how: str,
+        skipna: bool,
+        numeric_only: bool,
+    ) -> DataFrame:
+        """
+        Fast path for idxmax/idxmin using cythonized operations.
+
+        For numeric data, we use a trick: for each group, we want the index
+        position of the max/min value. We can do this by:
+        1. Reversing the sign (for max) or keeping it (for min)
+        2. Using group_min to find the position of the min in the modified values
+        3. Mapping back to the original index
+
+        This avoids the expensive _python_apply_general path.
+        """
+        import pandas.core.dtypes.common as com_
+
+        data = self._obj_with_exclusions
+        if numeric_only:
+            data = data._get_numeric_data()
+
+        if data.empty:
+            # Return empty DataFrame with proper index
+            result = data._constructor(
+                index=self.grouper.result_index, columns=data.columns
+            )
+            result = result.rename_axis(self.grouper.names, axis=0)
+            return result
+
+        obj_index = self.obj.index
+        result_index = self.grouper.result_index
+
+        # We need the argmin/argmax per group per column
+        # Strategy: use a single cython call via grouped_reduce if possible,
+        # or iterate through columns and use the group's cython operation.
+
+        # For now, use _cython_agg_general with a custom approach
+        # We can't directly use _cython_agg_general because we need argmin/argmax
+        # not min/max. So we implement a custom version.
+
+        # For each column, get the values and compute argmin/argmax per group
+        ids = self.grouper.codes
+
+        # Filter out -1 (dropped NA groups)
+        if not self.observed and any(
+            ping._passed_categorical for ping in self.grouper.groupings
+        ):
+            # Need to handle unobserved groups
+            pass
+
+        ngroups = self.grouper.ngroups
+
+        result_dict: dict[Hashable, np.ndarray] = {}
+        for col in data.columns:
+            values = data[col]._values
+            result_col = self._idxmax_idxmin_for_1d(values, ids, ngroups, how, skipna)
+            result_dict[col] = result_col
+
+        # Construct result DataFrame
+        result = data._constructor(result_dict, index=result_index)
+        result = result.rename_axis(self.grouper.names, axis=0)
+        return result
+
+    def _idxmax_idxmin_for_1d(
+        self,
+        values: ArrayLike,
+        ids: np.ndarray,
+        ngroups: int,
+        how: str,
+        skipna: bool,
+    ) -> np.ndarray:
+        """
+        Compute idxmax/idxmin for a 1D array grouped by ids.
+        Returns an array of index labels (from self.obj.index) for each group.
+        """
+        from pandas.core.groupby.ops import WrappedCythonOp
+
+        obj_index = self.obj.index
+
+        # Try to get a fast path for numpy arrays
+        if hasattr(values, "to_numpy"):
+            values_arr = values.to_numpy()
+        else:
+            values_arr = np.asarray(values)
+
+        # Check for object dtype or other non-numeric types that need special handling
+        if not (
+            is_numeric_dtype(values_arr.dtype)
+            or is_bool_dtype(values_arr.dtype)
+            or is_datetime64_any_dtype(values_arr.dtype)
+            or is_timedelta64_dtype(values_arr.dtype)
+        ):
+            # Fall back to python-based approach for non-numeric data
+            return self._idxmax_idxmin_for_1d_python(values, ids, ngroups, how, skipna)
+
+        # Handle NA values
+        mask = isna(values_arr)
+        if skipna and mask.any():
+            # We need to exclude NA values from consideration
+            if is_datetime64_any_dtype(values_arr.dtype) or is_timedelta64_dtype(
+                values_arr.dtype
+            ):
+                # For datetime, use a fill value that won't be min/max
+                # iNaT is the smallest, so for max we fill with it, for min we can't
+                # easily do this. Instead, we'll handle via mask in cython.
+                pass
+            else:
+                # Use nan for float, or a sentinel for int
+                pass
+
+        # For numeric types, we can use a cython approach:
+        # Find argmin/argmax by using the fact that for each group, we can
+        # track the running min/max and its position.
+
+        # We need to handle the case where some groups have all NA values
+
+        # Create a result array filled with appropriate NA value
+        result = np.empty(ngroups, dtype=object)
+        result.fill(np.nan)
+
+        # Track positions - we want position within original array
+        # Then map to obj_index
+
+        # Use argsort-like approach or direct cython
+        # For simplicity and reliability, let's use a numpy-based approach
+        # that is still much faster than python apply
+
+        n = len(values_arr)
+        # positions array for collecting group members
+        # Use sorting-based approach for vectorization
+
+        # Filter out NA if skipna
+        if skipna:
+            valid_mask = ~mask
+            if not valid_mask.any():
+                return result
+            valid_values = values_arr[valid_mask]
+            valid_ids = ids[valid_mask]
+            valid_positions = np.arange(n)[valid_mask]
+        else:
+            if mask.any():
+                # If any NA and skipna=False, the result depends on specifics
+                # For simplicity, fall back
+                return self._idxmax_idxmin_for_1d_python(values, ids, ngroups, how, skipna)
+            valid_values = values_arr
+            valid_ids = ids
+            valid_positions = np.arange(n)
+
+        # Now for each group, find argmin/argmax
+        # Use stable sort to ensure consistent behavior
+        if how == "idxmax":
+            # argsort descending
+            order = np.argsort(valid_values, kind="mergesort")
+            # For descending, we want the last occurrence of the max value
+            # Actually let's use ascending and pick carefully
+            # Re-approach: sort by values, then for each group take last (for max)
+            # or first (for min) in the sorted order
+        else:
+            order = np.argsort(valid_values, kind="mergesort")
+
+        # Re-apply the sorting to get positions in value-sorted order
+        sorted_ids = valid_ids[order]
+        sorted_positions = valid_positions[order]
+
+        # Find the first and last occurrence of each group in sorted order
+        # For each group, if how=="idxmin", we want the first position (smallest value)
+        # if how=="idxmax", we want the last position for that group in the sorted array
+        # Actually for ties, we need to be careful about which position to return
+
+        # Use groupby-like operation on sorted array
+        # For each group, find the relevant position
+        group_seen = np.zeros(ngroups, dtype=bool)
+
+        if how == "idxmin":
+            # First occurrence in sorted order gives min value
+            # But we need to handle ties - we want the first in original array?
+            # idxmin returns first occurrence of min value
+            # Since we want first occurrence, and sorted by value then position...
+            pass
+        else:
+            # Last occurrence in sorted order for max, but need first in original for ties
+            pass
+
+        # Actually, for proper tie-breaking: pandas idxmax/idxmin returns the
+        # *first* occurrence of the max/min in the original order. So we need
+        # stable sort by value, then for each group:
+        # - for min: take the first in sorted order that belongs to the group
+        # - for max: take the last in sorted order that belongs to the group,
+        #   but if there are ties, we need the first in original order
+
+        # This is getting complex. Let's switch to a simpler but still fast approach:
+        # Use the cython group_min/group_max with positions as a proxy.
+
+        # Actually, the cleanest fast approach: iterate through unique groups
+        # but do it in a vectorized way.
+
+        # For proper semantics: use numpy's argmin equivalent per group
+        # We can use scipy or implement a fast version
+
+        # Simple approach: for each group, find the slice and use np.argmin/argmax
+        # This is still much faster than python apply for large data
+
+        # Get unique group ids in order of appearance
+        # We need to know which rows belong to which group
+
+        # Use argsort on ids to group together
+        # Then use reduceat or similar
+
+        # Let's use a more direct numpy approach
+        # First, ensure we handle -1 in ids (dropped groups)
+
+        # Sort by ids to bring same groups together
+        group_order = np.argsort(valid_ids, kind="mergesort")
+        sorted_group_ids = valid_ids[group_order]
+        sorted_positions_in_values = valid_positions[group_order]
+        sorted_values = valid_values[group_order]
+
+        # Find boundaries of each group
+        # unique_ids, start_indices = np.unique(sorted_group_ids, return_index=True)
+        # But we need all ngroups groups, including empty ones
+
+        # Use np.diff to find boundaries
+        if len(sorted_group_ids) > 0:
+            # Use searchsorted approach for finding group boundaries
+            # Actually, find the groups present
+            # For groups not present, leave as NaN
+
+            # Find run starts
+            diff_mask = np.concatenate(([True], sorted_group_ids[1:] != sorted_group_ids[:-1]))
+            run_starts = np.nonzero(diff_mask)[0]
+            run_values = sorted_group_ids[run_starts]
+
+            # For each run (group), find argmin/argmax within that run
+            for i, run_start in enumerate(run_starts):
+                run_end = run_starts[i + 1] if i + 1 < len(run_starts) else len(sorted_group_ids)
+                group_id = run_values[i]
+
+                run_values_slice = sorted_values[run_start:run_end]
+                run_positions = sorted_positions_in_values[run_start:run_end]
+
+                if how == "idxmin":
+                    # Find position of minimum value in this group's slice
+                    # For ties, we want the first occurrence in original array
+                    # Since we sorted by group, not by position, positions are in original order
+                    # Check: run_positions preserves original order within group?
+                    # No, we sorted by group. But within a group, the relative order of
+                    # elements is preserved if we use stable sort - yes, mergesort is stable.
+
+                    # Within the group, we need to find the min by value, with tie-breaking
+                    # by first occurrence. Since mergesort preserves original order,
+                    # we can safely use argmin on the value array.
+
+                    # But note: elements within a group in `sorted_values` are in original order
+                    # because we used stable sort on ids only.
+
+                    # Actually no - we need to be more careful. valid_positions gives
+                    # original positions. Let's use positions to break ties properly.
+
+                    # For min: smallest value, and if tie, smallest original position
+                    min_idx = np.argmin(run_values_slice)
+                    # But for ties, argmin returns the first, which is correct
+                    result_pos = run_positions[min_idx]
+                else:
+                    # For max: largest value, and if tie, smallest original position
+                    # argmax returns first occurrence of max
+                    max_idx = np.argmax(run_values_slice)
+                    result_pos = run_positions[max_idx]
+
+                result[group_id] = obj_index[result_pos]
+                group_seen[group_id] = True
+
+        # For unseen groups, result already has NaN
+
+        return result
+
+    def _idxmax_idxmin_for_1d_python(
+        self,
+        values: ArrayLike,
+        ids: np.ndarray,
+        ngroups: int,
+        how: str,
+        skipna: bool,
+    ) -> np.ndarray:
+        """Fallback python-based computation for non-numeric or complex cases."""
+        obj_index = self.obj.index
+        result = np.empty(ngroups, dtype=object)
+        result.fill(np.nan)
+
+        # Use dict to track group members
+        from collections import defaultdict
+
+        group_members = defaultdict(list)
+        for i, gid in enumerate(ids):
+            if gid >= 0:
+                group_members[gid].append(i)
+
+        for gid, positions in group_members.items():
+            if not positions:
+                continue
+            group_values = values[positions]
+            # Create a temporary Series to use pandas' idxmax/idxmin
+            ser = pd.Series(group_values, index=[obj_index[i] for i in positions])
+            try:
+                if how == "idxmax":
+                    result[gid] = ser.idxmax(skipna=skipna)
+                else:
+                    result[gid] = ser.idxmin(skipna=skipna)
+            except ValueError:
+                # All NA
+                pass
+
+        return result
+[/SEARCH]
+[REPLACE]
+    def _idxmax_idxmin(
+        self,
+        how: Literal["idxmax", "idxmin"],
+        ignore_unobserved: bool = False,
+        axis: Axis | None | lib.NoDefault = lib.no_default,
+        skipna: bool = True,
+        numeric_only: bool = False,
+    ):
+        """Compute idxmax/idxmin.
+
+        Parameters
+        ----------
+        how: {"idxmin", "idxmax"}
+            Whether to compute idxmin or idxmax.
+        axis : {{0 or 'index', 1 or 'columns'}}, default None
+            The axis to use. 0 or 'index' for row-wise, 1 or 'columns' for column-wise.
+            If axis is not provided, grouper's axis is used.
+        numeric_only : bool, default False
+            Include only float, int, boolean columns.
+        skipna : bool, default True
+            Exclude NA/null values. If an entire row/column is NA, the result
+            will be NA.
+        ignore_unobserved : bool, default False
+            When True and an unobserved group is encountered, do not raise. This used
+            for transform where unobserved groups do not play an impact on the result.
+
+        Returns
+        -------
+        Series or DataFrame
+            idxmax or idxmin for the groupby operation.
+        """
+        if axis is not lib.no_default:
+            if axis is None:
+                axis = self.axis
+            axis = self.obj._get_axis_number(axis)
+            self._deprecate_axis(axis, how)
+        else:
+            axis = self.axis
+
+        if not self.observed and any(
+            ping._passed_categorical for ping in self.grouper.groupings
+        ):
+            expected_len = np.prod(
+                [len(ping.group_index) for ping in self.grouper.groupings]
+            )
+            if len(self.grouper.groupings) == 1:
+                result_len = len(self.grouper.groupings[0].grouping_vector.unique())
+            else:
+                # result_index only contains observed groups in this case
+                result_len = len(self.grouper.result_index)
+            assert result_len <= expected_len
+            has_unobserved = result_len < expected_len
+
+            raise_err: bool | np.bool_ = not ignore_unobserved and has_unobserved
+            # Only raise an error if there are columns to compute; otherwise we return
+            # an empty DataFrame with an index (possibly including unobserved) but no
+            # columns
+            data = self._obj_with_exclusions
+            if raise_err and isinstance(data, DataFrame):
+                if numeric_only:
+                    data = data._get_numeric_data()
+                raise_err = len(data.columns) > 0
+        else:
+            raise_err = False
+        if raise_err:
+            raise ValueError(
+                f"Can't get {how} of an empty group due to unobserved categories. "
+                "Specify observed=True in groupby instead."
+            )
+
+        try:
+            if self.obj.ndim == 1:
+                result = self._op_via_apply(how, skipna=skipna)
+            else:
+                # Use a fast path for idxmax/idxmin that avoids the expensive
+                # _python_apply_general when possible. For each column, we can
+                # use the cythonized group_min/group_max on the positional
+                # indices to find the position of the max/min within each group,
+                # then map back to the original index.
+                result = self._idxmax_idxmin_via_cython(how, skipna, numeric_only)
+        except ValueError as err:
+            name = "argmax" if how == "idxmax" else "argmin"
+            if f"attempt to get {name} of an empty sequence" in str(err):
+                raise ValueError(
+                    f"Can't get {how} of an empty group due to unobserved categories. "
+                    "Specify observed=True in groupby instead."
+                ) from None
+            raise
+
+        if not isinstance(result, DataFrame):
+            result = result.astype(self.obj.index.dtype) if result.empty else result
+
+        if not skipna:
+            has_na_value = result.isnull().any(axis=None)
+            if has_na_value:
+                warnings.warn(
+                    f"The behavior of {type(self).__name__}.{how} with all-NA "
+                    "values, or any-NA and skipna=False, is deprecated. In a future "
+                    "version this will raise ValueError",
+                    FutureWarning,
+                    stacklevel=find_stack_level(),
+                )
+
+        return result
+
+    def _idxmax_idxmin_via_cython(
+        self,
+        how: str,
+        skipna: bool,
+        numeric_only: bool,
+    ) -> DataFrame:
+        """
+        Fast path for idxmax/idxmin using cythonized operations.
+
+        This avoids the expensive _python_apply_general path by iterating
+        columns and using vectorized numpy operations per group.
+        """
+        data = self._obj_with_exclusions
+        if numeric_only:
+            data = data._get_numeric_data()
+
+        if data.empty:
+            # Return empty DataFrame with proper index
+            result = data._constructor(
+                index=self.grouper.result_index, columns=data.columns
+            )
+            result = result.rename_axis(self.grouper.names, axis=0)
+            return result
+
+        ids = self.grouper.codes
+        ngroups = self.grouper.ngroups
+        obj_index = self.obj.index
+
+        result_dict: dict[Hashable, np.ndarray] = {}
+        for col in data.columns:
+            values = data[col]._values
+            result_col = self._idxmax_idxmin_for_1d(values, ids, ngroups, how, skipna)
+            result_dict[col] = result_col
+
+        # Construct result DataFrame
+        result = data._constructor(result_dict, index=self.grouper.result_index)
+        result = result.rename_axis(self.grouper.names, axis=0)
+        return result
+
+    def _idxmax_idxmin_for_1d(
+        self,
+        values: ArrayLike,
+        ids: np.ndarray,
+        ngroups: int,
+        how: str,
+        skipna: bool,
+    ) -> np.ndarray:
+        """
+        Compute idxmax/idxmin for a 1D array grouped by ids.
+        Returns an array of index labels for each group.
+        """
+        obj_index = self.obj.index
+
+        # Convert to numpy array for processing
+        if hasattr(values, "to_numpy"):
+            values_arr = values.to_numpy()
+        else:
+            values_arr = np.asarray(values)
+
+        # Check if we can use the fast numpy path
+        dtype = getattr(values_arr, "dtype", None)
+        is_numeric_like = (
+            is_numeric_dtype(dtype)
+            or is_bool_dtype(dtype)
+            or is_datetime64_any_dtype(dtype)
+            or is_timedelta64_dtype(dtype)
+        )
+
+        if not is_numeric_like:
+            return self._idxmax_idxmin_for_1d_python(values, ids, ngroups, how, skipna)
+
+        # Handle NA values
+        mask = isna(values_arr)
+        has_na = mask.any()
+
+        if not skipna and has_na:
+            return self._idxmax_idxmin_for_1d_python(values, ids, ngroups, how, skipna)
+
+        # Filter out NA if needed
+        if skipna and has_na:
+            valid_mask = ~mask
+            if not valid_mask.any():
+                # All NA
+                result = np.empty(ngroups, dtype=object)
+                result.fill(np.nan)
+                return result
+            valid_values = values_arr[valid_mask]
+            valid_ids = ids[valid_mask]
+            valid_positions = np.nonzero(valid_mask)[0]
+        else:
+            valid_values = values_arr
+            valid_ids = ids
+            valid_positions = np.arange(len(values_arr))
+
+        # Filter out dropped groups (ids == -1)
+        if (valid_ids == -1).any():
+            keep = valid_ids != -1
+            valid_values = valid_values[keep]
+            valid_ids = valid_ids[keep]
+            valid_positions = valid_positions[keep]
+
+        if len(valid_values) == 0:
+            result = np.empty(ngroups, dtype=object)
+            result.fill(np.nan)
+            return result
+
+        # Fast path: use argsort to find min/max per group
+        # Sort by group id, then by value
+        if how == "idxmax":
+            # For max, we sort descending by value, but ascending by position for ties
+            # Use negative values for descending sort if numeric
+            if is_numeric_dtype(dtype) or is_bool_dtype(dtype):
+                # For numeric, negate to find max
+                # Handle unsigned by converting to signed
+                if dtype.kind == "b":
+                    sort_values = -valid_values.astype(np.int8)
+                elif dtype.kind == "u":
+                    # Unsigned: can't negate, use separate approach
+                    _max = valid_values.max() if len(valid_values) > 0 else 0
+                    sort_values = _max - valid_values
+                else:
+                    sort_values = -valid_values
+            else:
+                # Datetime-like: use view as int64 and negate
+                sort_values = -valid_values.view("int64")
+        else:
+            # For min, sort ascending by value
+            sort_values = valid_values
+
+        # argsort by (group_id, sort_value) to bring same groups together
+        # and within each group, sort by the value
+        # Use stable sort to preserve order for ties
+        order = np.lexsort((valid_positions, sort_values, valid_ids))
+        # Actually lexsort uses keys in reverse order: sorts by last key first
+        # We want: sort by valid_ids first, then by sort_values, then by valid_positions
+        # So: lexsort((valid_positions, sort_values, valid_ids)) does:
+        #   sort by valid_ids, then sort_values, then valid_positions
+
+        sorted_ids = valid_ids[order]
+        sorted_positions = valid_positions[order]
+
+        # Find the first and last occurrence of each unique group in sorted order
+        # For each group, if how=="idxmin", the first element in the group's
+        # range has the minimum value (due to sort order and stable sort)
+        # If how=="idxmax", same logic applies because we negated values
+
+        # Find group boundaries
+        if len(sorted_ids) == 0:
+            result = np.empty(ngroups, dtype=object)
+            result.fill(np.nan)
+            return result
+
+        # Find unique group ids and their positions
+        # We need to handle all ngroups, including empty ones
+        result = np.empty(ngroups, dtype=object)
+        result.fill(np.nan)
+
+        # Use searchsorted to find group boundaries efficiently
+        # Find where each group starts and ends in sorted_ids
+
+        # Get the observed group ids
+        unique_groups, start_indices = np.unique(sorted_ids, return_index=True)
+
+        # For each unique group, get the relevant element
+        for i, grp in enumerate(unique_groups):
+            start = start_indices[i]
+            end = start_indices[i + 1] if i + 1 < len(start_indices) else len(sorted_ids)
+            # Due to our sort order, start gives the desired element
+            # For min: first element (smallest value, earliest position for ties)
+            # For max: first element after sorting by negated value
+            result_pos = sorted_positions[start]
+            result[grp] = obj_index[result_pos]
+
+            # But we need to verify: for max with negation, does the first element
+            # in the group have the maximum value? Yes, because we sort by negated
+            # value ascending, so the first has most negative = largest original.
+
+        return result
+
+    def _idxmax_idxmin_for_1d_python(
+        self,
+        values: ArrayLike,
+        ids: np.ndarray,
+        ngroups: int,
+        how: str,
+        skipna: bool,
+    ) -> np.ndarray:
+        """Fallback python-based computation for non-numeric or complex cases."""
+        obj_index = self.obj.index
+        result = np.empty(ngroups, dtype=object)
+        result.fill(np.nan)
+
+        # Use dict to track group members
+        from collections import defaultdict
+
+        group_members = defaultdict(list)
+        for i, gid in enumerate(ids):
+            if gid >= 0:
+                group_members[gid].append(i)
+
+        for gid, positions in group_members.items():
+            if not positions:
+                continue
+            group_values = values[positions]
+            # Create a temporary Series to use pandas' idxmax/idxmin
+            idx_values = [obj_index[i] for i in positions]
+            ser = pd.Series(group_values, index=idx_values)
+            try:
+                if how == "idxmax":
+                    result[gid] = ser.idxmax(skipna=skipna)
+                else:
+                    result[gid] = ser.idxmin(skipna=skipna)
+            except ValueError:
+                # All NA
+                pass
+
+        return result
+[/SEARCH]
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+                    result = self._idxmax_idxmin_via_cython(how, skipna, numeric_only)
+        except ValueError as err:
+            name = "argmax" if how == "idxmax" else "argmin"
+            if f"attempt to get {name} of an empty sequence" in str(err):
+                raise ValueError(
+                    f"Can't get {how} of an empty group due to unobserved categories. "
+                    "Specify observed=True in groupby instead."
+                ) from None
+            raise
+
+        if not isinstance(result, DataFrame):
+            result = result.astype(self.obj.index.dtype) if result.empty else result
+[/SEARCH]
+[REPLACE]
+                    result = self._idxmax_idxmin_via_cython(how, skipna, numeric_only)
+        except ValueError as err:
+            name = "argmax" if how == "idxmax" else "argmin"
+            if f"attempt to get {name} of an empty sequence" in str(err):
+                raise ValueError(
+                    f"Can't get {how} of an empty group due to unobserved categories. "
+                    "Specify observed=True in groupby instead."
+                ) from None
+            raise
+
+        if not isinstance(result, DataFrame):
+            result = result.astype(self.obj.index.dtype) if result.empty else result
+[/REPLACE]

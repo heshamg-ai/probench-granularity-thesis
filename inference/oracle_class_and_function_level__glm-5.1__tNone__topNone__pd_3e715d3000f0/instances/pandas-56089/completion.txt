@@ -1,0 +1,49 @@
+pandas/core/reshape/encoding.py
+[SEARCH]
+    # Series avoids inconsistent NaN handling
+    codes, levels = factorize_from_iterable(Series(data, copy=False))
+
+    if dtype is None:
+        dtype = np.dtype(bool)
+    _dtype = pandas_dtype(dtype)
+[/SEARCH]
+[REPLACE]
+    # Series avoids inconsistent NaN handling
+    from pandas.api.types import CategoricalDtype
+
+    if isinstance(data, Series) and isinstance(data.dtype, CategoricalDtype):
+        cat = data.values
+        codes = cat.codes
+        levels = cat.categories
+        if not cat.ordered:
+            codes = codes.copy()
+    else:
+        codes, levels = factorize_from_iterable(Series(data, copy=False))
+
+    if dtype is None:
+        dtype = np.dtype(bool)
+    _dtype = pandas_dtype(dtype)
+[/REPLACE]
+
+pandas/core/reshape/encoding.py
+[SEARCH]
+    if not dummy_na and len(levels) == 0:
+        return get_empty_frame(data)
+
+    codes = codes.copy()
+    if dummy_na:
+[/SEARCH]
+[REPLACE]
+    if not dummy_na and len(levels) == 0:
+        return get_empty_frame(data)
+
+    if isinstance(data, Series) and isinstance(data.dtype, CategoricalDtype):
+        if dummy_na or not data.isna().any():
+            pass
+        else:
+            codes = codes.copy()
+    else:
+        codes = codes.copy()
+
+    if dummy_na:
+[/REPLACE]

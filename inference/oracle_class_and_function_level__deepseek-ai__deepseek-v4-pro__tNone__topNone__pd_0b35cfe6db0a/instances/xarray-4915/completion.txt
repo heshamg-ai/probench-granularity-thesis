@@ -1,0 +1,78 @@
+xarray/core/rolling.py
+[SEARCH]
+    mean = _reduce_method("mean")
+[/SEARCH]
+[REPLACE]
+    mean = _reduce_method("mean")
+
+    def _mean(self, keep_attrs=None, **kwargs):
+        """Rolling mean optimized to reuse sum and count when possible."""
+        keep_attrs = self._get_keep_attrs(keep_attrs)
+
+        if (
+            not is_duck_dask_array(self.obj.data)
+            and len(self.dim) == 1
+            and self.window[0] > 1
+        ):
+            # optimized path: reuse rolling sum and count
+            # This avoids the separate _bottleneck_reduce call on both
+            # sum and count, saving memory and computation.
+            axis = self.obj.get_axis_num(self.dim[0])
+
+            if self.min_periods is not None and self.min_periods == 0:
+                min_count = 1
+            else:
+                min_count = self.min_periods
+
+            padded = self.obj.variable
+            valid = slice(None)
+
+            if self.center[0]:
+                shift = (-self.window[0] // 2) + 1
+                valid = (slice(None),) * axis + (slice(-shift, None),)
+                padded = padded.pad({self.dim[0]: (0, -shift)}, mode="constant")
+
+            # Compute rolling sum via bottleneck (fast C implementation)
+            values = bottleneck.move_sum(
+                padded.data, window=self.window[0], min_count=min_count, axis=axis
+            )
+
+            # Compute rolling count of non-NaN via bottleneck
+            # We create a mask of non-NaN values as float, then sum them.
+            mask = np.isfinite(padded.data)
+            if min_count is not None and min_count > 1:
+                # bottleneck.move_sum requires min_count; we want to count regardless
+                # but still filter later. Use min_count=1 to ensure all windows are
+                # processed, then we apply the threshold ourselves.
+                counts = bottleneck.move_sum(
+                    mask.astype(np.int64), window=self.window[0], min_count=1, axis=axis
+                )
+            else:
+                counts = bottleneck.move_sum(
+                    mask.astype(np.int64), window=self.window[0], min_count=min_count, axis=axis
+                )
+
+            if self.center[0]:
+                values = values[valid]
+                counts = counts[valid]
+
+            # Compute mean
+            with np.errstate(invalid="ignore", divide="ignore"):
+                result = values / counts
+
+            # Apply min_periods threshold: where count < min_periods, set NaN
+            if self.min_periods is not None and self.min_periods > 0:
+                result = np.where(counts >= self.min_periods, result, np.nan)
+
+            from .dataarray import DataArray
+            attrs = self.obj.attrs if keep_attrs else {}
+            return DataArray(result, self.obj.coords, attrs=attrs, name=self.obj.name)
+
+        # Fallback to the generic reduce path
+        return self._numpy_or_bottleneck_reduce(
+            duck_array_ops.mean,
+            bottleneck.move_mean,
+            keep_attrs=keep_attrs,
+            **kwargs,
+        )
+[/REPLACE]

@@ -1,0 +1,45 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        else:
+            return self._constructor._with_infer(
+                joined, name=names[0], dtype=self.dtype
+            )
+[/SEARCH]
+[REPLACE]
+        else:
+            # Fastpath: if the joined result is identical to one of the inputs,
+            # reuse it to preserve caches and avoid object creation.
+            if how != "right":
+                try:
+                    if len(joined) == len(self) and np.array_equal(
+                        np.asarray(joined), np.asarray(self._data)
+                    ):
+                        return self
+                except Exception:
+                    pass
+            else:
+                try:
+                    if len(joined) == len(other) and np.array_equal(
+                        np.asarray(joined), np.asarray(other._data)
+                    ):
+                        return other
+                except Exception:
+                    pass
+            return self._constructor._with_infer(
+                joined, name=names[0], dtype=self.dtype
+            )
+[/REPLACE]
+
+pandas/core/indexes/datetimelike.py
+[SEARCH]
+        result = super()._wrap_joined_index(joined, other, lidx, ridx, how)
+        result._data._freq = self._get_join_freq(other)
+        return result
+[/SEARCH]
+[REPLACE]
+        result = super()._wrap_joined_index(joined, other, lidx, ridx, how)
+        if result is self or result is other:
+            return result
+        result._data._freq = self._get_join_freq(other)
+        return result
+[/REPLACE]

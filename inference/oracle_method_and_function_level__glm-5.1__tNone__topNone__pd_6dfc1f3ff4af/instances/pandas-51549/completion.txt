@@ -1,0 +1,106 @@
+pandas/core/generic.py
+[SEARCH]
+        idxpos = find_valid_index(self._values, how=how, is_valid=~isna(self._values))
+        if idxpos is None:
+            return None
+        return self.index[idxpos]
+[/SEARCH]
+[REPLACE]
+        from pandas.api.types import is_extension_array_dtype
+
+        values = self._values
+        if is_extension_array_dtype(values):
+            idxpos = values._find_valid_index(how=how)
+        else:
+            idxpos = find_valid_index(values, how=how, is_valid=~isna(values))
+        if idxpos is None:
+            return None
+        return self.index[idxpos]
+[/REPLACE]
+
+pandas/core/missing.py
+[SEARCH]
+def find_valid_index(
+    values, *, how: str, is_valid: npt.NDArray[np.bool_]
+) -> int | None:
+    """
+    Retrieves the index of the first valid value.
+
+    Parameters
+    ----------
+    values : ndarray or ExtensionArray
+    how : {'first', 'last'}
+        Use this parameter to change between the first or last valid index.
+    is_valid: np.ndarray
+        Mask to find na_values.
+
+    Returns
+    -------
+    int or None
+    """
+    assert how in ["first", "last"]
+
+    if len(values) == 0:  # early stop
+        return None
+
+    if values.ndim == 2:
+        is_valid = is_valid.any(axis=1)  # reduce axis 1
+
+    if how == "first":
+        idxpos = is_valid[::].argmax()
+
+    elif how == "last":
+        idxpos = len(values) - 1 - is_valid[::-1].argmax()
+
+    chk_notna = is_valid[idxpos]
+
+    if not chk_notna:
+        return None
+    # Incompatible return value type (got "signedinteger[Any]",
+    # expected "Optional[int]")
+    return idxpos  # type: ignore[return-value]
+[/SEARCH]
+[REPLACE]
+def find_valid_index(
+    values, *, how: str, is_valid: npt.NDArray[np.bool_]
+) -> int | None:
+    """
+    Retrieves the index of the first valid value.
+
+    Parameters
+    ----------
+    values : ndarray or ExtensionArray
+    how : {'first', 'last'}
+        Use this parameter to change between the first or last valid index.
+    is_valid: np.ndarray
+        Mask to find na_values.
+
+    Returns
+    -------
+    int or None
+    """
+    assert how in ["first", "last"]
+
+    if len(values) == 0:  # early stop
+        return None
+
+    if hasattr(values, "_find_valid_index"):
+        return values._find_valid_index(how=how)
+
+    if values.ndim == 2:
+        is_valid = is_valid.any(axis=1)  # reduce axis 1
+
+    if how == "first":
+        idxpos = is_valid[::].argmax()
+
+    elif how == "last":
+        idxpos = len(values) - 1 - is_valid[::-1].argmax()
+
+    chk_notna = is_valid[idxpos]
+
+    if not chk_notna:
+        return None
+    # Incompatible return value type (got "signedinteger[Any]",
+    # expected "Optional[int]")
+    return idxpos  # type: ignore[return-value]
+[/REPLACE]

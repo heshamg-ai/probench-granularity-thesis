@@ -1,0 +1,71 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        result_data = []
+        for lst in split.to_pylist():
+            if lst is None:
+                result_data.append([False] * len(uniques_sorted))
+            else:
+                res = pc.is_in(uniques_sorted, pa.array(set(lst)))
+                result_data.append(res.to_pylist())
+        result = type(self)(pa.array(result_data))
+        return result, uniques_sorted.to_pylist()
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        n_unique = len(uniques_sorted)
+
+        # Fast path for empty uniques
+        if n_unique == 0:
+            result = type(self)(pa.array([], type=pa.list_(pa.bool_())))
+            return result, []
+
+        # Build result with vectorized pyarrow operations instead of Python loop
+        lists = split.to_pylist()
+        # Handle nulls by replacing with empty list for null-safe index_in
+        non_null_lists = [lst if lst is not None else [] for lst in lists]
+        # index_in maps each unique value to its position in uniques_sorted
+        index_in = pc.index_in(uniques_sorted, uniques_sorted)
+        # Vectorized lookup: for each element in each list, find its column index
+        col_indices = pc.index_in(split.values, index_in)
+
+        # Build boolean result array
+        flat_result = np.zeros(len(split.values), dtype=np.bool_)
+        valid_indices = pc.is_valid(col_indices)
+        # Valid indices are those where the element was found in uniques_sorted
+        flat_result[np.asarray(valid_indices)] = True
+
+        # Group into list array using offsets from split
+        offsets = np.asarray(split.offsets)
+        result_data = pa.ListArray.from_arrays(
+            pa.array(offsets, type=pa.int32()),
+            pa.array(flat_result),
+        )
+
+        # Handle null rows: null input rows should have all-False output
+        if split.null_count > 0:
+            null_mask = np.asarray(split.is_null())
+            if null_mask.any():
+                # Build the all-False list values for null rows
+                null_offsets = np.where(null_mask)[0]
+                false_list = pa.array([False] * n_unique, type=pa.bool_())
+                null_list_array = pa.ListArray.from_arrays(
+                    pa.array(
+                        [i * n_unique for i in range(len(null_offsets) + 1)],
+                        type=pa.int32(),
+                    ),
+                    false_list,
+                )
+                result_data = pc.replace_with_mask(
+                    result_data, null_mask, null_list_array
+                )
+
+        result = type(self)(result_data)
+        return result, uniques_sorted.to_pylist()
+[/REPLACE]

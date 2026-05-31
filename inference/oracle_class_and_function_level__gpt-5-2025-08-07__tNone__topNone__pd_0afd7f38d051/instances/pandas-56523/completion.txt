@@ -1,0 +1,35 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+    # get left & right join labels and num. of levels at each location
+    mapped = (
+[/SEARCH]
+[REPLACE]
+    # fastpath: single-key monotonic sorted join via Index.join
+    if len(left_keys) == 1 and len(right_keys) == 1:
+        try:
+            from pandas import Index  # local import to avoid circulars at module import
+
+            lidx_obj = Index(extract_array(left_keys[0], extract_numpy=True), copy=False)
+            ridx_obj = Index(extract_array(right_keys[0], extract_numpy=True), copy=False)
+            if (
+                lidx_obj.is_monotonic_increasing
+                and ridx_obj.is_monotonic_increasing
+                and lidx_obj._can_use_libjoin
+                and ridx_obj._can_use_libjoin
+            ):
+                # align with sort semantics (outer is always sorted)
+                join_index, lindexer, rindexer = lidx_obj.join(
+                    ridx_obj, how=how, return_indexers=True, sort=sort or how == "outer"
+                )
+                if lindexer is None:
+                    lindexer = np.arange(len(lidx_obj), dtype=np.intp)
+                if rindexer is None:
+                    rindexer = np.arange(len(ridx_obj), dtype=np.intp)
+                return lindexer, rindexer
+        except Exception:
+            # Fallback to general path on any issue (dtype, comparability, etc.)
+            pass
+
+    # get left & right join labels and num. of levels at each location
+    mapped = (
+[/REPLACE]

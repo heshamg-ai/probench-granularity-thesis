@@ -1,0 +1,91 @@
+xarray/core/dataarray.py
+[SEARCH]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/SEARCH]
+[REPLACE]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+
+        # Fast-path: pure integer indexing over existing dims without attaching
+        # coordinates from indexers. This avoids Dataset round-trip for small arrays.
+        try:
+            if indexers:
+                import numbers
+
+                # Validate dims
+                invalid = set(indexers.keys()) - set(self.dims)
+                if invalid:
+                    raise ValueError("dimensions %r do not exist" % invalid)
+
+                # Normalize possible 0-D numpy arrays to scalars and ensure all ints
+                normalized = {}
+                all_int = True
+                for k, v in indexers.items():
+                    if isinstance(v, np.ndarray) and v.ndim == 0:
+                        v = v.item()
+                    if isinstance(v, numbers.Integral):
+                        normalized[k] = int(v)
+                    else:
+                        all_int = False
+                        break
+
+                if all_int:
+                    # Perform variable indexing
+                    new_var = self.variable.isel(indexers=normalized)
+
+                    # Build coordinates respecting drop semantics
+                    coords = {}
+                    for name, coord in self._coords.items():
+                        coord_dims = set(coord.dims)
+                        intersect = coord_dims & set(normalized.keys())
+                        if not intersect:
+                            coords[name] = coord
+                        else:
+                            if drop:
+                                # drop coordinates variables indexed by integers
+                                continue
+                            # index only over intersecting dims
+                            sub_indexers = {d: normalized[d] for d in intersect}
+                            coords[name] = coord.isel(sub_indexers)
+
+                    # Update indexes: remove any changed (indexed) dims
+                    changed_dims = list(normalized.keys())
+                    indexes = propagate_indexes(self._indexes, exclude=changed_dims)
+
+                    return self._replace(variable=new_var, coords=coords, indexes=indexes)
+        except Exception:
+            # Fallback to the canonical (slower) path on any unexpected edge-case
+            pass
+
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/REPLACE]

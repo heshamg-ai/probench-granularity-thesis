@@ -1,0 +1,61 @@
+Looking at the optimization request, I need to optimize `DataFrame.join` when `sort=True` for left/right joins. The core issue is in `Index._join_monotonic` which is called during the join process. When `sort=True` and we have a left or right join with a unique other index, the result of `_left_indexer_unique` returns the right indexer (which maps left positions to right positions), but the join index is set to `self` (the left index). When sorting is needed later, this left index gets sorted, but the right indexer isn't reordered correspondingly, causing incorrect results.
+
+The fix: when the left index isn't monotonic (i.e., needs sorting), sort it first and compute the right indexer against the already-sorted index. This avoids the downstream sorting issue and produces a correctly ordered result in one pass.
+
+pandas/core/indexes/base.py
+[SEARCH]
+        if how == "left":
+            if other.is_unique:
+                # We can perform much better than the general case
+                join_index = self
+                lidx = None
+                ridx = self._left_indexer_unique(other)
+            else:
+                join_array, lidx, ridx = self._left_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+        elif how == "right":
+            if self.is_unique:
+                # We can perform much better than the general case
+                join_index = other
+                lidx = other._left_indexer_unique(self)
+                ridx = None
+            else:
+                join_array, ridx, lidx = other._left_indexer(self)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+[/SEARCH]
+[REPLACE]
+        if how == "left":
+            if other.is_unique:
+                # We can perform much better than the general case
+                if self.is_monotonic_increasing:
+                    join_index = self
+                    lidx = None
+                    ridx = self._left_indexer_unique(other)
+                else:
+                    # Optimized path for sort=True left joins: sort the left
+                    # index first so the right indexer is already aligned,
+                    # avoiding a separate sort step and its reindexing overhead.
+                    lidx = self.argsort()
+                    join_index = self.take(lidx)
+                    ridx = join_index._left_indexer_unique(other)
+            else:
+                join_array, lidx, ridx = self._left_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+        elif how == "right":
+            if self.is_unique:
+                # We can perform much better than the general case
+                if other.is_monotonic_increasing:
+                    join_index = other
+                    lidx = other._left_indexer_unique(self)
+                    ridx = None
+                else:
+                    # Optimized path for sort=True right joins: sort the right
+                    # index first so the left indexer is already aligned,
+                    # avoiding a separate sort step and its reindexing overhead.
+                    ridx = other.argsort()
+                    join_index = other.take(ridx)
+                    lidx = join_index._left_indexer_unique(self)
+            else:
+                join_array, ridx, lidx = other._left_indexer(self)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+[/REPLACE]

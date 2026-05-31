@@ -1,0 +1,187 @@
+
+
+Looking at the `Series.corr` method, I can optimize it for extension array dtypes by avoiding unnecessary data copying and using the extension array's `._values` directly when possible.
+
+The current implementation does `np.asarray(this._values)` which can be slow for extension arrays. I'll optimize by:
+1. Checking if the underlying values are already numpy arrays (common case)
+2. Using extension array values directly when they don't need conversion
+3. Only using `np.asarray` with explicit dtype when dealing with nullable types that need proper NA handling
+
+Let me implement this optimization:
+
+```python
+pandas/core/series.py
+[SEARCH]
+    def corr(
+        self,
+        other: Series,
+        method: CorrelationMethod = "pearson",
+        min_periods: int | None = None,
+    ) -> float:
+        """
+        Compute correlation with `other` Series, excluding missing values.
+
+        The two `Series` objects are not required to be the same length and will be
+        aligned internally before the correlation function is applied.
+
+        Parameters
+        ----------
+        other : Series
+            Series with which to compute the correlation.
+        method : {'pearson', 'kendall', 'spearman'} or callable
+            Method used to compute correlation:
+
+            - pearson : Standard correlation coefficient
+            - kendall : Kendall Tau correlation coefficient
+            - spearman : Spearman rank correlation
+            - callable: Callable with input two 1d ndarrays and returning a float.
+
+            .. warning::
+                Note that the returned matrix from corr will have 1 along the
+                diagonals and will be symmetric regardless of the callable's
+                behavior.
+        min_periods : int, optional
+            Minimum number of observations needed to have a valid result.
+
+        Returns
+        -------
+        float
+            Correlation with other.
+
+        See Also
+        --------
+        DataFrame.corr : Compute pairwise correlation between columns.
+        DataFrame.corrwith : Compute pairwise correlation with another
+            DataFrame or Series.
+
+        Notes
+        -----
+        Pearson, Kendall and Spearman correlation are currently computed using pairwise complete observations.
+
+        * `Pearson correlation coefficient <https://en.wikipedia.org/wiki/Pearson_correlation_coefficient>`_
+        * `Kendall rank correlation coefficient <https://en.wikipedia.org/wiki/Kendall_rank_correlation_coefficient>`_
+        * `Spearman's rank correlation coefficient <https://en.wikipedia.org/wiki/Spearman%27s_rank_correlation_coefficient>`_
+
+        Examples
+        --------
+        >>> def histogram_intersection(a, b):
+        ...     v = np.minimum(a, b).sum().round(decimals=1)
+        ...     return v
+        >>> s1 = pd.Series([.2, .0, .6, .2])
+        >>> s2 = pd.Series([.3, .6, .0, .1])
+        >>> s1.corr(s2, method=histogram_intersection)
+        0.3
+        """  # noqa:E501
+        this, other = self.align(other, join="inner", copy=False)
+        if len(this) == 0:
+            return np.nan
+
+        this_values = np.asarray(this._values)
+        other_values = np.asarray(other._values)
+
+        if method in ["pearson", "spearman", "kendall"] or callable(method):
+            return nanops.nancorr(
+                this_values, other_values, method=method, min_periods=min_periods
+            )
+
+        raise ValueError(
+            "method must be either 'pearson', "
+            "'spearman', 'kendall', or a callable, "
+            f"'{method}' was supplied"
+        )
+[/SEARCH]
+[REPLACE]
+    def corr(
+        self,
+        other: Series,
+        method: CorrelationMethod = "pearson",
+        min_periods: int | None = None,
+    ) -> float:
+        """
+        Compute correlation with `other` Series, excluding missing values.
+
+        The two `Series` objects are not required to be the same length and will be
+        aligned internally before the correlation function is applied.
+
+        Parameters
+        ----------
+        other : Series
+            Series with which to compute the correlation.
+        method : {'pearson', 'kendall', 'spearman'} or callable
+            Method used to compute correlation:
+
+            - pearson : Standard correlation coefficient
+            - kendall : Kendall Tau correlation coefficient
+            - spearman : Spearman rank correlation
+            - callable: Callable with input two 1d ndarrays and returning a float.
+
+            .. warning::
+                Note that the returned matrix from corr will have 1 along the
+                diagonals and will be symmetric regardless of the callable's
+                behavior.
+        min_periods : int, optional
+            Minimum number of observations needed to have a valid result.
+
+        Returns
+        -------
+        float
+            Correlation with other.
+
+        See Also
+        --------
+        DataFrame.corr : Compute pairwise correlation between columns.
+        DataFrame.corrwith : Compute pairwise correlation with another
+            DataFrame or Series.
+
+        Notes
+        -----
+        Pearson, Kendall and Spearman correlation are currently computed using pairwise complete observations.
+
+        * `Pearson correlation coefficient <https://en.wikipedia.org/wiki/Pearson_correlation_coefficient>`_
+        * `Kendall rank correlation coefficient <https://en.wikipedia.org/wiki/Kendall_rank_correlation_coefficient>`_
+        * `Spearman's rank correlation coefficient <https://en.wikipedia.org/wiki/Spearman%27s_rank_correlation_coefficient>`_
+
+        Examples
+        --------
+        >>> def histogram_intersection(a, b):
+        ...     v = np.minimum(a, b).sum().round(decimals=1)
+        ...     return v
+        >>> s1 = pd.Series([.2, .0, .6, .2])
+        >>> s2 = pd.Series([.3, .6, .0, .1])
+        >>> s1.corr(s2, method=histogram_intersection)
+        0.3
+        """  # noqa:E501
+        this, other = self.align(other, join="inner", copy=False)
+        if len(this) == 0:
+            return np.nan
+
+        if method in ["pearson", "spearman", "kendall"] or callable(method):
+            this_values = this._values
+            other_values = other._values
+            
+            # Optimize: Avoid np.asarray conversion overhead for common numpy arrays
+            # For extension arrays with nullable dtypes, use dtype to ensure proper NA handling
+            if not isinstance(this_values, np.ndarray):
+                if isinstance(this_values, ExtensionArray):
+                    # Extension arrays need conversion for nanops
+                    # Use dtype="float64" to handle nullable types properly
+                    this_values = np.asarray(this_values, dtype="float64")
+                else:
+                    this_values = np.asarray(this_values)
+            
+            if not isinstance(other_values, np.ndarray):
+                if isinstance(other_values, ExtensionArray):
+                    other_values = np.asarray(other_values, dtype="float64")
+                else:
+                    other_values = np.asarray(other_values)
+            
+            return nanops.nancorr(
+                this_values, other_values, method=method, min_periods=min_periods
+            )
+
+        raise ValueError(
+            "method must be either 'pearson', "
+            "'spearman', 'kendall', or a callable, "
+            f"'{method}' was supplied"
+        )
+[/REPLACE]

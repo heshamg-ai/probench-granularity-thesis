@@ -1,0 +1,22 @@
+pandas/core/reshape/encoding.py
+[SEARCH]
+    from pandas.core.reshape.concat import concat
+[/SEARCH]
+[REPLACE]
+    from pandas.core.reshape.concat import concat
+    from pandas.core.dtypes.common import is_categorical_dtype
+[/REPLACE]
+
+pandas/core/reshape/encoding.py
+[SEARCH]
+    codes, levels = factorize_from_iterable(Series(data, copy=False))
+[/SEARCH]
+[REPLACE]
+    # Fastpath for categorical Series to avoid additional factorization overhead
+    if isinstance(data, Series) and is_categorical_dtype(data.dtype):
+        # Preserve category order and include all categories (even if unused)
+        codes = data.array.codes
+        levels = data.dtype.categories
+    else:
+        codes, levels = factorize_from_iterable(Series(data, copy=False))
+[/REPLACE]

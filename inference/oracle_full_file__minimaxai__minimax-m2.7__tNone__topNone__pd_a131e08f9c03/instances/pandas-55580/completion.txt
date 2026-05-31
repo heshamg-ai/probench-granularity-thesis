@@ -1,0 +1,257 @@
+
+
+Looking at the code, the main bottleneck in `merge_asof` with multiple `by` keys is in the `_AsOfMerge._get_join_indexers` method. The `flip` function creates Python tuples from multiple columns, and `ensure_object` wraps them in an object array. This is slow because it creates Python objects for every row.
+
+A more efficient approach is to use `_factorize_keys` directly on the tuple views, which handles the conversion at C level more efficiently.
+
+Let me implement this optimization:
+
+pandas/core/reshape/merge.py
+[SEARCH]
+    def _get_join_indexers(self) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+        """return the join indexers"""
+
+        def flip(xs: list[ArrayLike]) -> np.ndarray:
+            """unlike np.transpose, this returns an array of tuples"""
+
+            def injection(obj: ArrayLike):
+                if not isinstance(obj.dtype, ExtensionDtype):
+                    # ndarray
+                    return obj
+                obj = extract_array(obj)
+                if isinstance(obj, NDArrayBackedExtensionArray):
+                    # fastpath for e.g. dt64tz, categorical
+                    return obj._ndarray
+                # FIXME: returning obj._values_for_argsort() here doesn't
+                #  break in any existing test cases, but i (@jbrockmendel)
+                #  am pretty sure it should!
+                #  e.g.
+                #  arr = pd.array([0, pd.NA, 255], dtype="UInt8")
+                #  will have values_for_argsort (before GH#45434)
+                #  np.array([0, 255, 255], dtype=np.uint8)
+                #  and the non-injectivity should make a difference somehow
+                #  shouldn't it?
+                return np.asarray(obj)
+
+            xs = [injection(x) for x in xs]
+            labels = list(string.ascii_lowercase[: len(xs)])
+            dtypes = [x.dtype for x in xs]
+            labeled_dtypes = list(zip(labels, dtypes))
+            return np.array(list(zip(*xs)), labeled_dtypes)
+
+        # values to compare
+        left_values = (
+            self.left.index._values if self.left_index else self.left_join_keys[-1]
+        )
+        right_values = (
+            self.right.index._values if self.right_index else self.right_join_keys[-1]
+        )
+
+        # _maybe_require_matching_dtypes already checked for dtype matching
+        assert left_values.dtype == right_values.dtype
+
+        tolerance = self.tolerance
+        if tolerance is not None:
+            # TODO: can we reuse a tolerance-conversion function from
+            #  e.g. TimedeltaIndex?
+            if needs_i8_conversion(left_values.dtype):
+                tolerance = Timedelta(tolerance)
+                # TODO: we have no test cases with PeriodDtype here; probably
+                #  need to adjust tolerance for that case.
+                if left_values.dtype.kind in "mM":
+                    # Make sure the i8 representation for tolerance
+                    #  matches that for left_values/right_values.
+                    lvs = ensure_wrapped_if_datetimelike(left_values)
+                    tolerance = tolerance.as_unit(lvs.unit)
+
+                tolerance = tolerance._value
+
+        # initial type conversion as needed
+        left_values = self._convert_values_for_libjoin(left_values, "left")
+        right_values = self._convert_values_for_libjoin(right_values, "right")
+
+        # a "by" parameter requires special handling
+        if self.left_by is not None:
+            # remove 'on' parameter from values if one existed
+            if self.left_index and self.right_index:
+                left_by_values = self.left_join_keys
+                right_by_values = self.right_join_keys
+            else:
+                left_by_values = self.left_join_keys[0:-1]
+                right_by_values = self.right_join_keys[0:-1]
+
+            # get tuple representation of values if more than one
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+            else:
+                # We get here with non-ndarrays in test_merge_by_col_tz_aware
+                #  and test_merge_groupby_multiple_column_with_categorical_column
+                lbv = flip(left_by_values)
+                rbv = flip(right_by_values)
+                lbv = ensure_object(lbv)
+                rbv = ensure_object(rbv)
+
+            # error: Incompatible types in assignment (expression has type
+            # "Union[ndarray[Any, dtype[Any]], ndarray[Any, dtype[object_]]]",
+            # variable has type "List[Union[Union[ExtensionArray,
+            # ndarray[Any, Any]], Index, Series]]")
+            right_by_values = rbv  # type: ignore[assignment]
+            # error: Incompatible types in assignment (expression has type
+            # "Union[ndarray[Any, dtype[Any]], ndarray[Any, dtype[object_]]]",
+            # variable has type "List[Union[Union[ExtensionArray,
+            # ndarray[Any, Any]], Index, Series]]")
+            left_by_values = lbv  # type: ignore[assignment]
+
+            # choose appropriate function by type
+            func = _asof_by_function(self.direction)
+            return func(
+                left_values,
+                right_values,
+                left_by_values,
+                right_by_values,
+                self.allow_exact_matches,
+                tolerance,
+            )
+        else:
+            # choose appropriate function by type
+            func = _asof_by_function(self.direction)
+            return func(
+                left_values,
+                right_values,
+                None,
+                None,
+                self.allow_exact_matches,
+                tolerance,
+                False,
+            )
+[/SEARCH]
+[REPLACE]
+    def _get_join_indexers(self) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+        """return the join indexers"""
+
+        # values to compare
+        left_values = (
+            self.left.index._values if self.left_index else self.left_join_keys[-1]
+        )
+        right_values = (
+            self.right.index._values if self.right_index else self.right_join_keys[-1]
+        )
+
+        # _maybe_require_matching_dtypes already checked for dtype matching
+        assert left_values.dtype == right_values.dtype
+
+        tolerance = self.tolerance
+        if tolerance is not None:
+            # TODO: can we reuse a tolerance-conversion function from
+            #  e.g. TimedeltaIndex?
+            if needs_i8_conversion(left_values.dtype):
+                tolerance = Timedelta(tolerance)
+                # TODO: we have no test cases with PeriodDtype here; probably
+                #  need to adjust tolerance for that case.
+                if left_values.dtype.kind in "mM":
+                    # Make sure the i8 representation for tolerance
+                    #  matches that for left_values/right_values.
+                    lvs = ensure_wrapped_if_datetimelike(left_values)
+                    tolerance = tolerance.as_unit(lvs.unit)
+
+                tolerance = tolerance._value
+
+        # initial type conversion as needed
+        left_values = self._convert_values_for_libjoin(left_values, "left")
+        right_values = self._convert_values_for_libjoin(right_values, "right")
+
+        # a "by" parameter requires special handling
+        if self.left_by is not None:
+            # remove 'on' parameter from values if one existed
+            if self.left_index and self.right_index:
+                left_by_values = self.left_join_keys
+                right_by_values = self.right_join_keys
+            else:
+                left_by_values = self.left_join_keys[0:-1]
+                right_by_values = self.right_join_keys[0:-1]
+
+            # get tuple representation of values if more than one
+            if len(left_by_values) == 1:
+                lbv = left_by_values[0]
+                rbv = right_by_values[0]
+
+                # TODO: conversions for EAs that can be no-copy.
+                lbv = np.asarray(lbv)
+                rbv = np.asarray(rbv)
+            else:
+                # Optimize multiple by columns by factorizing them together
+                # at C level rather than creating Python tuple objects.
+                # This avoids the overhead of ensure_object and tuple creation.
+                left_by_arrays = [np.asarray(a) for a in left_by_values]
+                right_by_arrays = [np.asarray(a) for a in right_by_values]
+
+                # Combine by columns into structured arrays
+                n_left = len(left_by_arrays[0])
+                n_right = len(right_by_arrays[0])
+                n_keys = len(left_by_arrays)
+
+                # Use the same factorize approach for both sides
+                # to get a consistent encoding
+                left_tuples = np.empty(n_left, dtype=object)
+                for i in range(n_keys):
+                    left_tuples[i] = left_by_arrays[i]
+                left_tuples = left_tuples.T
+
+                right_tuples = np.empty(n_right, dtype=object)
+                for i in range(n_keys):
+                    right_tuples[i] = right_by_arrays[i]
+                right_tuples = right_tuples.T
+
+                # Factorize using object dtype (handles heterogeneous types)
+                lbv, _, _ = _factorize_keys(
+                    left_tuples, right_tuples, sort=False, how="inner"
+                )
+
+                # lbv contains codes for left, we need codes for both
+                # Re-factorize to get codes for right too
+                all_tuples = np.concatenate([left_tuples, right_tuples])
+                all_codes, _, _ = _factorize_keys(
+                    all_tuples[:n_left], all_tuples[n_left:], sort=False, how="inner"
+                )
+                lbv = all_codes[:n_left]
+                rbv = all_codes[n_left:]
+
+            # error: Incompatible types in assignment (expression has type
+            # "Union[ndarray[Any, dtype[Any]], ndarray[Any, dtype[object_]]]",
+            # variable has type "List[Union[Union[ExtensionArray,
+            # ndarray[Any, Any]], Index, Series]]")
+            right_by_values = rbv  # type: ignore[assignment]
+            # error: Incompatible types in assignment (expression has type
+            # "Union[ndarray[Any, dtype[Any]], ndarray[Any, dtype[object_]]]",
+            # variable has type "List[Union[Union[ExtensionArray,
+            # ndarray[Any, Any]], Index, Series]]")
+            left_by_values = lbv  # type: ignore[assignment]
+
+            # choose appropriate function by type
+            func = _asof_by_function(self.direction)
+            return func(
+                left_values,
+                right_values,
+                left_by_values,
+                right_by_values,
+                self.allow_exact_matches,
+                tolerance,
+            )
+        else:
+            # choose appropriate function by type
+            func = _asof_by_function(self.direction)
+            return func(
+                left_values,
+                right_values,
+                None,
+                None,
+                self.allow_exact_matches,
+                tolerance,
+                False,
+            )
+[/REPLACE]

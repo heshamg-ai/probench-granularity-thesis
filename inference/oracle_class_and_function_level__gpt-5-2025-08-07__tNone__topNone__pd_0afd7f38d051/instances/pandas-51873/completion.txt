@@ -1,0 +1,53 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+        if verify_integrity:
+            new_codes = self._verify_integrity(levels=new_levels)
+            self._codes = new_codes
+[/SEARCH]
+[REPLACE]
+        if verify_integrity:
+            # Fast-path for partial level updates: validate and remap codes only
+            # for levels that actually changed, avoiding work on unchanged ones.
+            if level is not None:
+                codes = self._codes
+                codes_length = len(codes[0])
+                # Validate only the changed levels
+                for i in level_numbers:
+                    level_idx = new_levels[i]
+                    level_codes = codes[i]
+                    if len(level_codes) != codes_length:
+                        raise ValueError(
+                            f"Unequal code lengths: {[len(code_) for code_ in codes]}"
+                        )
+                    if len(level_codes) and level_codes.max() >= len(level_idx):
+                        raise ValueError(
+                            f"On level {i}, code max ({level_codes.max()}) >= length of "
+                            f"level ({len(level_idx)}). NOTE: this index is in an "
+                            "inconsistent state"
+                        )
+                    if len(level_codes) and level_codes.min() < -1:
+                        raise ValueError(
+                            f"On level {i}, code value ({level_codes.min()}) < -1"
+                        )
+                    if not level_idx.is_unique:
+                        raise ValueError(
+                            f"Level values must be unique: {list(level_idx)} on level {i}"
+                        )
+                if self.sortorder is not None:
+                    if self.sortorder > _lexsort_depth(self.codes, self.nlevels):
+                        raise ValueError(
+                            "Value for sortorder must be inferior or equal to actual "
+                            f"lexsort_depth: sortorder {self.sortorder} "
+                            f"with lexsort_depth {_lexsort_depth(self.codes, self.nlevels)}"
+                        )
+                # Update codes only for changed levels with NA-aware remapping
+                updated_codes_list = list(codes)
+                for i in level_numbers:
+                    updated_codes_list[i] = self._validate_codes(
+                        new_levels[i], updated_codes_list[i]
+                    )
+                self._codes = FrozenList(updated_codes_list)
+            else:
+                new_codes = self._verify_integrity(levels=new_levels)
+                self._codes = new_codes
+[/REPLACE]

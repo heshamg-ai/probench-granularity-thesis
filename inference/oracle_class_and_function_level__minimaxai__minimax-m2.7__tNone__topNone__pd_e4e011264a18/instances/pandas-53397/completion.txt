@@ -1,0 +1,144 @@
+
+
+Looking at the code, I need to optimize `RangeIndex.take` to compute values directly from range parameters instead of materializing the array via `np.arange`.
+
+Let me examine the current `take` method in `Index` and add an optimized override in `RangeIndex`:
+
+pandas/core/indexes/range.py
+[SEARCH]
+    def argsort(self, *args, **kwargs) -> npt.NDArray[np.intp]:
+        """
+        Returns the indices that would sort the index and its
+        underlying data.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+
+        See Also
+        --------
+        numpy.ndarray.argsort
+        """
+        ascending = kwargs.pop("ascending", True)  # EA compat
+        kwargs.pop("kind", None)  # e.g. "mergesort" is irrelevant
+        nv.validate_argsort(args, kwargs)
+
+        if self._range.step > 0:
+            result = np.arange(len(self), dtype=np.intp)
+        else:
+            result = np.arange(len(self) - 1, -1, -1, dtype=np.intp)
+
+        if not ascending:
+            result = result[::-1]
+        return result
+[/SEARCH]
+[REPLACE]
+    def argsort(self, *args, **kwargs) -> npt.NDArray[np.intp]:
+        """
+        Returns the indices that would sort the index and its
+        underlying data.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+
+        See Also
+        --------
+        numpy.ndarray.argsort
+        """
+        ascending = kwargs.pop("ascending", True)  # EA compat
+        kwargs.pop("kind", None)  # e.g. "mergesort" is irrelevant
+        nv.validate_argsort(args, kwargs)
+
+        if self._range.step > 0:
+            result = np.arange(len(self), dtype=np.intp)
+        else:
+            result = np.arange(len(self) - 1, -1, -1, dtype=np.intp)
+
+        if not ascending:
+            result = result[::-1]
+        return result
+
+    def take(
+        self,
+        indices,
+        axis: Axis = 0,
+        allow_fill: bool = True,
+        fill_value=None,
+        **kwargs,
+    ) -> Index:
+        """
+        Return a new Index of the values selected by the indices.
+
+        For internal compatibility with numpy arrays.
+
+        Parameters
+        ----------
+        indices : array-like
+            Indices to be taken.
+        axis : int, optional
+            The axis over which to select values, always 0.
+        allow_fill : bool, default True
+        fill_value : scalar, default None
+            If allow_fill=True and fill_value is not None, indices specified by
+            -1 are regarded as NA. If Index doesn't hold NA, raise ValueError.
+
+        Returns
+        -------
+        Index
+            An index formed of elements at the given indices. Will be the same
+            type as self, except for RangeIndex.
+
+        See Also
+        --------
+        numpy.ndarray.take: Return an array formed from the
+            elements of a at the given indices.
+        """
+        if kwargs:
+            nv.validate_take((), kwargs)
+        if is_scalar(indices):
+            raise TypeError("Expected indices to be array-like")
+        indices = ensure_platform_int(indices)
+
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+
+        if not len(indices):
+            # Early return for empty indexer
+            return self._constructor._simple_new(
+                np.array([], dtype=np.int64), name=self.name
+            )
+
+        if not allow_fill:
+            # Fast path: no fill value needed
+            # Compute result directly from range parameters
+            rng = self._range
+            result = np.empty(len(indices), dtype=np.int64)
+            for i, idx in enumerate(indices):
+                result[i] = rng.start + idx * rng.step
+            return self._constructor._simple_new(result, name=self.name)
+
+        # Handle fill value case
+        na_mask = indices == -1
+        if not na_mask.any():
+            # No -1 indices, fast path
+            rng = self._range
+            result = np.empty(len(indices), dtype=np.int64)
+            for i, idx in enumerate(indices):
+                result[i] = rng.start + idx * rng.step
+            return self._constructor._simple_new(result, name=self.name)
+
+        # Has -1 indices, need to handle fill_value
+        if fill_value is None:
+            # Use default NA value
+            fill_value = self._na_value
+
+        rng = self._range
+        result = np.empty(len(indices), dtype=np.float64)
+        for i, idx in enumerate(indices):
+            if idx == -1:
+                result[i] = fill_value
+            else:
+                result[i] = rng.start + idx * rng.step
+
+        return self._constructor._simple_new(result, name=self.name)
+[/REPLACE]

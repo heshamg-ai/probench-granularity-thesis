@@ -1,0 +1,29 @@
+sklearn/linear_model/_quantile.py
+[SEARCH]
+        else:
+            eye = np.eye(n_indices)
+            if self.fit_intercept:
+                ones = np.ones((n_indices, 1))
+                A_eq = np.concatenate([ones, X, -ones, -X, eye, -eye], axis=1)
+            else:
+                A_eq = np.concatenate([X, -X, eye, -eye], axis=1)
+[/SEARCH]
+[REPLACE]
+        else:
+            if self.solver in ("highs-ds", "highs-ipm", "highs"):
+                # Build a sparse constraint matrix for highs-family solvers even when X is dense
+                X_csc = sparse.csc_matrix(X)
+                eye = sparse.eye(n_indices, dtype=X_csc.dtype, format="csc")
+                if self.fit_intercept:
+                    ones = sparse.csc_matrix(np.ones((n_indices, 1), dtype=X_csc.dtype))
+                    A_eq = sparse.hstack([ones, X_csc, -ones, -X_csc, eye, -eye], format="csc")
+                else:
+                    A_eq = sparse.hstack([X_csc, -X_csc, eye, -eye], format="csc")
+            else:
+                eye = np.eye(n_indices)
+                if self.fit_intercept:
+                    ones = np.ones((n_indices, 1))
+                    A_eq = np.concatenate([ones, X, -ones, -X, eye, -eye], axis=1)
+                else:
+                    A_eq = np.concatenate([X, -X, eye, -eye], axis=1)
+[/REPLACE]

@@ -1,0 +1,88 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+        if all(
+            (isinstance(o, MultiIndex) and o.nlevels >= self.nlevels) for o in other
+        ):
+            arrays, names = [], []
+            for i in range(self.nlevels):
+                label = self._get_level_values(i)
+                appended = [o._get_level_values(i) for o in other]
+                arrays.append(label.append(appended))
+                single_label_name = all(label.name == x.name for x in appended)
+                names.append(label.name if single_label_name else None)
+            return MultiIndex.from_arrays(arrays, names=names)
+[/SEARCH]
+[REPLACE]
+        if all(
+            (isinstance(o, MultiIndex) and o.nlevels >= self.nlevels) for o in other
+        ):
+            # Optimized path: directly concatenate codes and re-map to unified
+            # levels, avoiding expensive round-trips through _get_level_values
+            # and Index.append which re-factorize each level independently.
+            new_levels = []
+            new_codes = []
+            names = []
+
+            for i in range(self.nlevels):
+                lev = self.levels[i]
+                level_codes = self.codes[i]
+                lev_name = self._names[i]
+
+                # Accumulate level, codes, and name from each 'other' MultiIndex
+                others_lev = []
+                others_codes = []
+                others_name = []
+                for o in other:
+                    others_lev.append(o.levels[i])
+                    others_codes.append(o.codes[i])
+                    others_name.append(o._names[i])
+
+                # Create a unified level by taking the union of all levels
+                # This preserves self.levels ordering and appends new values
+                # from others, exactly matching the factorization result from
+                # _get_level_values -> Index.append
+                combined_lev = lev
+                for o_lev in others_lev:
+                    combined_lev = combined_lev.union(o_lev, sort=False)
+
+                # Remap self's codes into the combined level
+                if combined_lev is lev:
+                    # Fast path: no new values in others, combined_lev is the
+                    # exact same object
+                    combined_codes = [level_codes]
+                else:
+                    indexer = lev.get_indexer_for(combined_lev)
+                    combined_codes = [indexer[level_codes]]
+
+                # Remap each other's codes into the combined level
+                for o_lev, o_codes in zip(others_lev, others_codes):
+                    if o_lev is combined_lev:
+                        # Fast path: exact same level object
+                        combined_codes.append(o_codes)
+                    elif o_lev.equals(combined_lev):
+                        # Fast path: semantically equal levels
+                        combined_codes.append(o_codes)
+                    elif len(combined_lev) == len(lev) and combined_lev.equals(lev):
+                        # combined_lev collapsed back to just lev
+                        indexer = lev.get_indexer_for(combined_lev)
+                        combined_codes.append(indexer[o_codes])
+                    else:
+                        indexer = o_lev.get_indexer_for(combined_lev)
+                        combined_codes.append(indexer[o_codes])
+
+                new_levels.append(combined_lev)
+                new_codes.append(np.concatenate(combined_codes))
+
+                # Name resolution: preserve name only if all indices agree
+                single_label_name = lev_name == others_name[0] and all(
+                    lev_name == n for n in others_name[1:]
+                )
+                names.append(lev_name if single_label_name else None)
+
+            return MultiIndex(
+                levels=new_levels,
+                codes=new_codes,
+                names=names,
+                verify_integrity=False,
+            )
+[/REPLACE]

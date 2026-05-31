@@ -1,0 +1,21 @@
+
+
+I need to look at the DataFrameGroupBy.apply implementation to understand the optimization opportunities. Let me search for the relevant code.
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+    def apply(self, func, *args, **kwargs) -> DataFrame | Series:
+        obj = self._obj_with_exclusions
+        result = self._grouper._op_via_applypy(
+            obj, func, keys=self._grouper.keys, axis=self.axis
+        )
+        return result
+[/SEARCH]
+[REPLACE]
+    def apply(self, func, *args, **kwargs) -> DataFrame | Series:
+        obj = self._obj_with_exclusions
+        result = self._grouper._op_via_applypy(
+            obj, func, keys=self._grouper.keys, axis=self.axis
+        )
+        return result
+[/REPLACE]

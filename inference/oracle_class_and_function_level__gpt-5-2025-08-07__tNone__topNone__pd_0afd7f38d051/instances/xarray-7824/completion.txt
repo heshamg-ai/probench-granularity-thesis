@@ -1,0 +1,58 @@
+xarray/core/concat.py
+[SEARCH]
+    if variables_to_merge:
+        grouped = {
+            k: v
+            for k, v in collect_variables_and_indexes(list(datasets)).items()
+            if k in variables_to_merge
+        }
+        merged_vars, merged_indexes = merge_collected(
+            grouped, compat=compat, equals=equals
+        )
+        result_vars.update(merged_vars)
+        result_indexes.update(merged_indexes)
+[/SEARCH]
+[REPLACE]
+    if variables_to_merge:
+        # Build grouped elements only for variables that need to be merged to avoid collecting all variables.
+        grouped: dict[Hashable, list[tuple[Variable, Index | None]]] = {}
+        for name in variables_to_merge:
+            elements: list[tuple[Variable, Index | None]] = []
+            for ds in datasets:
+                var = ds._variables.get(name)
+                if var is not None:
+                    elements.append((var, ds._indexes.get(name)))
+            if elements:
+                grouped[name] = elements
+        merged_vars, merged_indexes = merge_collected(
+            grouped, compat=compat, equals=equals
+        )
+        result_vars.update(merged_vars)
+        result_indexes.update(merged_indexes)
+[/REPLACE]
+
+xarray/core/concat.py
+[SEARCH]
+    # create concatenation index, needed for later reindexing
+    concat_index = list(range(sum(concat_dim_lengths)))
+[/SEARCH]
+[REPLACE]
+    # cache set of all index coordinate names across datasets for quick lookup
+    index_name_candidates = set()
+    for _ds in datasets:
+        index_name_candidates.update(_ds._indexes.keys())
+    # create concatenation index, needed for later reindexing
+    concat_index = np.arange(sum(concat_dim_lengths))
+[/REPLACE]
+
+xarray/core/concat.py
+[SEARCH]
+            indexes: list[Index] = list(get_indexes(name))
+[/SEARCH]
+[REPLACE]
+            indexes: list[Index]
+            if (name in index_name_candidates) or (name == dim):
+                indexes = list(get_indexes(name))
+            else:
+                indexes = []
+[/REPLACE]

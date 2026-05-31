@@ -1,0 +1,64 @@
+
+
+Let me first search for the `join` method in the pandas codebase to understand its implementation better.
+
+After analyzing the code, I can see that the `Index.join` method delegates to `_join_monotonic` for the common case, and `_wrap_joined_index` is responsible for creating the result. The optimization opportunity is to check if the joined result is identical to one of the inputs before constructing a new Index object.
+
+Let me implement the optimization:
+
+pandas/core/indexes/base.py
+[SEARCH]
+    def _wrap_joined_index(
+        self,
+        joined: ArrayLike,
+        other: Self,
+        lidx: npt.NDArray[np.intp],
+        ridx: npt.NDArray[np.intp],
+        how: JoinHow,
+    ) -> Self:
+        assert other.dtype == self.dtype
+        names = other.names if how == "right" else self.names
+        if isinstance(self, ABCMultiIndex):
+            # error: Incompatible return value type (got "MultiIndex",
+            # expected "Self")
+            mask = lidx == -1
+            join_idx = self.take(lidx)
+            right = cast("MultiIndex", other.take(ridx))
+            join_index = join_idx.putmask(mask, right)._sort_levels_monotonic()
+            return join_index.set_names(names)  # type: ignore[return-value]
+        else:
+            return self._constructor._with_infer(
+                joined, name=names[0], dtype=self.dtype
+            )
+[/SEARCH]
+[REPLACE]
+    def _wrap_joined_index(
+        self,
+        joined: ArrayLike,
+        other: Self,
+        lidx: npt.NDArray[np.intp],
+        ridx: npt.NDArray[np.intp],
+        how: JoinHow,
+    ) -> Self:
+        assert other.dtype == self.dtype
+        names = other.names if how == "right" else self.names
+        if isinstance(self, ABCMultiIndex):
+            # error: Incompatible return value type (got "MultiIndex",
+            # expected "Self")
+            mask = lidx == -1
+            join_idx = self.take(lidx)
+            right = cast("MultiIndex", other.take(ridx))
+            join_index = join_idx.putmask(mask, right)._sort_levels_monotonic()
+            return join_index.set_names(names)  # type: ignore[return-value]
+        else:
+            # Check if the joined result is identical to one of the inputs
+            # to reuse cached attributes and avoid creating a new Index object
+            if isinstance(joined, Index):
+                if names == self.names and joined.equals(self):
+                    return self
+                if names == other.names and joined.equals(other):
+                    return other
+            return self._constructor._with_infer(
+                joined, name=names[0], dtype=self.dtype
+            )
+[/REPLACE]

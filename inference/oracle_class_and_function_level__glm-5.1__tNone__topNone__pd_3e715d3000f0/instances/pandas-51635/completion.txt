@@ -1,0 +1,38 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    @doc(ExtensionArray.fillna)
+    def fillna(
+        self,
+        value: object | ArrayLike | None = None,
+        method: FillnaOptions | None = None,
+        limit: int | None = None,
+    ) -> Self:
+        value, method = validate_fillna_kwargs(value, method)
+
+        if limit is not None:
+            return super().fillna(value=value, method=method, limit=limit)
+
+        if method is not None:
+            fallback_performancewarning()
+            return super().fillna(value=value, method=method, limit=limit)
+[/SEARCH]
+[REPLACE]
+    @doc(ExtensionArray.fillna)
+    def fillna(
+        self,
+        value: object | ArrayLike | None = None,
+        method: FillnaOptions | None = None,
+        limit: int | None = None,
+    ) -> Self:
+        value, method = validate_fillna_kwargs(value, method)
+
+        if limit is not None:
+            return super().fillna(value=value, method=method, limit=limit)
+
+        if method is not None:
+            fallback_performancewarning()
+            return super().fillna(value=value, method=method, limit=limit)
+
+        if not self._hasna:
+            return self.copy()
+[/REPLACE]

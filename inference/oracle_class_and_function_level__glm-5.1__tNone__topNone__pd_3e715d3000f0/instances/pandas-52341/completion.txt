@@ -1,0 +1,115 @@
+pandas/core/nanops.py
+[SEARCH]
+def nanany(
+    values: np.ndarray,
+    *,
+    axis: AxisInt | None = None,
+    skipna: bool = True,
+    mask: npt.NDArray[np.bool_] | None = None,
+) -> bool:
+    """
+    Check if any elements along an axis evaluate to True.
+
+    Parameters
+    ----------
+    values : ndarray
+    axis : int, optional
+    skipna : bool, default True
+    mask : ndarray[bool], optional
+        nan-mask if known
+
+    Returns
+    -------
+    result : bool
+
+    Examples
+    --------
+    >>> from pandas.core import nanops
+    >>> s = pd.Series([1, 2])
+    >>> nanops.nanany(s.values)
+    True
+
+    >>> from pandas.core import nanops
+    >>> s = pd.Series([np.nan])
+    >>> nanops.nanany(s.values)
+    False
+    """
+    if needs_i8_conversion(values.dtype) and values.dtype.kind != "m":
+        # GH#34479
+        warnings.warn(
+            "'any' with datetime64 dtypes is deprecated and will raise in a "
+            "future version. Use (obj != pd.Timestamp(0)).any() instead.",
+            FutureWarning,
+            stacklevel=find_stack_level(),
+        )
+
+    values, _, _, _, _ = _get_values(values, skipna, fill_value=False, mask=mask)
+
+    # For object type, any won't necessarily return
+    # boolean values (numpy/numpy#4352)
+    if is_object_dtype(values):
+        values = values.astype(bool)
+
+    # error: Incompatible return value type (got "Union[bool_, ndarray]", expected
+    # "bool")
+    return values.any(axis)  # type: ignore[return-value]
+[/SEARCH]
+[REPLACE]
+def nanany(
+    values: np.ndarray,
+    *,
+    axis: AxisInt | None = None,
+    skipna: bool = True,
+    mask: npt.NDArray[np.bool_] | None = None,
+) -> bool:
+    """
+    Check if any elements along an axis evaluate to True.
+
+    Parameters
+    ----------
+    values : ndarray
+    axis : int, optional
+    skipna : bool, default True
+    mask : ndarray[bool], optional
+        nan-mask if known
+
+    Returns
+    -------
+    result : bool
+
+    Examples
+    --------
+    >>> from pandas.core import nanops
+    >>> s = pd.Series([1, 2])
+    >>> nanops.nanany(s.values)
+    True
+
+    >>> from pandas.core import nanops
+    >>> s = pd.Series([np.nan])
+    >>> nanops.nanany(s.values)
+    False
+    """
+    if needs_i8_conversion(values.dtype) and values.dtype.kind != "m":
+        # GH#34479
+        warnings.warn(
+            "'any' with datetime64 dtypes is deprecated and will raise in a "
+            "future version. Use (obj != pd.Timestamp(0)).any() instead.",
+            FutureWarning,
+            stacklevel=find_stack_level(),
+        )
+
+    # Fast path for boolean dtype with skipna=True and no precomputed mask
+    if skipna and is_bool_dtype(values.dtype) and mask is None and axis is None:
+        return values.any()
+
+    values, _, _, _, _ = _get_values(values, skipna, fill_value=False, mask=mask)
+
+    # For object type, any won't necessarily return
+    # boolean values (numpy/numpy#4352)
+    if is_object_dtype(values):
+        values = values.astype(bool)
+
+    # error: Incompatible return value type (got "Union[bool_, ndarray]", expected
+    # "bool")
+    return values.any(axis)  # type: ignore[return-value]
+[/REPLACE]

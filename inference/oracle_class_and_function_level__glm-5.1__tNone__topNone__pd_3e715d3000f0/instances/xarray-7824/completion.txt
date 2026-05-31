@@ -1,0 +1,88 @@
+xarray/core/concat.py
+[SEARCH]
+    # we've already verified everything is consistent; now, calculate
+    # shared dimension sizes so we can expand the necessary variables
+    def ensure_common_dims(vars, concat_dim_lengths):
+        # ensure each variable with the given name shares the same
+        # dimensions and the same shape for all of them except along the
+        # concat dimension
+        common_dims = tuple(pd.unique([d for v in vars for d in v.dims]))
+        if dim not in common_dims:
+            common_dims = (dim,) + common_dims
+        for var, dim_len in zip(vars, concat_dim_lengths):
+            if var.dims != common_dims:
+                common_shape = tuple(dims_sizes.get(d, dim_len) for d in common_dims)
+                var = var.set_dims(common_dims, common_shape)
+            yield var
+[/SEARCH]
+[REPLACE]
+    # we've already verified everything is consistent; now, calculate
+    # shared dimension sizes so we can expand the necessary variables
+    def ensure_common_dims(vars, concat_dim_lengths):
+        # ensure each variable with the given name shares the same
+        # dimensions and the same shape for all of them except along the
+        # concat dimension
+        common_dims = tuple(dict.fromkeys(d for v in vars for d in v.dims))
+        if dim not in common_dims:
+            common_dims = (dim,) + common_dims
+        for var, dim_len in zip(vars, concat_dim_lengths):
+            if var.dims != common_dims:
+                common_shape = tuple(dims_sizes.get(d, dim_len) for d in common_dims)
+                var = var.set_dims(common_dims, common_shape)
+            yield var
+[/REPLACE]
+
+xarray/core/concat.py
+[SEARCH]
+    # stack up each variable and/or index to fill-out the dataset (in order)
+    # n.b. this loop preserves variable order, needed for groupby.
+    for name in vars_order:
+        if name in concat_over and name not in result_indexes:
+            variables = []
+            variable_index = []
+            var_concat_dim_length = []
+            for i, ds in enumerate(datasets):
+                if name in ds.variables:
+                    variables.append(ds[name].variable)
+                    # add to variable index, needed for reindexing
+                    var_idx = [
+                        sum(concat_dim_lengths[:i]) + k
+                        for k in range(concat_dim_lengths[i])
+                    ]
+                    variable_index.extend(var_idx)
+                    var_concat_dim_length.append(len(var_idx))
+                else:
+                    # raise if coordinate not in all datasets
+                    if name in coord_names:
+                        raise ValueError(
+                            f"coordinate {name!r} not present in all datasets."
+                        )
+            vars = ensure_common_dims(variables, var_concat_dim_length)
+[/SEARCH]
+[REPLACE]
+    # stack up each variable and/or index to fill-out the dataset (in order)
+    # n.b. this loop preserves variable order, needed for groupby.
+    for name in vars_order:
+        if name in concat_over and name not in result_indexes:
+            variables = []
+            variable_index = []
+            var_concat_dim_length = []
+            cumulative_offset = 0
+            for i, ds in enumerate(datasets):
+                if name in ds.variables:
+                    variables.append(ds[name].variable)
+                    # add to variable index, needed for reindexing
+                    dim_len = concat_dim_lengths[i]
+                    variable_index.extend(
+                        range(cumulative_offset, cumulative_offset + dim_len)
+                    )
+                    var_concat_dim_length.append(dim_len)
+                    cumulative_offset += dim_len
+                else:
+                    # raise if coordinate not in all datasets
+                    if name in coord_names:
+                        raise ValueError(
+                            f"coordinate {name!r} not present in all datasets."
+                        )
+            vars = ensure_common_dims(variables, var_concat_dim_length)
+[/REPLACE]

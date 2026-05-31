@@ -1,0 +1,96 @@
+
+
+I'll analyze the code and implement an optimization for `DataArray.isel` when indexed by integers on small arrays. The main optimization is to avoid the overhead of converting to/from temporary datasets when we have simple integer indexers.
+
+Let me look at the relevant helper functions first:
+
+```python
+xarray/core/dataarray.py
+[SEARCH]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/SEARCH]
+[REPLACE]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+
+        # Fast path for simple integer indexers (avoids Dataset conversion overhead)
+        # This is especially beneficial for small arrays
+        if _is_list_like(indexers):
+            # Check if all indexers are integers (or slices) - basic types only
+            all_basic = True
+            for k, v in indexers:
+                if not isinstance(v, (int, np.integer)) and not isinstance(v, slice):
+                    all_basic = False
+                    break
+            if all_basic:
+                # Fast path: direct variable indexing
+                from .variable import Variable
+
+                # Validate and prepare indexers
+                validated_indexers = {}
+                for dim, idx in indexers:
+                    if dim not in self.dims:
+                        raise ValueError(f"Dimension {dim} not found in data")
+                    dim_len = self.sizes[dim]
+                    if isinstance(idx, (int, np.integer)):
+                        idx = int(idx)
+                        if idx < -dim_len or idx >= dim_len:
+                            raise IndexError(
+                                f"Index {idx} out of bounds for dimension {dim} with size {dim_len}"
+                            )
+                    validated_indexers[dim] = idx
+
+                # Create new variable with indexed data
+                new_var = self.variable.isel(indexers=validated_indexers)
+
+                # Build new coords, dropping indexed dims if requested
+                new_coords = {}
+                for name, coord in self.coords.items():
+                    coord_dims = coord.dims
+                    # Check if any dims of this coord are being indexed
+                    indexed_dims = set(validated_indexers.keys())
+                    coord_indexed_dims = coord_dims & indexed_dims
+                    if drop and coord_indexed_dims:
+                        continue  # drop this coordinate
+                    new_coords[name] = coord
+
+                return DataArray(
+                    data=new_var,
+                    coords=new_coords,
+                    name=self.name,
+                    fastpath=True,
+                )
+
+        # Standard path via temporary dataset
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/REPLACE]

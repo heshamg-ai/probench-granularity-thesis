@@ -1,0 +1,22 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        elif self._hasna:
+            data = self.copy()
+            data[self.isna()] = na_value
+            return np.asarray(data._pa_array, dtype=dtype)
+[/SEARCH]
+[REPLACE]
+        elif self._hasna:
+            if (
+                dtype is not None
+                and not is_object_dtype(dtype)
+                and isna(na_value)
+                and is_float_dtype(dtype)
+            ):
+                result = np.asarray(self._pa_array, dtype=dtype)
+                result[~self.isna()] = np.asarray(self.dropna()._pa_array, dtype=dtype)
+                return result
+            data = self.copy()
+            data[self.isna()] = na_value
+            return np.asarray(data._pa_array, dtype=dtype)
+[/REPLACE]

@@ -1,0 +1,30 @@
+pandas/core/reshape/reshape.py
+[SEARCH]
+    buf = []
+[/SEARCH]
+[REPLACE]
+    # Fastpath for single-level columns when stacking all column levels:
+    # avoids label-based indexing and per-label .loc selection
+    if (
+        not isinstance(frame.columns, MultiIndex)
+        and len(level) == frame.columns.nlevels
+        and frame.columns.nlevels == 1
+        and 0 in set_levels
+        and frame.columns.is_unique
+    ):
+        if frame.empty:
+            result = DataFrame(columns=[0], dtype=frame._values.dtype)
+            return result
+        ncols = len(frame.columns)
+        if ncols == 1:
+            data = frame.iloc[:, 0]
+            data.name = 0
+            return data
+        else:
+            arr = [frame.iloc[:, i] for i in range(ncols)]
+            for s in arr:
+                s.name = 0
+            result = concat(arr, ignore_index=True)
+            return result
+    buf = []
+[/REPLACE]

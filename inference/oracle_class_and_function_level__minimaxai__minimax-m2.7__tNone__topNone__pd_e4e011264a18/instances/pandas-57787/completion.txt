@@ -1,0 +1,142 @@
+
+
+Looking at the code, the `categories` property simply returns `self._dtype.categories`. To optimize this to return a `RangeIndex` when possible (when categories are consecutive integers starting from 0), I need to:
+
+1. Add the `RangeIndex` import
+2. Modify the `categories` property to check if the categories form a consecutive sequence and return a `RangeIndex` in that case
+
+Let me make these changes:
+
+pandas/core/arrays/categorical.py
+[SEARCH]
+    @property
+    def categories(self) -> Index:
+        """
+        The categories of this categorical.
+
+        Setting assigns new values to each category (effectively a rename of
+        each individual category).
+
+        The assigned value has to be a list-like object. All items must be
+        unique and the number of items in the new categories must be the same
+        as the number of items in the old categories.
+
+        Raises
+        ------
+        ValueError
+            If the new categories do not validate as categories or if the
+            number of new categories is unequal the number of old categories
+
+        See Also
+        --------
+        rename_categories : Rename categories.
+        reorder_categories : Reorder categories.
+        add_categories : Add new categories.
+        remove_categories : Remove the specified categories.
+        remove_unused_categories : Remove categories which are not used.
+        set_categories : Set the categories to the specified ones.
+
+        Examples
+        --------
+        For :class:`pandas.Series`:
+
+        >>> ser = pd.Series(["a", "b", "c", "a"], dtype="category")
+        >>> ser.cat.categories
+        Index(['a', 'b', 'c'], dtype='object')
+
+        >>> raw_cat = pd.Categorical(["a", "b", "c", "a"], categories=["b", "c", "d"])
+        >>> ser = pd.Series(raw_cat)
+        >>> ser.cat.categories
+        Index(['b', 'c', 'd'], dtype='object')
+
+        For :class:`pandas.Categorical`:
+
+        >>> cat = pd.Categorical(["a", "b"], ordered=True)
+        >>> cat.categories
+        Index(['a', 'b'], dtype='object')
+
+        For :class:`pandas.CategoricalIndex`:
+
+        >>> ci = pd.CategoricalIndex(["a", "c", "b", "a", "c", "b"])
+        >>> ci.categories
+        Index(['a', 'b', 'c'], dtype='object')
+
+        >>> ci = pd.CategoricalIndex(["a", "c"], categories=["c", "b", "a"])
+        >>> ci.categories
+        Index(['c', 'b', 'a'], dtype='object')
+        """
+        return self.dtype.categories
+[/SEARCH]
+[REPLACE]
+    @property
+    def categories(self) -> Index:
+        """
+        The categories of this categorical.
+
+        Setting assigns new values to each category (effectively a rename of
+        each individual category).
+
+        The assigned value has to be a list-like object. All items must be
+        unique and the number of items in the new categories must be the same
+        as the number of items in the old categories.
+
+        Raises
+        ------
+        ValueError
+            If the new categories do not validate as categories or if the
+            number of new categories is unequal the number of old categories
+
+        See Also
+        --------
+        rename_categories : Rename categories.
+        reorder_categories : Reorder categories.
+        add_categories : Add new categories.
+        remove_categories : Remove the specified categories.
+        remove_unused_categories : Remove categories which are not used.
+        set_categories : Set the categories to the specified ones.
+
+        Examples
+        --------
+        For :class:`pandas.Series`:
+
+        >>> ser = pd.Series(["a", "b", "c", "a"], dtype="category")
+        >>> ser.cat.categories
+        Index(['a', 'b', 'c'], dtype='object')
+
+        >>> raw_cat = pd.Categorical(["a", "b", "c", "a"], categories=["b", "c", "d"])
+        >>> ser = pd.Series(raw_cat)
+        >>> ser.cat.categories
+        Index(['b', 'c', 'd'], dtype='object')
+
+        For :class:`pandas.Categorical`:
+
+        >>> cat = pd.Categorical(["a", "b"], ordered=True)
+        >>> cat.categories
+        Index(['a', 'b'], dtype='object')
+
+        For :class:`pandas.CategoricalIndex`:
+
+        >>> ci = pd.CategoricalIndex(["a", "c", "b", "a", "c", "b"])
+        >>> ci.categories
+        Index(['a', 'b', 'c'], dtype='object')
+
+        >>> ci = pd.CategoricalIndex(["a", "c"], categories=["c", "b", "a"])
+        >>> ci.categories
+        Index(['c', 'b', 'a'], dtype='object')
+        """
+        cats = self.dtype.categories
+        if len(cats) == 0:
+            return cats
+        if isinstance(cats, RangeIndex):
+            return cats
+        try:
+            start = cats[0]
+            step = 1 if len(cats) == 1 else int(cats[1]) - int(cats[0])
+            stop = int(cats[-1]) + 1
+            expected = np.arange(start, stop, step)
+            if np.array_equal(cats._values, expected):
+                return RangeIndex(start=start, stop=stop, step=step)
+        except (TypeError, ValueError):
+            pass
+        return cats
+[/REPLACE]

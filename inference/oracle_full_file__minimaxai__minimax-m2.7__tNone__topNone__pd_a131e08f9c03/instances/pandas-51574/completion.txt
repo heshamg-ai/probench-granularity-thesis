@@ -1,0 +1,55 @@
+
+
+Looking at this optimization request, I need to find the `_where` method in pandas and optimize it for ExtensionArray-backed DataFrame conditions. Let me analyze the code and find the relevant section.
+
+The key optimization opportunity is in the boolean dtype validation loop for ExtensionArray-backed DataFrames. Currently it iterates through each column's dtype individually, but we can optimize by checking if all columns are ExtensionArrays first.
+
+Let me find the exact section to optimize:
+
+Looking at the code, the optimization can be made in the `_where` method where it checks if all dtypes are boolean for the condition DataFrame. The current implementation iterates through each dtype individually, but we can use a more efficient check for ExtensionArray-backed DataFrames.
+
+The change would be to optimize the dtype checking when we have an ExtensionArray-backed condition DataFrame. Here's the optimization:
+
+pandas/core/generic.py
+[SEARCH]
+        msg = "Boolean array expected for the condition, not {dtype}"
+
+        if not cond.empty:
+            if not isinstance(cond, ABCDataFrame):
+                # This is a single-dimensional object.
+                if not is_bool_dtype(cond):
+                    raise ValueError(msg.format(dtype=cond.dtype))
+            else:
+                for _dt in cond.dtypes:
+                    if not is_bool_dtype(_dt):
+                        raise ValueError(msg.format(dtype=_dt))
+        else:
+            # GH#21947 we have an empty DataFrame/Series, could be object-dtype
+            cond = cond.astype(bool)
+[/SEARCH]
+[REPLACE]
+        msg = "Boolean array expected for the condition, not {dtype}"
+
+        if not cond.empty:
+            if not isinstance(cond, ABCDataFrame):
+                # This is a single-dimensional object.
+                if not is_bool_dtype(cond):
+                    raise ValueError(msg.format(dtype=cond.dtype))
+            else:
+                # Fast path for ExtensionArray-backed DataFrames
+                if cond._mgr.any_extension_types:
+                    # For extension types, check dtypes efficiently
+                    for _dt in cond.dtypes:
+                        if not is_bool_dtype(_dt):
+                            raise ValueError(msg.format(dtype=_dt))
+                else:
+                    # For non-extension types, use numpy's all()
+                    if not cond.dtypes.values.all(is_bool_dtype):
+                        # Find the first non-boolean dtype to report
+                        for col, _dt in zip(cond.columns, cond.dtypes):
+                            if not is_bool_dtype(_dt):
+                                raise ValueError(msg.format(dtype=_dt))
+        else:
+            # GH#21947 we have an empty DataFrame/Series, could be object-dtype
+            cond = cond.astype(bool)
+[/REPLACE]

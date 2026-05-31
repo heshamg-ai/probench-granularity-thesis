@@ -1,0 +1,35 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        if how == "left":
+            join_index = self.sort_values() if sort else self
+        elif how == "right":
+            join_index = other.sort_values() if sort else other
+        elif how == "inner":
+            join_index = self.intersection(other, sort=sort)
+        elif how == "outer":
+            try:
+                join_index = self.union(other, sort=sort)
+            except TypeError:
+                join_index = self.union(other)
+                try:
+                    join_index = _maybe_try_sort(join_index, sort)
+                except TypeError:
+                    pass
+[/SEARCH]
+[REPLACE]
+        if how == "left":
+            join_index = self.sort_values() if sort else self
+        elif how == "right":
+            join_index = other.sort_values() if sort else other
+        elif how == "inner":
+            join_index = self.intersection(other, sort=sort)
+        elif how == "outer":
+            if sort:
+                try:
+                    join_index = self.union(other, sort=True)
+                except TypeError:
+                    join_index = self.union(other)
+                    join_index = _maybe_try_sort(join_index, True)
+            else:
+                join_index = self.union(other)
+[/REPLACE]

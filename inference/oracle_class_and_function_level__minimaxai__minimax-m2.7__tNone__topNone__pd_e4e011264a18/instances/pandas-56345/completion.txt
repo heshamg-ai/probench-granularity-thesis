@@ -1,0 +1,231 @@
+
+
+Looking at the code, I need to optimize `DataFrame.join` for unordered `CategoricalIndex`. The issue is that the current implementation explicitly excludes `CategoricalIndex` from fast join paths, even when the underlying codes could be used efficiently.
+
+The optimization approach:
+1. Add a helper method to detect compatible unordered CategoricalIndex pairs
+2. Add the optimization logic in the `join` method to use codes for fast joins
+3. For monotonic codes, use the fast `_join_monotonic` path
+4. For non-monotonic codes, use optimized code-based join
+
+Let me implement this:
+
+pandas/core/indexes/base.py
+[SEARCH]
+        if (
+            not isinstance(self.dtype, CategoricalDtype)
+            and self.is_monotonic_increasing
+            and other.is_monotonic_increasing
+            and self._can_use_libjoin
+            and other._can_use_libjoin
+            and (self.is_unique or other.is_unique)
+        ):
+            # Categorical is monotonic if data are ordered as categories, but join can
+            #  not handle this in case of not lexicographically monotonic GH#38502
+            try:
+                return self._join_monotonic(other, how=how)
+            except TypeError:
+                # object dtype; non-comparable objects
+                pass
+        elif not self.is_unique or not other.is_unique:
+            return self._join_non_unique(other, how=how, sort=sort)
+
+        return self._join_via_get_indexer(other, how, sort)
+[/SEARCH]
+[REPLACE]
+        # Fast path for unordered CategoricalIndex with same categories
+        if self._is_unordered_categorical_with_same_categories(other):
+            return self._join_categorical_optimized(other, how=how, sort=sort)
+
+        if (
+            not isinstance(self.dtype, CategoricalDtype)
+            and self.is_monotonic_increasing
+            and other.is_monotonic_increasing
+            and self._can_use_libjoin
+            and other._can_use_libjoin
+            and (self.is_unique or other.is_unique)
+        ):
+            # Categorical is monotonic if data are ordered as categories, but join can
+            #  not handle this in case of not lexicographically monotonic GH#38502
+            try:
+                return self._join_monotonic(other, how=how)
+            except TypeError:
+                # object dtype; non-comparable objects
+                pass
+        elif not self.is_unique or not other.is_unique:
+            return self._join_non_unique(other, how=how, sort=sort)
+
+        return self._join_via_get_indexer(other, how, sort)
+[/REPLACE]
+
+pandas/core/indexes/base.py
+[SEARCH]
+        if sort and how in ["left", "right"]:
+            join_index = join_index.sort_values()
+
+        if join_index is self:
+            lindexer = None
+        else:
+            lindexer = self.get_indexer_for(join_index)
+        if join_index is other:
+            rindexer = None
+        else:
+            rindexer = other.get_indexer_for(join_index)
+        return join_index, lindexer, rindexer
+[/SEARCH]
+[REPLACE]
+        if sort and how in ["left", "right"]:
+            join_index = join_index.sort_values()
+
+        if join_index is self:
+            lindexer = None
+        else:
+            lindexer = self.get_indexer_for(join_index)
+        if join_index is other:
+            rindexer = None
+        else:
+            rindexer = other.get_indexer_for(join_index)
+        return join_index, lindexer, rindexer
+
+    @final
+    def _is_unordered_categorical_with_same_categories(self, other) -> bool:
+        """
+        Check if both indexes are unordered CategoricalIndex with same categories.
+
+        This enables optimized code-based joins for unordered categoricals.
+        """
+        if not isinstance(self.dtype, CategoricalDtype) or not isinstance(
+            other.dtype, CategoricalDtype
+        ):
+            return False
+
+        # Only optimize for unordered categoricals (ordered=False)
+        if self.dtype.ordered or other.dtype.ordered:
+            return False
+
+        # Categories must be equal for codes to be directly comparable
+        try:
+            return self.categories.equals(other.categories)
+        except (TypeError, ValueError):
+            return False
+
+    @final
+    def _join_categorical_optimized(
+        self,
+        other: "Index",
+        how: JoinHow,
+        sort: bool,
+    ) -> tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        """
+        Optimized join for unordered CategoricalIndex with same categories.
+
+        Uses the underlying integer codes for efficient joining.
+        """
+        from pandas.core.indexes.category import CategoricalIndex
+
+        # These are guaranteed by _is_unordered_categorical_with_same_categories
+        assert isinstance(self.dtype, CategoricalDtype)
+        assert isinstance(other.dtype, CategoricalDtype)
+        assert not self.dtype.ordered
+        assert not other.dtype.ordered
+
+        self_codes = np.asarray(self.codes, dtype=np.intp)
+        other_codes = np.asarray(other.codes, dtype=np.intp)
+
+        # Check if codes are monotonic (sorted) - enables faster join
+        self_codes_sorted = is_monotonic_sorted(self_codes)
+        other_codes_sorted = is_monotonic_sorted(other_codes)
+
+        if self.is_unique and other.is_unique and self_codes_sorted and other_codes_sorted:
+            # Both unique with sorted codes - use fast monotonic path
+            if how == "left":
+                join_index = self
+                lidx = None
+                ridx = libjoin.left_join_indexer_unique(self_codes, other_codes)
+            elif how == "right":
+                join_index = other
+                lidx = libjoin.left_join_indexer_unique(other_codes, self_codes)
+                ridx = None
+            elif how == "inner":
+                join_array, lidx, ridx = libjoin.inner_join_indexer(
+                    self_codes, other_codes
+                )
+                join_index = self._constructor(join_array, name=self.name)
+            elif how == "outer":
+                join_array, lidx, ridx = libjoin.outer_join_indexer(
+                    self_codes, other_codes
+                )
+                join_index = self._constructor(join_array, name=self.name)
+            else:
+                raise ValueError(f"Invalid 'how' argument: {how}")
+
+            lidx = None if lidx is None else ensure_platform_int(lidx)
+            ridx = None if ridx is None else ensure_platform_int(ridx)
+            return join_index, lidx, ridx
+
+        # Non-unique case or unsorted codes - use indexer-based approach on codes
+        if self.is_unique:
+            join_index = self if how in ("left", "outer") else other
+            lindexer = None
+            rindexer = self.get_indexer_for(other)
+        elif other.is_unique:
+            join_index = other if how in ("right", "outer") else self
+            lindexer = other.get_indexer_for(self)
+            rindexer = None
+        else:
+            # Both non-unique
+            if how == "left":
+                join_index = self
+            elif how == "right":
+                join_index = other
+            elif how == "inner":
+                # Intersection of unique values
+                uniq_self = np.unique(self_codes)
+                uniq_other = np.unique(other_codes)
+                common = np.intersect1d(uniq_self, uniq_other)
+                join_array = common
+                join_index = CategoricalIndex(
+                    self.categories[common], name=self.name
+                )
+                lindexer = self.get_indexer_for(join_index)
+                rindexer = other.get_indexer_for(join_index)
+                return join_index, lindexer, rindexer
+            elif how == "outer":
+                # Union of unique values
+                uniq_self = np.unique(self_codes)
+                uniq_other = np.unique(other_codes)
+                union = np.union1d(uniq_self, uniq_other)
+                join_array = union
+                join_index = CategoricalIndex(
+                    self.categories[union.astype(int)], name=self.name
+                )
+                lindexer = self.get_indexer_for(join_index)
+                rindexer = other.get_indexer_for(join_index)
+                return join_index, lindexer, rindexer
+            else:
+                raise ValueError(f"Invalid 'how' argument: {how}")
+
+            lindexer, rindexer = get_join_indexers(
+                [self_codes], [other_codes], how=how, sort=sort
+            )
+
+            # Build result from codes
+            mask = (lindexer == -1) | (rindexer == -1)
+            left = self._values.take(lindexer)
+            right = other._values.take(rindexer)
+            left = np.where(mask, right, left)
+            join_index = CategoricalIndex(left, categories=self.categories, name=self.name)
+
+            lindexer = ensure_platform_int(lindexer)
+            rindexer = ensure_platform_int(rindexer)
+            return join_index, lindexer, rindexer
+
+        if join_index is self:
+            lindexer = None
+            rindexer = self.get_indexer_for(other)
+        else:
+            lindexer = other.get_indexer_for(self)
+            rindexer = None
+
+        return join_index, lindexer, rindexer
+[/REPLACE]

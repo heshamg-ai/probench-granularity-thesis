@@ -1,0 +1,75 @@
+
+
+Looking at the code, I can see that the optimization opportunity is in `OuterIndexer.__init__` and `VectorizedIndexer.__init__`. The issue is that `k.astype(np.int64)` always creates a copy of the array, even when the array is already `np.int64` and contiguous. We can optimize this by checking if the array is already `np.int64` and C-contiguous, and if so, skip the unnecessary copy.
+
+Let me provide the search/replace blocks for both classes:
+
+xarray/core/indexing.py
+[SEARCH]
+            elif is_duck_array(k):
+                if not np.issubdtype(k.dtype, np.integer):
+                    raise TypeError(
+                        f"invalid indexer array, does not have integer dtype: {k!r}"
+                    )
+                if k.ndim > 1:  # type: ignore[union-attr]
+                    raise TypeError(
+                        f"invalid indexer array for {type(self).__name__}; must be scalar "
+                        f"or have 1 dimension: {k!r}"
+                    )
+                k = k.astype(np.int64)  # type: ignore[union-attr]
+[/SEARCH]
+[REPLACE]
+            elif is_duck_array(k):
+                if not np.issubdtype(k.dtype, np.integer):
+                    raise TypeError(
+                        f"invalid indexer array, does not have integer dtype: {k!r}"
+                    )
+                if k.ndim > 1:  # type: ignore[union-attr]
+                    raise TypeError(
+                        f"invalid indexer array for {type(self).__name__}; must be scalar "
+                        f"or have 1 dimension: {k!r}"
+                    )
+                # Optimization: avoid copy if already int64 and contiguous
+                if k.dtype == np.int64 and k.flags["C_CONTIGUOUS"]:
+                    pass  # use k directly
+                else:
+                    k = np.ascontiguousarray(k, dtype=np.int64)  # type: ignore[union-attr]
+[/REPLACE]
+
+xarray/core/indexing.py
+[SEARCH]
+            elif is_duck_array(k):
+                if not np.issubdtype(k.dtype, np.integer):
+                    raise TypeError(
+                        f"invalid indexer array, does not have integer dtype: {k!r}"
+                    )
+                if ndim is None:
+                    ndim = k.ndim  # type: ignore[union-attr]
+                elif ndim != k.ndim:  # type: ignore[union-attr]
+                    ndims = [k.ndim for k in key if isinstance(k, np.ndarray)]
+                    raise ValueError(
+                        "invalid indexer key: ndarray arguments "
+                        f"have different numbers of dimensions: {ndims}"
+                    )
+                k = k.astype(np.int64)  # type: ignore[union-attr]
+[/SEARCH]
+[REPLACE]
+            elif is_duck_array(k):
+                if not np.issubdtype(k.dtype, np.integer):
+                    raise TypeError(
+                        f"invalid indexer array, does not have integer dtype: {k!r}"
+                    )
+                if ndim is None:
+                    ndim = k.ndim  # type: ignore[union-attr]
+                elif ndim != k.ndim:  # type: ignore[union-attr]
+                    ndims = [k.ndim for k in key if isinstance(k, np.ndarray)]
+                    raise ValueError(
+                        "invalid indexer key: ndarray arguments "
+                        f"have different numbers of dimensions: {ndims}"
+                    )
+                # Optimization: avoid copy if already int64 and contiguous
+                if k.dtype == np.int64 and k.flags["C_CONTIGUOUS"]:
+                    pass  # use k directly
+                else:
+                    k = np.ascontiguousarray(k, dtype=np.int64)  # type: ignore[union-attr]
+[/REPLACE]

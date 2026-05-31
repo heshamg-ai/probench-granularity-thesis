@@ -1,0 +1,48 @@
+sklearn/ensemble/_hist_gradient_boosting/binning.py
+[SEARCH]
+    # ignore missing values when computing bin thresholds
+    missing_mask = np.isnan(col_data)
+    if missing_mask.any():
+        col_data = col_data[~missing_mask]
+    col_data = np.ascontiguousarray(col_data, dtype=X_DTYPE)
+    distinct_values = np.unique(col_data)
+    if len(distinct_values) <= max_bins:
+        midpoints = distinct_values[:-1] + distinct_values[1:]
+        midpoints *= 0.5
+    else:
+        # We sort again the data in this case. We could compute
+        # approximate midpoint percentiles using the output of
+        # np.unique(col_data, return_counts) instead but this is more
+        # work and the performance benefit will be limited because we
+        # work on a fixed-size subsample of the full data.
+        percentiles = np.linspace(0, 100, num=max_bins + 1)
+        percentiles = percentiles[1:-1]
+        midpoints = percentile(col_data, percentiles, method="midpoint").astype(X_DTYPE)
+        assert midpoints.shape[0] == max_bins - 1
+[/SEARCH]
+[REPLACE]
+    # ignore missing values when computing bin thresholds
+    missing_mask = np.isnan(col_data)
+    if missing_mask.any():
+        col_data = col_data[~missing_mask]
+    col_data = np.ascontiguousarray(col_data, dtype=X_DTYPE)
+    distinct_values = np.unique(col_data)
+    if len(distinct_values) <= max_bins:
+        midpoints = distinct_values[:-1] + distinct_values[1:]
+        midpoints *= 0.5
+    else:
+        # Avoid expensive full sort by computing approximate quantile
+        # midpoints from the unique values and their counts.  This is a
+        # large speed and memory win on data with many repeated values,
+        # and still accurate enough for binning.
+        distinct_values, counts = np.unique(col_data, return_counts=True)
+        cum_counts = np.cumsum(counts, dtype=np.float64)
+        total = cum_counts[-1]
+        # quantile positions between 0 and total for the interior boundaries
+        step = total / max_bins
+        q_positions = np.arange(1, max_bins) * step
+        idx = np.searchsorted(cum_counts, q_positions, side="right")
+        idx = np.clip(idx, 0, len(distinct_values) - 1)
+        midpoints = (distinct_values[idx - 1] + distinct_values[idx]) * 0.5
+        midpoints = midpoints.astype(X_DTYPE)
+[/REPLACE]

@@ -1,0 +1,546 @@
+pandas/core/indexes/base.py
+[SEARCH]
+    @final
+    @_maybe_return_indexers
+    def join(
+        self,
+        other: Index,
+        *,
+        how: JoinHow = "left",
+        level: Level | None = None,
+        return_indexers: bool = False,
+        sort: bool = False,
+    ) -> Index | tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        """
+        Compute join_index and indexers to conform data structures to the new index.
+
+        Parameters
+        ----------
+        other : Index
+        how : {'left', 'right', 'inner', 'outer'}
+        level : int or level name, default None
+        return_indexers : bool, default False
+        sort : bool, default False
+            Sort the join keys lexicographically in the result Index. If False,
+            the order of the join keys depends on the join type (how keyword).
+
+        Returns
+        -------
+        join_index, (left_indexer, right_indexer)
+
+        Examples
+        --------
+        >>> idx1 = pd.Index([1, 2, 3])
+        >>> idx2 = pd.Index([4, 5, 6])
+        >>> idx1.join(idx2, how='outer')
+        Index([1, 2, 3, 4, 5, 6], dtype='int64')
+        """
+        other = ensure_index(other)
+        sort = sort or how == "outer"
+
+        if isinstance(self, ABCDatetimeIndex) and isinstance(other, ABCDatetimeIndex):
+            if (self.tz is None) ^ (other.tz is None):
+                # Raise instead of casting to object below.
+                raise TypeError("Cannot join tz-naive with tz-aware DatetimeIndex")
+
+        if not self._is_multi and not other._is_multi:
+            # We have specific handling for MultiIndex below
+            pself, pother = self._maybe_downcast_for_indexing(other)
+            if pself is not self or pother is not other:
+                return pself.join(
+                    pother, how=how, level=level, return_indexers=True, sort=sort
+                )
+
+        # try to figure out the join level
+        # GH3662
+        if level is None and (self._is_multi or other._is_multi):
+            # have the same levels/names so a simple join
+            if self.names == other.names:
+                pass
+            else:
+                return self._join_multi(other, how=how)
+
+        # join on the level
+        if level is not None and (self._is_multi or other._is_multi):
+            return self._join_level(other, level, how=how)
+
+        lidx: np.ndarray | None
+        ridx: np.ndarray | None
+
+        if len(other) == 0:
+            if how in ("left", "outer"):
+                if sort and not self.is_monotonic_increasing:
+                    lidx = self.argsort()
+                    join_index = self.take(lidx)
+                else:
+                    lidx = None
+                    join_index = self._view()
+                ridx = np.broadcast_to(np.intp(-1), len(join_index))
+                return join_index, lidx, ridx
+            elif how in ("right", "inner", "cross"):
+                join_index = other._view()
+                lidx = np.array([], dtype=np.intp)
+                return join_index, lidx, None
+
+        if len(self) == 0:
+            if how in ("right", "outer"):
+                if sort and not other.is_monotonic_increasing:
+                    ridx = other.argsort()
+                    join_index = other.take(ridx)
+                else:
+                    ridx = None
+                    join_index = other._view()
+                lidx = np.broadcast_to(np.intp(-1), len(join_index))
+                return join_index, lidx, ridx
+            elif how in ("left", "inner", "cross"):
+                join_index = self._view()
+                ridx = np.array([], dtype=np.intp)
+                return join_index, None, ridx
+
+        if self.dtype != other.dtype:
+            dtype = self._find_common_type_compat(other)
+            this = self.astype(dtype, copy=False)
+            other = other.astype(dtype, copy=False)
+            return this.join(other, how=how, return_indexers=True)
+        elif (
+            isinstance(self, ABCCategoricalIndex)
+            and isinstance(other, ABCCategoricalIndex)
+            and not self.ordered
+            and not self.categories.equals(other.categories)
+        ):
+            # dtypes are "equal" but categories are in different order
+            other = Index(other._values.reorder_categories(self.categories))
+
+        _validate_join_method(how)
+
+        if (
+            self.is_monotonic_increasing
+            and other.is_monotonic_increasing
+            and self._can_use_libjoin
+            and other._can_use_libjoin
+            and (self.is_unique or other.is_unique)
+        ):
+            try:
+                return self._join_monotonic(other, how=how)
+            except TypeError:
+                # object dtype; non-comparable objects
+                pass
+        elif not self.is_unique or not other.is_unique:
+            return self._join_non_unique(other, how=how, sort=sort)
+
+        return self._join_via_get_indexer(other, how, sort)
+[/SEARCH]
+[REPLACE]
+    @final
+    @_maybe_return_indexers
+    def join(
+        self,
+        other: Index,
+        *,
+        how: JoinHow = "left",
+        level: Level | None = None,
+        return_indexers: bool = False,
+        sort: bool = False,
+    ) -> Index | tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        """
+        Compute join_index and indexers to conform data structures to the new index.
+
+        Parameters
+        ----------
+        other : Index
+        how : {'left', 'right', 'inner', 'outer'}
+        level : int or level name, default None
+        return_indexers : bool, default False
+        sort : bool, default False
+            Sort the join keys lexicographically in the result Index. If False,
+            the order of the join keys depends on the join type (how keyword).
+
+        Returns
+        -------
+        join_index, (left_indexer, right_indexer)
+
+        Examples
+        --------
+        >>> idx1 = pd.Index([1, 2, 3])
+        >>> idx2 = pd.Index([4, 5, 6])
+        >>> idx1.join(idx2, how='outer')
+        Index([1, 2, 3, 4, 5, 6], dtype='int64')
+        """
+        other = ensure_index(other)
+        sort = sort or how == "outer"
+
+        if isinstance(self, ABCDatetimeIndex) and isinstance(other, ABCDatetimeIndex):
+            if (self.tz is None) ^ (other.tz is None):
+                # Raise instead of casting to object below.
+                raise TypeError("Cannot join tz-naive with tz-aware DatetimeIndex")
+
+        if not self._is_multi and not other._is_multi:
+            # We have specific handling for MultiIndex below
+            pself, pother = self._maybe_downcast_for_indexing(other)
+            if pself is not self or pother is not other:
+                return pself.join(
+                    pother, how=how, level=level, return_indexers=True, sort=sort
+                )
+
+        # try to figure out the join level
+        # GH3662
+        if level is None and (self._is_multi or other._is_multi):
+            # have the same levels/names so a simple join
+            if self.names == other.names:
+                pass
+            else:
+                return self._join_multi(other, how=how)
+
+        # join on the level
+        if level is not None and (self._is_multi or other._is_multi):
+            return self._join_level(other, level, how=how)
+
+        lidx: np.ndarray | None
+        ridx: np.ndarray | None
+
+        if len(other) == 0:
+            if how in ("left", "outer"):
+                if sort and not self.is_monotonic_increasing:
+                    lidx = self.argsort()
+                    join_index = self.take(lidx)
+                else:
+                    lidx = None
+                    join_index = self._view()
+                ridx = np.broadcast_to(np.intp(-1), len(join_index))
+                return join_index, lidx, ridx
+            elif how in ("right", "inner", "cross"):
+                join_index = other._view()
+                lidx = np.array([], dtype=np.intp)
+                return join_index, lidx, None
+
+        if len(self) == 0:
+            if how in ("right", "outer"):
+                if sort and not other.is_monotonic_increasing:
+                    ridx = other.argsort()
+                    join_index = other.take(ridx)
+                else:
+                    ridx = None
+                    join_index = other._view()
+                lidx = np.broadcast_to(np.intp(-1), len(join_index))
+                return join_index, lidx, ridx
+            elif how in ("left", "inner", "cross"):
+                join_index = self._view()
+                ridx = np.array([], dtype=np.intp)
+                return join_index, None, ridx
+
+        if self.dtype != other.dtype:
+            dtype = self._find_common_type_compat(other)
+            this = self.astype(dtype, copy=False)
+            other = other.astype(dtype, copy=False)
+            return this.join(other, how=how, return_indexers=True)
+        elif (
+            isinstance(self, ABCCategoricalIndex)
+            and isinstance(other, ABCCategoricalIndex)
+            and not self.ordered
+            and not self.categories.equals(other.categories)
+        ):
+            # dtypes are "equal" but categories are in different order
+            other = Index(other._values.reorder_categories(self.categories))
+
+        _validate_join_method(how)
+
+        if (
+            self.is_monotonic_increasing
+            and other.is_monotonic_increasing
+            and self._can_use_libjoin
+            and other._can_use_libjoin
+            and (self.is_unique or other.is_unique)
+        ):
+            try:
+                return self._join_monotonic(other, how=how)
+            except TypeError:
+                # object dtype; non-comparable objects
+                pass
+        elif not self.is_unique or not other.is_unique:
+            return self._join_non_unique(other, how=how, sort=sort)
+
+        return self._join_via_get_indexer(other, how, sort)
+[/REPLACE]
+
+pandas/core/indexes/base.py
+[SEARCH]
+    @final
+    def _join_via_get_indexer(
+        self, other: Index, how: JoinHow, sort: bool
+    ) -> tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        # Fallback if we do not have any fastpaths available based on
+        #  uniqueness/monotonicity
+
+        # Note: at this point we have checked matching dtypes
+        lindexer: npt.NDArray[np.intp] | None
+        rindexer: npt.NDArray[np.intp] | None
+
+        if how == "left":
+            if sort:
+                join_index, lindexer = self.sort_values(return_indexer=True)
+                rindexer = other.get_indexer_for(join_index)
+                return join_index, lindexer, rindexer
+            else:
+                join_index = self
+        elif how == "right":
+            if sort:
+                join_index, rindexer = other.sort_values(return_indexer=True)
+                lindexer = self.get_indexer_for(join_index)
+                return join_index, lindexer, rindexer
+            else:
+                join_index = other
+        elif how == "inner":
+            join_index = self.intersection(other, sort=sort)
+        elif how == "outer":
+            try:
+                join_index = self.union(other, sort=sort)
+            except TypeError:
+                join_index = self.union(other)
+                try:
+                    join_index = _maybe_try_sort(join_index, sort)
+                except TypeError:
+                    pass
+
+        names = other.names if how == "right" else self.names
+        if join_index.names != names:
+            join_index = join_index.set_names(names)
+
+        if join_index is self:
+            lindexer = None
+        else:
+            lindexer = self.get_indexer_for(join_index)
+        if join_index is other:
+            rindexer = None
+        else:
+            rindexer = other.get_indexer_for(join_index)
+        return join_index, lindexer, rindexer
+[/SEARCH]
+[REPLACE]
+    @final
+    def _join_via_get_indexer(
+        self, other: Index, how: JoinHow, sort: bool
+    ) -> tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        # Fallback if we do not have any fastpaths available based on
+        #  uniqueness/monotonicity
+
+        # Note: at this point we have checked matching dtypes
+        lindexer: npt.NDArray[np.intp] | None
+        rindexer: npt.NDArray[np.intp] | None
+
+        if how == "left":
+            if sort:
+                join_index, lindexer = self.sort_values(return_indexer=True)
+                rindexer = other.get_indexer_for(join_index)
+                return join_index, lindexer, rindexer
+            else:
+                join_index = self
+        elif how == "right":
+            if sort:
+                join_index, rindexer = other.sort_values(return_indexer=True)
+                lindexer = self.get_indexer_for(join_index)
+                return join_index, lindexer, rindexer
+            else:
+                join_index = other
+        elif how == "inner":
+            join_index = self.intersection(other, sort=sort)
+        elif how == "outer":
+            try:
+                join_index = self.union(other, sort=sort)
+            except TypeError:
+                join_index = self.union(other)
+                try:
+                    join_index = _maybe_try_sort(join_index, sort)
+                except TypeError:
+                    pass
+
+        names = other.names if how == "right" else self.names
+        if join_index.names != names:
+            join_index = join_index.set_names(names)
+
+        if join_index is self:
+            lindexer = None
+        else:
+            lindexer = self.get_indexer_for(join_index)
+        if join_index is other:
+            rindexer = None
+        else:
+            rindexer = other.get_indexer_for(join_index)
+        return join_index, lindexer, rindexer
+[/REPLACE]
+
+pandas/core/indexes/base.py
+[SEARCH]
+    @final
+    def _join_monotonic(
+        self, other: Index, how: JoinHow = "left"
+    ) -> tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        # We only get here with (caller is responsible for ensuring):
+        #  1) matching dtypes
+        #  2) both monotonic increasing
+        #  3) other.is_unique or self.is_unique
+        assert other.dtype == self.dtype
+        assert self._can_use_libjoin and other._can_use_libjoin
+
+        if self.equals(other):
+            # This is a convenient place for this check, but its correctness
+            #  does not depend on monotonicity, so it could go earlier
+            #  in the calling method.
+            ret_index = other if how == "right" else self
+            return ret_index, None, None
+
+        ridx: npt.NDArray[np.intp] | None
+        lidx: npt.NDArray[np.intp] | None
+
+        if how == "left":
+            if other.is_unique:
+                # We can perform much better than the general case
+                join_index = self
+                lidx = None
+                ridx = self._left_indexer_unique(other)
+            else:
+                join_array, lidx, ridx = self._left_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx, how)
+        elif how == "right":
+            if self.is_unique:
+                # We can perform much better than the general case
+                join_index = other
+                lidx = other._left_indexer_unique(self)
+                ridx = None
+            else:
+                join_array, ridx, lidx = other._left_indexer(self)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx, how)
+        elif how == "inner":
+            join_array, lidx, ridx = self._inner_indexer(other)
+            join_index = self._wrap_joined_index(join_array, other, lidx, ridx, how)
+        elif how == "outer":
+            join_array, lidx, ridx = self._outer_indexer(other)
+            join_index = self._wrap_joined_index(join_array, other, lidx, ridx, how)
+
+        lidx = None if lidx is None else ensure_platform_int(lidx)
+        ridx = None if ridx is None else ensure_platform_int(ridx)
+        return join_index, lidx, ridx
+[/SEARCH]
+[REPLACE]
+    @final
+    def _join_monotonic(
+        self, other: Index, how: JoinHow = "left"
+    ) -> tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        # We only get here with (caller is responsible for ensuring):
+        #  1) matching dtypes
+        #  2) both monotonic increasing
+        #  3) other.is_unique or self.is_unique
+        assert other.dtype == self.dtype
+        assert self._can_use_libjoin and other._can_use_libjoin
+
+        if self.equals(other):
+            # This is a convenient place for this check, but its correctness
+            #  does not depend on monotonicity, so it could go earlier
+            #  in the calling method.
+            ret_index = other if how == "right" else self
+            return ret_index, None, None
+
+        ridx: npt.NDArray[np.intp] | None
+        lidx: npt.NDArray[np.intp] | None
+
+        if how == "left":
+            if other.is_unique:
+                # We can perform much better than the general case
+                join_index = self
+                lidx = None
+                ridx = self._left_indexer_unique(other)
+            else:
+                join_array, lidx, ridx = self._left_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx, how)
+        elif how == "right":
+            if self.is_unique:
+                # We can perform much better than the general case
+                join_index = other
+                lidx = other._left_indexer_unique(self)
+                ridx = None
+            else:
+                join_array, ridx, lidx = other._left_indexer(self)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx, how)
+        elif how == "inner":
+            join_array, lidx, ridx = self._inner_indexer(other)
+            join_index = self._wrap_joined_index(join_array, other, lidx, ridx, how)
+        elif how == "outer":
+            join_array, lidx, ridx = self._outer_indexer(other)
+            join_index = self._wrap_joined_index(join_array, other, lidx, ridx, how)
+
+        lidx = None if lidx is None else ensure_platform_int(lidx)
+        ridx = None if ridx is None else ensure_platform_int(ridx)
+        return join_index, lidx, ridx
+[/REPLACE]
+
+pandas/core/indexes/base.py
+[SEARCH]
+    def _wrap_joined_index(
+        self,
+        joined: ArrayLike,
+        other: Self,
+        lidx: npt.NDArray[np.intp],
+        ridx: npt.NDArray[np.intp],
+        how: JoinHow,
+    ) -> Self:
+        assert other.dtype == self.dtype
+        names = other.names if how == "right" else self.names
+        if isinstance(self, ABCMultiIndex):
+            # error: Incompatible return value type (got "MultiIndex",
+            # expected "Self")
+            mask = lidx == -1
+            join_idx = self.take(lidx)
+            right = cast("MultiIndex", other.take(ridx))
+            join_index = join_idx.putmask(mask, right)._sort_levels_monotonic()
+            return join_index.set_names(names)  # type: ignore[return-value]
+        else:
+            return self._constructor._with_infer(
+                joined, name=names[0], dtype=self.dtype
+            )
+[/SEARCH]
+[REPLACE]
+    def _wrap_joined_index(
+        self,
+        joined: ArrayLike,
+        other: Self,
+        lidx: npt.NDArray[np.intp],
+        ridx: npt.NDArray[np.intp],
+        how: JoinHow,
+    ) -> Self:
+        assert other.dtype == self.dtype
+        names = other.names if how == "right" else self.names
+        if isinstance(self, ABCMultiIndex):
+            # error: Incompatible return value type (got "MultiIndex",
+            # expected "Self")
+            mask = lidx == -1
+            join_idx = self.take(lidx)
+            right = cast("MultiIndex", other.take(ridx))
+            join_index = join_idx.putmask(mask, right)._sort_levels_monotonic()
+            return join_index.set_names(names)  # type: ignore[return-value]
+        else:
+            return self._constructor._with_infer(
+                joined, name=names[0], dtype=self.dtype
+            )
+[/REPLACE]
+
+pandas/core/indexes/base.py
+[SEARCH]
+    def _wrap_setop_result(self, other: Index, result) -> Index:
+        name = get_op_result_name(self, other)
+        if isinstance(result, Index):
+            if result.name != name:
+                result = result.rename(name)
+        else:
+            result = self._shallow_copy(result, name=name)
+        return result
+[/SEARCH]
+[REPLACE]
+    @final
+    def _wrap_setop_result(self, other: Index, result) -> Index:
+        name = get_op_result_name(self, other)
+        if isinstance(result, Index):
+            if result.name != name:
+                result = result.rename(name)
+        else:
+            result = self._shallow_copy(result, name=name)
+        return result
+[/REPLACE]

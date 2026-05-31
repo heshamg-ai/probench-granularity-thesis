@@ -1,0 +1,64 @@
+
+
+Looking at the code, I can identify several optimization opportunities:
+
+1. The current `_ipython_key_completions_` creates an intermediate list before deduplication
+2. It checks `isinstance(item, str)` inside nested comprehensions which is less efficient
+3. For Dataset, the `_item_sources` property creates a new dict `{d: self[d] for d in self.dims}` on every call
+
+Let me optimize both:
+
+xarray/core/common.py
+[SEARCH]
+    def _ipython_key_completions_(self) -> List[str]:
+        """Provide method for the key-autocompletions in IPython.
+        See http://ipython.readthedocs.io/en/stable/config/integrating.html#tab-completion
+        For the details.
+        """
+        item_lists = [
+            item
+            for sublist in self._item_sources
+            for item in sublist
+            if isinstance(item, str)
+        ]
+        return list(set(item_lists))
+[/SEARCH]
+[REPLACE]
+    def _ipython_key_completions_(self) -> List[str]:
+        """Provide method for the key-autocompletions in IPython.
+        See http://ipython.readthedocs.io/en/stable/config/integrating.html#tab-completion
+        For the details.
+        """
+        seen: Set[str] = set()
+        result: List[str] = []
+        for source in self._item_sources:
+            for key in source:
+                if isinstance(key, str) and key not in seen:
+                    seen.add(key)
+                    result.append(key)
+        return result
+[/REPLACE]
+
+xarray/core/dataset.py
+[SEARCH]
+    @property
+    def _item_sources(self) -> List[Mapping[Hashable, Any]]:
+        """List of places to look-up items for key-completion"""
+        return [
+            self.data_vars,
+            self.coords,
+            {d: self[d] for d in self.dims},
+            LevelCoordinatesSource(self),
+        ]
+[/SEARCH]
+[REPLACE]
+    @property
+    def _item_sources(self) -> List[Mapping[Hashable, Any]]:
+        """List of places to look-up items for key-completion"""
+        return [
+            self.data_vars,
+            self.coords,
+            self.dims,
+            LevelCoordinatesSource(self),
+        ]
+[/REPLACE]

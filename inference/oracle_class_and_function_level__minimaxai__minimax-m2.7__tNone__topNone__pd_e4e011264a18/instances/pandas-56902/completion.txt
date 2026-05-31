@@ -1,0 +1,21 @@
+
+
+Looking at the code, the `_fill` method is the shared implementation for both `ffill` and `bfill`. The main optimization opportunity is in the 2D case where a new `indexer` array is allocated inside a loop for each column. We can pre-allocate this array once outside the loop and reuse it.
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+                for i, value_element in enumerate(values):
+                    # call group_fillna_indexer column-wise
+                    indexer = np.empty(values.shape[1], dtype=np.intp)
+                    col_func(out=indexer, mask=mask[i])
+                    out[i, :] = algorithms.take_nd(value_element, indexer)
+                return out
+[/SEARCH]
+[REPLACE]
+                indexer = np.empty(values.shape[1], dtype=np.intp)
+                for i, value_element in enumerate(values):
+                    # call group_fillna_indexer column-wise
+                    col_func(out=indexer, mask=mask[i])
+                    out[i, :] = algorithms.take_nd(value_element, indexer)
+                return out
+[/REPLACE]

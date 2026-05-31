@@ -1,0 +1,256 @@
+ pandas/core/indexes/multi.py
+[SEARCH]
+    def _recode_for_new_levels(
+        self,
+        new_levels,
+        new_codes=None,
+    ):
+        if new_codes is None:
+            new_codes = [None] * len(new_levels)
+        if len(new_levels) < len(self._levels):
+            raise ValueError(
+                f"length of new_levels ({len(new_levels)}) "
+                f"must be >= length of old levels ({len(self._levels)})"
+            )
+        if len(new_codes) < len(self._codes):
+            raise ValueError(
+                f"length of new_codes ({len(new_codes)}) "
+                f"must be >= length of old codes ({len(self._codes)})"
+            )
+
+        def _maybe_recode(code, new_level, old_level):
+            if new_level is not old_level:
+                indexer = new_level.get_indexer(old_level)
+
+                if len(indexer) != len(old_level):
+                    raise ValueError(
+                        "new levels need to be a superset of old levels"
+                    )
+
+                new_code = algos.take_nd(
+                    indexer, code, fill_value=new_level._na_value
+                )
+                return new_code
+            else:
+                return code
+
+        new_codes = [
+            _maybe_recode(code, new_level, old_level)
+            for code, new_level, old_level in zip(
+                self._codes, new_levels, self._levels
+            )
+        ]
+        return new_levels, new_codes
+[/SEARCH]
+[REPLACE]
+    def _recode_for_new_levels(
+        self,
+        new_levels,
+        new_codes=None,
+    ):
+        if new_codes is None:
+            new_codes = [None] * len(new_levels)
+        if len(new_levels) < len(self._levels):
+            raise ValueError(
+                f"length of new_levels ({len(new_levels)}) "
+                f"must be >= length of old levels ({len(self._levels)})"
+            )
+        if len(new_codes) < len(self._codes):
+            raise ValueError(
+                f"length of new_codes ({len(new_codes)}) "
+                f"must be >= length of old codes ({len(self._codes)})"
+            )
+
+        def _maybe_recode(code, new_level, old_level):
+            if new_level is not old_level:
+                indexer = new_level.get_indexer(old_level)
+
+                if len(indexer) != len(old_level):
+                    raise ValueError(
+                        "new levels need to be a superset of old levels"
+                    )
+
+                new_code = algos.take_nd(
+                    indexer, code, fill_value=new_level._na_value
+                )
+                return new_code
+            else:
+                return code
+
+        new_codes = [
+            _maybe_recode(code, new_level, old_level)
+            for code, new_level, old_level in zip(
+                self._codes, new_levels, self._levels
+            )
+        ]
+        return new_levels, new_codes
+
+    def _intersection_via_unique_locs(self, other, sort):
+        """
+        Optimized intersection using unique value locations.
+        
+        This method provides a faster path for intersection when both
+        MultiIndexes have the same levels, by working with unique values
+        directly rather than recoding through Index.intersection.
+        """
+        # Convert to arrays for set operation
+        zco = self._is_lexsorted() and other._is_lexsorted()
+
+        try:
+            slabels, olabels = self._join_non_unique(other, sort=sort)
+        except TypeError:
+            # object dtypes; Non-UTC tzs
+            warnings.warn(
+                "The values in the array are unorderable. "
+                "Pass `sort=False` to suppress this warning.",
+                RuntimeWarning,
+                stacklevel=find_stack_level(),
+            )
+            slabels, olabels = self._join_non_unique(other, sort=False)
+
+        lidx = slabels[olabels == -1]
+
+        nan_in_self = any(-1 in lab for lab in self.codes)
+        nan_in_other = any(-1 in lab for lab in other.codes)
+
+        if self.is_unique and other.is_unique:
+            # Fast path: unique indices
+            if lidx.size == 0:
+                # self is subset of other or equal
+                if sort is False and zco:
+                    return self.copy()
+
+            res = self.delete(lidx)
+
+            if sort is True and not zco:
+                res = res.sort_values()
+
+            if nan_in_other and not nan_in_self:
+                res = res[~res.isna().any(axis=1)]
+
+            if res.size == 0:
+                res = res[:0]
+            return res
+
+        # Non-unique intersection - fall back to standard path
+        res_name = get_op_result_name(self, other)
+        res = self._values.view(np.ndarray)
+
+        if lidx.size == 0:
+            if sort is False and zco:
+                res = self.copy()
+                res.names = res_name
+                return res
+        else:
+            if sort is False and not zco:
+                # We need this for test compatibility
+                pass
+
+        # Get mask for values in other
+        other_indexer = other.get_indexer(self)
+        mask = other_indexer != -1
+
+        if nan_in_other and not nan_in_self:
+            # Remove NaN values from self if other doesn't have them
+            mask = mask & ~isna(self).any(axis=1)
+
+        res = self[mask]
+
+        if sort is True:
+            res = res.sort_values()
+
+        res.names = res_name
+        return res
+[/REPLACE]
+
+pandas/core/indexes/multi.py
+[SEARCH]
+    def intersection(self, other, sort=False):
+        self._validate_sort_keyword(sort)
+        self._assert_can_do_setop(other)
+        other, result_names = self._convert_can_do_setop(other)
+
+        if self._is_fast_union(other):
+            # Fast path when codes are unique and monotonic
+            try:
+                result = self._fast_intersect(other, sort)
+            except TypeError:
+                pass
+            else:
+                if result is not None:
+                    return result
+
+        return self._intersection(other, sort=sort)
+[/SEARCH]
+[REPLACE]
+    def intersection(self, other, sort=False):
+        self._validate_sort_keyword(sort)
+        self._assert_can_do_setop(other)
+        other, result_names = self._convert_can_do_setop(other)
+
+        if self._is_fast_union(other):
+            # Fast path when codes are unique and monotonic
+            try:
+                result = self._fast_intersect(other, sort)
+            except TypeError:
+                pass
+            else:
+                if result is not None:
+                    return result
+
+        return self._intersection(other, sort=sort)
+[/REPLACE]
+
+pandas/core/indexes/multi.py
+[SEARCH]
+    def intersection(self, other, sort=False):
+        self._validate_sort_keyword(sort)
+        self._assert_can_do_setop(other)
+        other, result_names = self._convert_can_do_setop(other)
+
+        if self._is_fast_union(other):
+            # Fast path when codes are unique and monotonic
+            try:
+                result = self._fast_intersect(other, sort)
+            except TypeError:
+                pass
+            else:
+                if result is not None:
+                    return result
+
+        return self._intersection(other, sort=sort)
+[/SEARCH]
+[REPLACE]
+    def intersection(self, other, sort=False):
+        self._validate_sort_keyword(sort)
+        self._assert_can_do_setop(other)
+        other, result_names = self._convert_can_do_setop(other)
+
+        if self._is_fast_union(other):
+            # Fast path when codes are unique and monotonic
+            try:
+                result = self._fast_intersect(other, sort)
+            except TypeError:
+                pass
+            else:
+                if result is not None:
+                    return result
+
+        # Try optimized path for same-level MultiIndexes
+        if (
+            isinstance(other, MultiIndex)
+            and len(self.levels) == len(other.levels)
+            and all(
+                self_level.equals(other_level)
+                for self_level, other_level in zip(self.levels, other.levels)
+            )
+        ):
+            try:
+                result = self._intersection_via_unique_locs(other, sort)
+                result.names = result_names
+                return result
+            except (ValueError, TypeError):
+                pass
+
+        return self._intersection(other, sort=sort)
+[/REPLACE]

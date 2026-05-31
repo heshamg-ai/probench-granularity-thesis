@@ -1,0 +1,28 @@
+pandas/io/parsers/base_parser.py
+[SEARCH]
+                if _isindex(colspec):
+                    continue
+                # Pyarrow engine returns Series which we need to convert to
+                # numpy array before converter, its a no-op for other parsers
+                data_dict[colspec] = converter(
+                    np.asarray(data_dict[colspec]), col=colspec
+                )
+[/SEARCH]
+[REPLACE]
+                if _isindex(colspec):
+                    continue
+                # Pyarrow engine returns Series which we need to convert to
+                # numpy array before converter, its a no-op for other parsers
+                vals = data_dict[colspec]
+                if isinstance(vals, np.ndarray):
+                    arr = vals
+                elif isinstance(vals, Series):
+                    arr_values = getattr(vals, "array", None)
+                    if isinstance(arr_values, np.ndarray):
+                        arr = arr_values
+                    else:
+                        arr = np.asarray(vals)
+                else:
+                    arr = np.asarray(vals)
+                data_dict[colspec] = converter(arr, col=colspec)
+[/REPLACE]

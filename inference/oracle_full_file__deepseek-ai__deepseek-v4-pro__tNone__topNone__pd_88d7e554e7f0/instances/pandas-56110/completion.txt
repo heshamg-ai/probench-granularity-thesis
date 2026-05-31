@@ -1,0 +1,108 @@
+pandas/core/arrays/string_arrow.py
+[SEARCH]
+    def _str_contains(
+        self, pat, case: bool = True, flags: int = 0, na=np.nan, regex: bool = True
+    ):
+        if flags:
+            fallback_performancewarning()
+            return super()._str_contains(pat, case, flags, na, regex)
+
+        if regex:
+            result = pc.match_substring_regex(self._pa_array, pat, ignore_case=not case)
+        else:
+            result = pc.match_substring(self._pa_array, pat, ignore_case=not case)
+        result = self._result_converter(result, na=na)
+        if not isna(na):
+            result[isna(result)] = bool(na)
+        return result
+[/SEARCH]
+[REPLACE]
+    def _str_contains(
+        self, pat, case: bool = True, flags: int = 0, na=np.nan, regex: bool = True
+    ):
+        if flags:
+            fallback_performancewarning()
+            return super()._str_contains(pat, case, flags, na, regex)
+
+        if regex:
+            result = pc.match_substring_regex(self._pa_array, pat, ignore_case=not case)
+        else:
+            result = pc.match_substring(self._pa_array, pat, ignore_case=not case)
+        result = self._result_converter(result, na=na)
+        if not isna(na):
+            result[isna(result)] = bool(na)
+        return result
+
+    def _str_get_dummies(self, sep: str = "|"):
+        from pandas import get_dummies
+
+        # Fast path: use pyarrow split + dummy encoding directly
+        # Split all strings into lists of tokens
+        lists = pc.split_pattern(self._pa_array, sep)
+        
+        # Extract unique tokens from all rows
+        # Flatten all list elements, drop nulls and empties, get unique
+        all_tokens = pc.list_flatten(lists)
+        all_tokens = pc.drop_null(all_tokens)
+        # Filter out empty strings
+        non_empty = pc.not_equal(all_tokens, "")
+        all_tokens = pc.filter(all_tokens, non_empty)
+        unique_tokens = pc.unique(all_tokens)
+        # Sort for deterministic column order
+        if len(unique_tokens) > 0:
+            unique_tokens = pc.sort_indices(
+                pc.if_else(pc.is_null(unique_tokens), "", unique_tokens)
+            )
+        
+        # Convert PyArrow array to Python list of strings for columns
+        columns = []
+        if len(unique_tokens) > 0:
+            # Use list conversion for sorted unique tokens
+            token_strings = pa.compute.utf8_sort(unique_tokens)
+            columns = token_strings.to_pylist()
+        
+        if len(columns) == 0:
+            # No tokens found, return all-zero DataFrame
+            import pandas as pd
+            return pd.DataFrame(
+                np.zeros((len(self), 0), dtype=np.uint8),
+                index=self._parent.index if hasattr(self, '_parent') else None,
+            )
+        
+        # Build indicator columns efficiently using list membership checks
+        # For each unique token, check if it's in each row's split list
+        data = {}
+        mask = pc.is_null(self._pa_array)
+        
+        for i, token in enumerate(columns):
+            # Check membership: this token is in the list of tokens for this row
+            # Using list_element match with a broadcast scalar
+            # For each row, check if token is in the split list
+            # More efficient: use is_in_meta_binary or index_in
+            # pc.index_in(list, value) returns index or null
+            in_list = pc.list_value_length(
+                pc.list_flatten(
+                    pc.list_element(lists, token)
+                )
+            )
+            # Actually, a simpler approach: use match_substring on original + boundary check
+            # But the semantics need exact match, not substring.
+            # Better: use pc.is_in with list containment
+            
+            # Efficient approach: use pc.list_element with pc.index for membership
+            # pc.index_in(token, lists) works if token is scalar and lists is list array
+            indices = pc.list_index(lists, token)
+            has_token = pc.invert(pc.equal(indices, -1))
+            # Handle NA: rows that were originally NA should be all-zero
+            has_token = pc.if_else(mask, False, has_token)
+            data[token] = has_token.to_numpy().astype(np.uint8)
+        
+        import pandas as pd
+        result = pd.DataFrame(
+            data,
+            columns=columns,
+            index=self._parent.index if hasattr(self, '_parent') else None,
+            dtype=np.uint8,
+        )
+        return result
+[/REPLACE]

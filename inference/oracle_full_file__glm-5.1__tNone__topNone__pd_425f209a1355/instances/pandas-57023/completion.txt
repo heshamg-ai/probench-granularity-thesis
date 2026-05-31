@@ -1,0 +1,212 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        if self.equals(other):
+            # This is a convenient place for this check, but its correctness
+            #  does not depend on monotonicity, so it could go earlier
+            #  in the calling method.
+            ret_index = other if how == "right" else self
+            return ret_index, None, None
+[/SEARCH]
+[REPLACE]
+        if self.equals(other):
+            # This is a convenient place for this check, but its correctness
+            #  does not depend on monotonicity, so it could go earlier
+            #  in the calling method.
+            if how == "right":
+                if other is not self:
+                    other._engine.update_map(self._engine)
+                ret_index = other
+            else:
+                if self is not other:
+                    self._engine.update_map(other._engine)
+                ret_index = self
+            return ret_index, None, None
+[/REPLACE]
+
+pandas/core/indexes/base.py
+[SEARCH]
+        ridx: npt.NDArray[np.intp] | None
+        lidx: npt.NDArray[np.intp] | None
+
+        if how == "left":
+            if other.is_unique:
+                # We can perform much better than the general case
+                join_index = self
+                lidx = None
+                ridx = self._left_indexer_unique(other)
+            else:
+                join_array, lidx, ridx = self._left_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx, how)
+        elif how == "right":
+            if self.is_unique:
+                # We can perform much better than the general case
+                join_index = other
+                lidx = other._left_indexer_unique(self)
+                ridx = None
+            else:
+                join_array, ridx, lidx = other._left_indexer(self)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx, how)
+[/SEARCH]
+[REPLACE]
+        ridx: npt.NDArray[np.intp] | None
+        lidx: npt.NDArray[np.intp] | None
+
+        if how == "left":
+            if other.is_unique:
+                # We can perform much better than the general case
+                join_index = self
+                lidx = None
+                ridx = self._left_indexer_unique(other)
+                if other is not self:
+                    other._engine.update_map(self._engine)
+            else:
+                join_array, lidx, ridx = self._left_indexer(other)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx, how)
+        elif how == "right":
+            if self.is_unique:
+                # We can perform much better than the general case
+                join_index = other
+                lidx = other._left_indexer_unique(self)
+                ridx = None
+                if other is not self:
+                    self._engine.update_map(other._engine)
+            else:
+                join_array, ridx, lidx = other._left_indexer(self)
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx, how)
+[/REPLACE]
+
+pandas/core/indexes/base.py
+[SEARCH]
+    @cache_readonly
+    def _engine(
+        self,
+    ) -> libindex.IndexEngine | libindex.ExtensionEngine | libindex.MaskedIndexEngine:
+        target_values = self._get_engine_target()
+
+        if isinstance(self._values, ArrowExtensionArray) and self.dtype.kind in "Mm":
+            import pyarrow as pa
+
+            pa_type = self._values._pa_array.type
+            if pa.types.is_timestamp(pa_type):
+                target_values = self._values._to_datetimearray()
+                return libindex.DatetimeEngine(target_values._ndarray)
+            elif pa.types.is_duration(pa_type):
+                target_values = self._values._to_timedeltaarray()
+                return libindex.TimedeltaEngine(target_values._ndarray)
+
+        if isinstance(target_values, ExtensionArray):
+            if isinstance(target_values, (BaseMaskedArray, ArrowExtensionArray)):
+                try:
+                    return _masked_engines[target_values.dtype.name](target_values)
+                except KeyError:
+                    # Not supported yet e.g. decimal
+                    pass
+            elif self._engine_type is libindex.ObjectEngine:
+                return libindex.ExtensionEngine(target_values)
+
+        target_values = cast(np.ndarray, target_values)
+        # to avoid a reference cycle, bind `target_values` to a local variable, so
+        # `self` is not passed into the lambda.
+        if target_values.dtype == bool:
+            return libindex.BoolEngine(target_values)
+        elif target_values.dtype == np.complex64:
+            return libindex.Complex64Engine(target_values)
+        elif target_values.dtype == np.complex128:
+            return libindex.Complex128Engine(target_values)
+        elif needs_i8_conversion(self.dtype):
+            # We need to keep M8/m8 dtype when initializing the Engine,
+            #  but don't want to change _get_engine_target bc it is used
+            #  elsewhere
+            # error: Item "ExtensionArray" of "Union[ExtensionArray,
+            # ndarray[Any, Any]]" has no attribute "_ndarray"  [union-attr]
+            target_values = self._data._ndarray  # type: ignore[union-attr]
+        elif is_string_dtype(self.dtype) and not is_object_dtype(self.dtype):
+            return libindex.StringEngine(target_values)
+
+        # error: Argument 1 to "ExtensionEngine" has incompatible type
+        # "ndarray[Any, Any]"; expected "ExtensionArray"
+        return self._engine_type(target_values)  # type: ignore[arg-type]
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def _engine(
+        self,
+    ) -> libindex.IndexEngine | libindex.ExtensionEngine | libindex.MaskedIndexEngine:
+        target_values = self._get_engine_target()
+
+        if isinstance(self._values, ArrowExtensionArray) and self.dtype.kind in "Mm":
+            import pyarrow as pa
+
+            pa_type = self._values._pa_array.type
+            if pa.types.is_timestamp(pa_type):
+                target_values = self._values._to_datetimearray()
+                return libindex.DatetimeEngine(target_values._ndarray)
+            elif pa.types.is_duration(pa_type):
+                target_values = self._values._to_timedeltaarray()
+                return libindex.TimedeltaEngine(target_values._ndarray)
+
+        if isinstance(target_values, ExtensionArray):
+            if isinstance(target_values, (BaseMaskedArray, ArrowExtensionArray)):
+                try:
+                    return _masked_engines[target_values.dtype.name](target_values)
+                except KeyError:
+                    # Not supported yet e.g. decimal
+                    pass
+            elif self._engine_type is libindex.ObjectEngine:
+                return libindex.ExtensionEngine(target_values)
+
+        target_values = cast(np.ndarray, target_values)
+        # to avoid a reference cycle, bind `target_values` to a local variable, so
+        # `self` is not passed into the lambda.
+        if target_values.dtype == bool:
+            engine = libindex.BoolEngine(target_values)
+        elif target_values.dtype == np.complex64:
+            engine = libindex.Complex64Engine(target_values)
+        elif target_values.dtype == np.complex128:
+            engine = libindex.Complex128Engine(target_values)
+        elif needs_i8_conversion(self.dtype):
+            # We need to keep M8/m8 dtype when initializing the Engine,
+            #  but don't want to change _get_engine_target bc it is used
+            #  elsewhere
+            # error: Item "ExtensionArray" of "Union[ExtensionArray,
+            # ndarray[Any, Any]]" has no attribute "_ndarray"  [union-attr]
+            target_values = self._data._ndarray  # type: ignore[union-attr]
+            engine = self._engine_type(target_values)  # type: ignore[arg-type]
+        elif is_string_dtype(self.dtype) and not is_object_dtype(self.dtype):
+            engine = libindex.StringEngine(target_values)
+        else:
+            # error: Argument 1 to "ExtensionEngine" has incompatible type
+            # "ndarray[Any, Any]"; expected "ExtensionArray"
+            engine = self._engine_type(target_values)  # type: ignore[arg-type]
+
+        return engine
+[/REPLACE]
+
+pandas/_libs/index.pyx
+[SEARCH]
+    cdef inline _check_type(self, object val):
+        hash(val)
+
+    def __contains__(self, object val) -> bool:
+        self._check_type(val)
+        return self.get_loc(val) != -1
+[/SEARCH]
+[REPLACE]
+    cdef inline _check_type(self, object val):
+        hash(val)
+
+    def __contains__(self, object val) -> bool:
+        self._check_type(val)
+        return self.get_loc(val) != -1
+
+    def update_map(self, other_engine: IndexEngine) -> None:
+        """
+        Update the mapping cache from another engine.
+
+        When an index is the result of a join and is identical to one
+        of the input indexes, we can reuse the cached mapping from
+        the input engine, avoiding recomputation.
+        """
+        if self.mapping is None and other_engine.mapping is not None:
+            self.mapping = other_engine.mapping
+[/REPLACE]

@@ -1,0 +1,157 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def argsort(self, *args, **kwargs) -> npt.NDArray[np.intp]:
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def _ascending_indexer(self) -> npt.NDArray[np.intp]:
+        if self._range.step > 0:
+            return np.arange(len(self), dtype=np.intp)
+        else:
+            return np.arange(len(self) - 1, -1, -1, dtype=np.intp)
+
+    def argsort(self, *args, **kwargs) -> npt.NDArray[np.intp]:
+[/REPLACE]
+
+pandas/core/indexes/range.py
+[SEARCH]
+    def argsort(self, *args, **kwargs) -> npt.NDArray[np.intp]:
+        """
+        Returns the indices that would sort the index and its
+        underlying data.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+
+        See Also
+        --------
+        numpy.ndarray.argsort
+        """
+        ascending = kwargs.pop("ascending", True)  # EA compat
+        kwargs.pop("kind", None)  # e.g. "mergesort" is irrelevant
+        nv.validate_argsort(args, kwargs)
+
+        if self._range.step > 0:
+            result = np.arange(len(self), dtype=np.intp)
+        else:
+            result = np.arange(len(self) - 1, -1, -1, dtype=np.intp)
+
+        if not ascending:
+            result = result[::-1]
+        return result
+[/SEARCH]
+[REPLACE]
+    def argsort(self, *args, **kwargs) -> npt.NDArray[np.intp]:
+        """
+        Returns the indices that would sort the index and its
+        underlying data.
+
+        Returns
+        -------
+        np.ndarray[np.intp]
+
+        See Also
+        --------
+        numpy.ndarray.argsort
+        """
+        ascending = kwargs.pop("ascending", True)  # EA compat
+        kwargs.pop("kind", None)  # e.g. "mergesort" is irrelevant
+        nv.validate_argsort(args, kwargs)
+
+        if ascending:
+            return self._ascending_indexer.view()
+        else:
+            if self._range.step > 0:
+                return np.arange(len(self) - 1, -1, -1, dtype=np.intp)
+            else:
+                return np.arange(len(self), dtype=np.intp)
+[/REPLACE]
+
+pandas/core/indexes/range.py
+[SEARCH]
+    def min(self, axis=None, skipna: bool = True, *args, **kwargs) -> int | float:
+        """The minimum value of the RangeIndex"""
+        nv.validate_minmax_axis(axis)
+        nv.validate_min(args, kwargs)
+        return self._minmax("min")
+
+    def max(self, axis=None, skipna: bool = True, *args, **kwargs) -> int | float:
+        """The maximum value of the RangeIndex"""
+        nv.validate_minmax_axis(axis)
+        nv.validate_max(args, kwargs)
+        return self._minmax("max")
+[/SEARCH]
+[REPLACE]
+    def _min(self) -> int | float:
+        no_steps = len(self) - 1
+        if no_steps == -1:
+            return np.nan
+        elif self.step > 0:
+            return self.start
+        else:
+            return self.start + self.step * no_steps
+
+    def min(self, axis=None, skipna: bool = True, *args, **kwargs) -> int | float:
+        """The minimum value of the RangeIndex"""
+        nv.validate_minmax_axis(axis)
+        nv.validate_min(args, kwargs)
+        return self._min()
+
+    def _max(self) -> int | float:
+        no_steps = len(self) - 1
+        if no_steps == -1:
+            return np.nan
+        elif self.step < 0:
+            return self.start
+        else:
+            return self.start + self.step * no_steps
+
+    def max(self, axis=None, skipna: bool = True, *args, **kwargs) -> int | float:
+        """The maximum value of the RangeIndex"""
+        nv.validate_minmax_axis(axis)
+        nv.validate_max(args, kwargs)
+        return self._max()
+[/REPLACE]
+
+pandas/core/indexes/range.py
+[SEARCH]
+    def argmin(self, axis=None, skipna: bool = True, *args, **kwargs) -> int:
+        """The index of the minimum value of the RangeIndex"""
+        nv.validate_argmin(args, kwargs)
+        nv.validate_minmax_axis(axis)
+        return self._minmax("idxmin")
+
+    def argmax(self, axis=None, skipna: bool = True, *args, **kwargs) -> int:
+        """The index of the maximum value of the RangeIndex"""
+        nv.validate_argmax(args, kwargs)
+        nv.validate_minmax_axis(axis)
+        return self._minmax("idxmax")
+[/SEARCH]
+[REPLACE]
+    def argmin(self, axis=None, skipna: bool = True, *args, **kwargs) -> int:
+        """The index of the minimum value of the RangeIndex"""
+        nv.validate_argmin(args, kwargs)
+        nv.validate_minmax_axis(axis)
+        return 0 if self._range.step > 0 else len(self) - 1
+
+    def argmax(self, axis=None, skipna: bool = True, *args, **kwargs) -> int:
+        """The index of the maximum value of the RangeIndex"""
+        nv.validate_argmax(args, kwargs)
+        nv.validate_minmax_axis(axis)
+        return 0 if self._range.step < 0 else len(self) - 1
+[/REPLACE]
+
+pandas/core/indexes/range.py
+[SEARCH]
+    def _minmax(self, meth: str) -> int | float:
+        no_steps = len(self) - 1
+        if no_steps == -1:
+            return np.nan
+        elif (meth == "min" and self.step > 0) or (meth == "max" and self.step < 0):
+            return self.start
+
+        return self.start + self.step * no_steps
+[/SEARCH]
+[REPLACE]
+[/REPLACE]

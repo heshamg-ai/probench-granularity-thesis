@@ -1,0 +1,65 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _evaluate_op_method(self, other, op, arrow_funcs):
+        pa_type = self._pa_array.type
+        if (pa.types.is_string(pa_type) or pa.types.is_binary(pa_type)) and op in [
+            operator.add,
+            roperator.radd,
+        ]:
+            length = self._pa_array.length()
+
+            seps: list[str] | list[bytes]
+            if pa.types.is_string(pa_type):
+                seps = [""] * length
+            else:
+                seps = [b""] * length
+
+            if is_scalar(other):
+                other = [other] * length
+            elif isinstance(other, type(self)):
+                other = other._pa_array
+            if op is operator.add:
+                result = pc.binary_join_element_wise(self._pa_array, other, seps)
+            else:
+                result = pc.binary_join_element_wise(other, self._pa_array, seps)
+            return type(self)(result)
+[/SEARCH]
+[REPLACE]
+    def _evaluate_op_method(self, other, op, arrow_funcs):
+        pa_type = self._pa_array.type
+        if (pa.types.is_string(pa_type) or pa.types.is_binary(pa_type)) and op in [
+            operator.add,
+            roperator.radd,
+        ]:
+            if is_scalar(other):
+                null_sep = "" if pa.types.is_string(pa_type) else b""
+                if op is operator.add:
+                    result = pc.binary_join_element_wise(
+                        self._pa_array, [other] * len(self), [null_sep] * len(self)
+                    )
+                else:
+                    result = pc.binary_join_element_wise(
+                        [other] * len(self), self._pa_array, [null_sep] * len(self)
+                    )
+            elif isinstance(other, type(self)):
+                other_pa = other._pa_array
+                null_sep = pa.scalar("", type=pa_type) if pa.types.is_string(pa_type) else pa.scalar(b"", type=pa_type)
+                if op is operator.add:
+                    result = pc.binary_join_element_wise(self._pa_array, other_pa, null_sep)
+                else:
+                    result = pc.binary_join_element_wise(other_pa, self._pa_array, null_sep)
+            else:
+                length = self._pa_array.length()
+
+                seps: list[str] | list[bytes]
+                if pa.types.is_string(pa_type):
+                    seps = [""] * length
+                else:
+                    seps = [b""] * length
+
+                if op is operator.add:
+                    result = pc.binary_join_element_wise(self._pa_array, other, seps)
+                else:
+                    result = pc.binary_join_element_wise(other, self._pa_array, seps)
+            return type(self)(result)
+[/REPLACE]

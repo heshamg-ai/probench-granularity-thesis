@@ -1,0 +1,35 @@
+sklearn/linear_model/_quantile.py
+[SEARCH]
+        c = np.concatenate(
+            [
+                np.full(2 * n_params, fill_value=alpha),
+                sample_weight * self.quantile,
+                sample_weight * (1 - self.quantile),
+            ]
+        )
+        if self.fit_intercept:
+            # do not penalize the intercept
+            c[0] = 0
+            c[n_params] = 0
+[/SEARCH]
+[REPLACE]
+        if self.fit_intercept:
+            # do not penalize the intercept
+            c = np.empty(2 * n_params + 2 * n_indices)
+            c[0] = 0
+            c[n_params] = 0
+            c[1:n_params] = alpha
+            c[n_params + 1 : 2 * n_params] = alpha
+            weight_q = sample_weight * self.quantile
+            weight_1q = sample_weight * (1 - self.quantile)
+            c[2 * n_params : 2 * n_params + n_indices] = weight_q
+            c[2 * n_params + n_indices :] = weight_1q
+        else:
+            c = np.empty(2 * n_params + 2 * n_indices)
+            c[:n_params] = alpha
+            c[n_params : 2 * n_params] = alpha
+            weight_q = sample_weight * self.quantile
+            weight_1q = sample_weight * (1 - self.quantile)
+            c[2 * n_params : 2 * n_params + n_indices] = weight_q
+            c[2 * n_params + n_indices :] = weight_1q
+[/REPLACE]

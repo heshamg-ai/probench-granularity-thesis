@@ -1,0 +1,43 @@
+pandas/core/groupby/apply.py
+[SEARCH]
+    def apply(self, func, *args, **kwargs):
+        # Optimized path for common cases: many groups with group_keys=True
+        # avoids materializing MultiIndex and concat overheads when result is a DataFrame.
+        func = com.is_builtin_func(func)
+        
+        func = self._is_builtin_func(func)
+        
+        @wraps(func)
+        def f(g):
+            return func(g, *args, **kwargs)
+        
+        with np.errstate(all="ignore"):
+            result = self._python_apply_general(f, self._selected_obj)
+
+        return self._wrap_applied_output(
+            result,
+            self._selected_obj,
+            self.obj._info_axis,
+            self._selected_obj.ndim,
+        )
+[/SEARCH]
+[REPLACE]
+    def apply(self, func, *args, **kwargs):
+        func = self._is_builtin_func(func)
+
+        @wraps(func)
+        def f(g):
+            return func(g, *args, **kwargs)
+
+        with np.errstate(all="ignore"):
+            result = self._python_apply_general(
+                f, self._selected_obj, not_indexable_same=True
+            )
+
+        return self._wrap_applied_output(
+            result,
+            self._selected_obj,
+            self.obj._info_axis,
+            self._selected_obj.ndim,
+        )
+[/REPLACE]

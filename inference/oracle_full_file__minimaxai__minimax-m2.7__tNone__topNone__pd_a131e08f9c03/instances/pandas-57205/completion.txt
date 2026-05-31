@@ -1,0 +1,177 @@
+
+
+pandas/core/internals/construction.py
+[SEARCH]
+def dict_to_mgr(
+    data: dict,
+    index,
+    columns,
+    *,
+    dtype: DtypeObj | None = None,
+    copy: bool = True,
+) -> Manager:
+    """
+    Segregate Series based on type and coerce into matrices.
+    Needs to handle a lot of exceptional cases.
+
+    Used in DataFrame.__init__
+    """
+    arrays: Sequence[Any] | Series
+
+    if columns is not None:
+        from pandas.core.series import Series
+
+        arrays = Series(data, index=columns, dtype=object)
+        missing = arrays.isna()
+        if index is None:
+            # GH10856
+            # raise ValueError if only scalars in dict
+            index = _extract_index(arrays[~missing])
+        else:
+            index = ensure_index(index)
+
+        # no obvious "empty" int column
+        if missing.any() and not is_integer_dtype(dtype):
+            nan_dtype: DtypeObj
+
+            if dtype is not None:
+                # calling sanitize_array ensures we don't mix-and-match
+                #  NA dtypes
+                midxs = missing.values.nonzero()[0]
+                for i in midxs:
+                    arr = sanitize_array(arrays.iat[i], index, dtype=dtype)
+                    arrays.iat[i] = arr
+            else:
+                # GH#1783
+                nan_dtype = np.dtype("object")
+                val = construct_1d_arraylike_from_scalar(np.nan, len(index), nan_dtype)
+                nmissing = missing.sum()
+                if copy:
+                    rhs = [val] * nmissing
+                else:
+                    # GH#45369
+                    rhs = [val.copy() for _ in range(nmissing)]
+                arrays.loc[missing] = rhs
+
+        arrays = list(arrays)
+        columns = ensure_index(columns)
+
+    else:
+        keys = list(data.keys())
+        columns = Index(keys) if keys else default_index(0)
+        arrays = [com.maybe_iterable_to_list(data[k]) for k in keys]
+
+    if copy:
+        # We only need to copy arrays that will not get consolidated, i.e.
+        #  only EA arrays
+        arrays = [
+            x.copy()
+            if isinstance(x, ExtensionArray)
+            else x.copy(deep=True)
+            if (
+                isinstance(x, Index)
+                or isinstance(x, ABCSeries)
+                and is_1d_only_ea_dtype(x.dtype)
+            )
+            else x
+            for x in arrays
+        ]
+
+    return arrays_to_mgr(arrays, columns, index, dtype=dtype, consolidate=copy)
+[/SEARCH]
+[REPLACE]
+def dict_to_mgr(
+    data: dict,
+    index,
+    columns,
+    *,
+    dtype: DtypeObj | None = None,
+    copy: bool = True,
+) -> Manager:
+    """
+    Segregate Series based on type and coerce into matrices.
+    Needs to handle a lot of exceptional cases.
+
+    Used in DataFrame.__init__
+    """
+    arrays: Sequence[Any] | Series
+
+    if columns is not None:
+        from pandas.core.series import Series
+
+        # Pre-compute which columns are missing to avoid repeated lookups
+        col_list = list(columns)
+        ncols = len(col_list)
+        missing_mask = np.zeros(ncols, dtype=bool)
+        missing_indices = []
+        
+        for i, col in enumerate(col_list):
+            if col not in data:
+                missing_mask[i] = True
+                missing_indices.append(i)
+        
+        if index is None:
+            # GH10856: raise ValueError if only scalars in dict
+            non_missing_cols = [col_list[i] for i in range(ncols) if not missing_mask[i]]
+            if not non_missing_cols:
+                raise ValueError("If using all scalar values, you must pass an index")
+            # Extract index from first non-missing column's data
+            first_col_data = data[non_missing_cols[0]]
+            if hasattr(first_col_data, "index"):
+                index = first_col_data.index
+            elif is_list_like(first_col_data):
+                index = default_index(len(first_col_data))
+            else:
+                raise ValueError("If using all scalar values, you must pass an index")
+        else:
+            index = ensure_index(index)
+        
+        nrows = len(index)
+        
+        # Build arrays directly without intermediate Series
+        arrays = []
+        if dtype is not None or (missing_mask.any() and not is_integer_dtype(dtype)):
+            nan_dtype = dtype if dtype is not None else np.dtype("object")
+            val = construct_1d_arraylike_from_scalar(np.nan, nrows, nan_dtype)
+            for i in range(ncols):
+                col = col_list[i]
+                if missing_mask[i]:
+                    arrays.append(val.copy() if copy else val)
+                else:
+                    arr = data[col]
+                    if hasattr(arr, "_values"):
+                        arr = arr._values
+                    arrays.append(arr)
+        else:
+            # Fast path: no missing values or integer dtype
+            for col in col_list:
+                arr = data[col]
+                if hasattr(arr, "_values"):
+                    arr = arr._values
+                arrays.append(arr)
+        
+        columns = ensure_index(columns)
+
+    else:
+        keys = list(data.keys())
+        columns = Index(keys) if keys else default_index(0)
+        arrays = [com.maybe_iterable_to_list(data[k]) for k in keys]
+
+    if copy:
+        # We only need to copy arrays that will not get consolidated, i.e.
+        #  only EA arrays
+        arrays = [
+            x.copy()
+            if isinstance(x, ExtensionArray)
+            else x.copy(deep=True)
+            if (
+                isinstance(x, Index)
+                or isinstance(x, ABCSeries)
+                and is_1d_only_ea_dtype(x.dtype)
+            )
+            else x
+            for x in arrays
+        ]
+
+    return arrays_to_mgr(arrays, columns, index, dtype=dtype, consolidate=copy)
+[/REPLACE]

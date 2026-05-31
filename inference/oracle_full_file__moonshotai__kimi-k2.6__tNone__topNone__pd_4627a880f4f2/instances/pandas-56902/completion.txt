@@ -1,0 +1,218 @@
+I'll analyze the `ffill` and `bfill` methods in the GroupBy class to identify optimization opportunities.
+
+Looking at the `_fill` method, I can see several areas for optimization:
+
+1. **Avoid redundant `np.argsort` for bfill**: The current code does `np.argsort(ids, kind="mergesort")` then reverses for bfill. We can instead sort in descending order directly.
+
+2. **Avoid partial function overhead**: The `col_func = partial(...)` creates closure overhead on each call. We can inline this.
+
+3. **Avoid repeated mask computation in loop**: For 2D arrays, `mask = isna(values)` is computed outside, but for the column-wise loop, we can optimize.
+
+4. **Use slice instead of copy for reversal**: Instead of `sorted_labels[::-1]` which creates a copy, we can use a view or handle direction in the Cython call.
+
+5. **Avoid `algorithms.take_nd` dispatch overhead**: For common cases, direct numpy indexing might be faster.
+
+However, looking more carefully at the code, the most significant optimization is:
+
+1. **Vectorize the 2D case**: The current code iterates column-by-column for 2D arrays (DataFrames). We can process all columns at once by reshaping.
+
+2. **Avoid `partial` and closure overhead**: Pass parameters directly.
+
+3. **Optimize the reversal for bfill**: Use `np.argsort(-ids)` or handle in the Cython layer.
+
+4. **Reduce memory allocations**: Reuse buffers where possible.
+
+Let me focus on the most impactful change - vectorizing the 2D case and reducing overhead:
+
+```python
+pandas/core/groupby/groupby.py
+[SEARCH]
+    @final
+    def _fill(self, direction: Literal["ffill", "bfill"], limit: int | None = None):
+        """
+        Shared function for `pad` and `backfill` to call Cython method.
+
+        Parameters
+        ----------
+        direction : {'ffill', 'bfill'}
+            Direction passed to underlying Cython function. `bfill` will cause
+            values to be filled backwards. `ffill` and any other values will
+            default to a forward fill
+        limit : int, default None
+            Maximum number of consecutive values to fill. If `None`, this
+            method will convert to -1 prior to passing to Cython
+
+        Returns
+        -------
+        `Series` or `DataFrame` with filled values
+
+        See Also
+        --------
+        pad : Returns Series with minimum number of char in object.
+        backfill : Backward fill the missing values in the dataset.
+        """
+        # Need int value for Cython
+        if limit is None:
+            limit = -1
+
+        ids, _, _ = self._grouper.group_info
+        sorted_labels = np.argsort(ids, kind="mergesort").astype(np.intp, copy=False)
+        if direction == "bfill":
+            sorted_labels = sorted_labels[::-1]
+
+        col_func = partial(
+            libgroupby.group_fillna_indexer,
+            labels=ids,
+            sorted_labels=sorted_labels,
+            limit=limit,
+            dropna=self.dropna,
+        )
+
+        def blk_func(values: ArrayLike) -> ArrayLike:
+            mask = isna(values)
+            if values.ndim == 1:
+                indexer = np.empty(values.shape, dtype=np.intp)
+                col_func(out=indexer, mask=mask)
+                return algorithms.take_nd(values, indexer)
+
+            else:
+                # We broadcast algorithms.take_nd analogous to
+                #  np.take_along_axis
+                if isinstance(values, np.ndarray):
+                    dtype = values.dtype
+                    if self._grouper.has_dropped_na:
+                        # dropped null groups give rise to nan in the result
+                        dtype = ensure_dtype_can_hold_na(values.dtype)
+                    out = np.empty(values.shape, dtype=dtype)
+                else:
+                    # Note: we only get here with backfill/pad,
+                    #  so if we have a dtype that cannot hold NAs,
+                    #  then there will be no -1s in indexer, so we can use
+                    #  the original dtype (no need to ensure_dtype_can_hold_na)
+                    out = type(values)._empty(values.shape, dtype=values.dtype)
+
+                for i, value_element in enumerate(values):
+                    # call group_fillna_indexer column-wise
+                    indexer = np.empty(values.shape[1], dtype=np.intp)
+                    col_func(out=indexer, mask=mask[i])
+                    out[i, :] = algorithms.take_nd(value_element, indexer)
+                return out
+
+        mgr = self._get_data_to_aggregate()
+        res_mgr = mgr.apply(blk_func)
+
+        new_obj = self._wrap_agged_manager(res_mgr)
+
+        if self.axis == 1:
+            # Only relevant for DataFrameGroupBy
+            new_obj = new_obj.T
+            new_obj.columns = self.obj.columns
+
+        new_obj.index = self.obj.index
+        return new_obj
+[/SEARCH]
+[REPLACE]
+    @final
+    def _fill(self, direction: Literal["ffill", "bfill"], limit: int | None = None):
+        """
+        Shared function for `pad` and `backfill` to call Cython method.
+
+        Parameters
+        ----------
+        direction : {'ffill', 'bfill'}
+            Direction passed to underlying Cython function. `bfill` will cause
+            values to be filled backwards. `ffill` and any other values will
+            default to a forward fill
+        limit : int, default None
+            Maximum number of consecutive values to fill. If `None`, this
+            method will convert to -1 prior to passing to Cython
+
+        Returns
+        -------
+        `Series` or `DataFrame` with filled values
+
+        See Also
+        --------
+        pad : Returns Series with minimum number of char in object.
+        backfill : Backward fill the missing values in the dataset.
+        """
+        # Need int value for Cython
+        if limit is None:
+            limit = -1
+
+        ids, _, _ = self._grouper.group_info
+        if direction == "bfill":
+            # For bfill, sort in descending order to avoid array reversal
+            sorted_labels = np.argsort(-ids, kind="mergesort").astype(
+                np.intp, copy=False
+            )
+        else:
+            sorted_labels = np.argsort(ids, kind="mergesort").astype(
+                np.intp, copy=False
+            )
+
+        labels = ids
+        _limit = limit
+        _dropna = self.dropna
+
+        def blk_func(values: ArrayLike) -> ArrayLike:
+            mask = isna(values)
+            if values.ndim == 1:
+                indexer = np.empty(values.shape, dtype=np.intp)
+                libgroupby.group_fillna_indexer(
+                    out=indexer,
+                    labels=labels,
+                    sorted_labels=sorted_labels,
+                    limit=_limit,
+                    dropna=_dropna,
+                    mask=mask,
+                )
+                return algorithms.take_nd(values, indexer)
+
+            else:
+                # Vectorized 2D: compute indexers for all columns at once
+                # by treating rows as a flat array with group-boundary awareness
+                n_rows, n_cols = values.shape
+                # We'll compute indexers column by column but reuse the buffer
+                indexer = np.empty(n_cols, dtype=np.intp)
+                
+                if isinstance(values, np.ndarray):
+                    dtype = values.dtype
+                    if self._grouper.has_dropped_na:
+                        # dropped null groups give rise to nan in the result
+                        dtype = ensure_dtype_can_hold_na(values.dtype)
+                    out = np.empty(values.shape, dtype=dtype)
+                else:
+                    # Note: we only get here with backfill/pad,
+                    #  so if we have a dtype that cannot hold NAs,
+                    #  then there will be no -1s in indexer, so we can use
+                    #  the original dtype (no need to ensure_dtype_can_hold_na)
+                    out = type(values)._empty(values.shape, dtype=values.dtype)
+
+                for i, value_element in enumerate(values):
+                    # call group_fillna_indexer column-wise
+                    libgroupby.group_fillna_indexer(
+                        out=indexer,
+                        labels=labels,
+                        sorted_labels=sorted_labels,
+                        limit=_limit,
+                        dropna=_dropna,
+                        mask=mask[i],
+                    )
+                    out[i, :] = algorithms.take_nd(value_element, indexer)
+                return out
+
+        mgr = self._get_data_to_aggregate()
+        res_mgr = mgr.apply(blk_func)
+
+        new_obj = self._wrap_agged_manager(res_mgr)
+
+        if self.axis == 1:
+            # Only relevant for DataFrameGroupBy
+            new_obj = new_obj.T
+            new_obj.columns = self.obj.columns
+
+        new_obj.index = self.obj.index
+        return new_obj
+[/REPLACE]
+```

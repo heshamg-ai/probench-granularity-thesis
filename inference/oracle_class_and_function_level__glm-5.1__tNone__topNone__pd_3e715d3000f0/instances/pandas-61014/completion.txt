@@ -1,0 +1,31 @@
+pandas/core/generic.py
+[SEARCH]
+        # align the cond to same shape as myself
+        cond = common.apply_if_callable(cond, self)
+        if isinstance(cond, NDFrame):
+            # CoW: Make sure reference is not kept alive
+            if cond.ndim == 1 and self.ndim == 2:
+                cond = cond._constructor_expanddim(
+                    {i: cond for i in range(len(self.columns))},
+                    copy=False,
+                )
+                cond.columns = self.columns
+            cond = cond.align(self, join="right")[0]
+[/SEARCH]
+[REPLACE]
+        # align the cond to same shape as myself
+        cond = common.apply_if_callable(cond, self)
+        if isinstance(cond, NDFrame):
+            # CoW: Make sure reference is not kept alive
+            if cond.ndim == 1 and self.ndim == 2:
+                cond = cond._constructor_expanddim(
+                    {i: cond for i in range(len(self.columns))},
+                    copy=False,
+                )
+                cond.columns = self.columns
+            if cond._indexed_same(self):
+                # Fast path: skip expensive align when indexes already match
+                pass
+            else:
+                cond = cond.align(self, join="right")[0]
+[/REPLACE]

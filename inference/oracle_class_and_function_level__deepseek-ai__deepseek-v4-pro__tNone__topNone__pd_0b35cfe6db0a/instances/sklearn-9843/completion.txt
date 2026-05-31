@@ -1,0 +1,56 @@
+sklearn/metrics/_classification.py
+[SEARCH]
+    n_labels = labels.size
+    label_to_ind = {y: x for x, y in enumerate(labels)}
+    # convert yt, yp into index
+    y_pred = np.array([label_to_ind.get(x, n_labels + 1) for x in y_pred])
+    y_true = np.array([label_to_ind.get(x, n_labels + 1) for x in y_true])
+
+    # intersect y_pred, y_true with labels, eliminate items not in labels
+    ind = np.logical_and(y_pred < n_labels, y_true < n_labels)
+    y_pred = y_pred[ind]
+    y_true = y_true[ind]
+    # also eliminate weights of eliminated items
+    sample_weight = sample_weight[ind]
+
+    # Choose the accumulator dtype to always have high precision
+    if sample_weight.dtype.kind in {'i', 'u', 'b'}:
+        dtype = np.int64
+    else:
+        dtype = np.float64
+
+    cm = coo_matrix((sample_weight, (y_true, y_pred)),
+                    shape=(n_labels, n_labels), dtype=dtype,
+                    ).toarray()
+[/SEARCH]
+[REPLACE]
+    n_labels = labels.size
+    label_to_ind = {y: x for x, y in enumerate(labels)}
+    # convert yt, yp into index
+    y_pred = np.array([label_to_ind.get(x, n_labels + 1) for x in y_pred])
+    y_true = np.array([label_to_ind.get(x, n_labels + 1) for x in y_true])
+
+    # intersect y_pred, y_true with labels, eliminate items not in labels
+    ind = np.logical_and(y_pred < n_labels, y_true < n_labels)
+    y_pred = y_pred[ind]
+    y_true = y_true[ind]
+    # also eliminate weights of eliminated items
+    sample_weight = sample_weight[ind]
+
+    # Choose the accumulator dtype to always have high precision
+    if sample_weight.dtype.kind in {'i', 'u', 'b'}:
+        dtype = np.int64
+    else:
+        dtype = np.float64
+
+    # Use np.bincount + ravel_multi_index when labels are integral and
+    # sample_weight is integral (the common case), which is faster and
+    # uses less memory than coo_matrix.
+    if sample_weight.dtype.kind in {'i', 'u', 'b'}:
+        cm = np.zeros((n_labels, n_labels), dtype=dtype)
+        np.add.at(cm, (y_true, y_pred), sample_weight)
+    else:
+        cm = coo_matrix((sample_weight, (y_true, y_pred)),
+                        shape=(n_labels, n_labels), dtype=dtype,
+                        ).toarray()
+[/REPLACE]

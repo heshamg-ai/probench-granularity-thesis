@@ -1,0 +1,145 @@
+
+
+pandas/core/indexing.py
+[SEARCH]
+    def _validate_key(self, key, axis: int):
+        """
+        Ensure that key is valid for current indexer.
+
+        Parameters
+        ----------
+        key : scalar, slice or array-like
+        axis : int
+
+        Returns
+        -------
+        tuple[int, int]
+
+        Raises
+        ------
+        TypeError
+            When one of the indices is not valid for the index.
+
+        Examples
+        --------
+        >>> s = pd.Series(range(4), index=['a', 'a', 'b', 'c'])
+        >>> s.loc._validate_key('a', axis=0)
+        (0, 2)
+
+        Notes
+        -----
+        This method is responsible for validation of the key in the cases
+        where the key is validated based on the index.
+
+        For MultiIndex if a tuple of partial length is passed this method
+        will check whether the length is a multiple of the index.ndim.
+        The remaining elements of the tuple will be used for successive
+        indexing steps only when the resulting MultiIndex indexer is
+        applied on the result and is not already a partial indexer.
+        """
+        ax = self.obj._get_axis(axis)
+        from pandas.core.indexes.api import MultiIndex
+
+        if isinstance(key, tuple):
+            if ax.ndim == 1 and isinstance(ax, MultiIndex):
+                # Check the length of key
+                if len(key) > ax.ndim:
+                    raise KeyError(key)
+
+                # Get the indexer for the first len(key) levels
+                if len(key) == ax.ndim:
+                    # Full key passed
+                    try:
+                        loc = ax.get_loc(key)
+                        return (loc, loc + 1)
+                    except KeyError:
+                        raise
+                else:
+                    # Partial key passed - need to slice
+                    try:
+                        # Get the slice for the first len(key) levels
+                        start, end = ax.get_locs(key)
+                        return (start, end)
+                    except KeyError:
+                        raise
+            elif len(key) != ax.ndim:
+                raise com.set_function_name(
+                    ValueError,
+                    "loc",
+                    type(ax).__name__,
+                )
+            else:
+                return (None, None)
+        return (None, None)
+[/SEARCH]
+[REPLACE]
+    def _validate_key(self, key, axis: int):
+        """
+        Ensure that key is valid for current indexer.
+
+        Parameters
+        ----------
+        key : scalar, slice or array-like
+        axis : int
+
+        Returns
+        -------
+        tuple[int, int]
+
+        Raises
+        ------
+        TypeError
+            When one of the indices is not valid for the index.
+
+        Examples
+        --------
+        >>> s = pd.Series(range(4), index=['a', 'a', 'b', 'c'])
+        >>> s.loc._validate_key('a', axis=0)
+        (0, 2)
+
+        Notes
+        -----
+        This method is responsible for validation of the key in the cases
+        where the key is validated based on the index.
+
+        For MultiIndex if a tuple of partial length is passed this method
+        will check whether the length is a multiple of the index.ndim.
+        The remaining elements of the tuple will be used for successive
+        indexing steps only when the resulting MultiIndex indexer is
+        applied on the result and is not already a partial indexer.
+        """
+        ax = self.obj._get_axis(axis)
+        from pandas.core.indexes.api import MultiIndex
+
+        if isinstance(key, tuple):
+            if ax.ndim == 1 and isinstance(ax, MultiIndex):
+                # Check the length of key
+                if len(key) > ax.ndim:
+                    raise KeyError(key)
+
+                # Get the indexer for the first len(key) levels
+                if len(key) == ax.ndim:
+                    # Full key passed
+                    try:
+                        loc = ax.get_loc(key)
+                        return (loc, loc + 1)
+                    except KeyError:
+                        raise
+                else:
+                    # Partial key passed - need to slice
+                    try:
+                        # Get the slice for the first len(key) levels
+                        start, end = ax.get_locs(key)
+                        return (start, end)
+                    except KeyError:
+                        raise
+            elif len(key) != ax.ndim:
+                raise com.set_function_name(
+                    ValueError,
+                    "loc",
+                    type(ax).__name__,
+                )
+            else:
+                return (None, None)
+        return (None, None)
+[/REPLACE]

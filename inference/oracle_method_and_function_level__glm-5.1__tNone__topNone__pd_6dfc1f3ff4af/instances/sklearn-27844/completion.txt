@@ -1,0 +1,15 @@
+sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py
+[SEARCH]
+        # TODO: This could be done in parallel
+        encoded_classes = np.argmax(self.predict_proba(X), axis=1)
+        return self.classes_[encoded_classes]
+[/SEARCH]
+[REPLACE]
+        # TODO: This could be done in parallel
+        if len(self.classes_) == 2:
+            raw_predictions = self._raw_predict(X)
+            encoded_classes = (raw_predictions[:, 0] >= 0).astype(np.intp)
+        else:
+            encoded_classes = np.argmax(self.predict_proba(X), axis=1)
+        return self.classes_[encoded_classes]
+[/REPLACE]

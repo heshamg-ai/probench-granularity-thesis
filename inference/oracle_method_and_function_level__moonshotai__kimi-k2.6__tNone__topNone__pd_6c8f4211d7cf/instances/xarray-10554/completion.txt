@@ -1,0 +1,24 @@
+ xarray/core/dataset.py
+[SEARCH]
+        # For types that we do not understand do stepwise
+                    # interpolation to avoid modifying the elements.
+                    # reindex the variable instead because it supports
+                    # booleans and objects and retains the dtype but inside
+                    # this loop there might be some duplicate code that slows it
+                    # down, therefore collect these signals and run it later:
+                    reindex_vars.append(name)
+[/SEARCH]
+[REPLACE]
+                    # Fast path for scalar non-numeric variables that don't
+                    # depend on any interpolated dimensions
+                    if not (set(var.dims) & set(indexers)):
+                        variables[name] = var
+                    else:
+                        # For types that we do not understand do stepwise
+                        # interpolation to avoid modifying the elements.
+                        # reindex the variable instead because it supports
+                        # booleans and objects and retains the dtype but inside
+                        # this loop there might be some duplicate code that slows it
+                        # down, therefore collect these signals and run it later:
+                        reindex_vars.append(name)
+[/REPLACE]

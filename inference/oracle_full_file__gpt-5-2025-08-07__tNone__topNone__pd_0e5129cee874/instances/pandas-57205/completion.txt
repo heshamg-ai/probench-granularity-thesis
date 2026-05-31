@@ -1,0 +1,112 @@
+pandas/core/internals/construction.py
+[SEARCH]
+from pandas.core.dtypes.generic import (
+    ABCDataFrame,
+    ABCSeries,
+)
+[/SEARCH]
+[REPLACE]
+from pandas.core.dtypes.generic import (
+    ABCDataFrame,
+    ABCSeries,
+)
+from pandas.core.dtypes.missing import is_scalar_na
+[/REPLACE]
+
+pandas/core/internals/construction.py
+[SEARCH]
+    if columns is not None:
+        from pandas.core.series import Series
+
+        arrays = Series(data, index=columns, dtype=object)
+        missing = arrays.isna()
+        if index is None:
+            # GH10856
+            # raise ValueError if only scalars in dict
+            index = _extract_index(arrays[~missing])
+        else:
+            index = ensure_index(index)
+
+        # no obvious "empty" int column
+        if missing.any() and not is_integer_dtype(dtype):
+            nan_dtype: DtypeObj
+
+            if dtype is not None:
+                # calling sanitize_array ensures we don't mix-and-match
+                #  NA dtypes
+                midxs = missing.values.nonzero()[0]
+                for i in midxs:
+                    arr = sanitize_array(arrays.iat[i], index, dtype=dtype)
+                    arrays.iat[i] = arr
+            else:
+                # GH#1783
+                nan_dtype = np.dtype("object")
+                val = construct_1d_arraylike_from_scalar(np.nan, len(index), nan_dtype)
+                nmissing = missing.sum()
+                if copy:
+                    rhs = [val] * nmissing
+                else:
+                    # GH#45369
+                    rhs = [val.copy() for _ in range(nmissing)]
+                arrays.loc[missing] = rhs
+
+        arrays = list(arrays)
+        columns = ensure_index(columns)
+[/SEARCH]
+[REPLACE]
+    if columns is not None:
+        # Fast path: align dict-like data to provided columns without constructing a Series
+        columns_list = list(columns)
+
+        # Determine index if not provided, excluding entries that are "missing"
+        # (i.e., key absent or scalar NA value)
+        if index is None:
+            present_vals = []
+            missing_mask: list[bool] = []
+            for col in columns_list:
+                if col in data:
+                    val = data[col]
+                    miss = is_scalar_na(val)
+                    missing_mask.append(miss)
+                    if not miss:
+                        present_vals.append(val)
+                else:
+                    missing_mask.append(True)
+            # GH10856: raise ValueError if only scalars in dict
+            index = _extract_index(present_vals)
+        else:
+            index = ensure_index(index)
+            missing_mask = [
+                (not (col in data)) or is_scalar_na(data[col]) for col in columns_list
+            ]
+
+        arrays = []
+        fill_missing = any(missing_mask) and not is_integer_dtype(dtype)
+
+        # Prepare shared NaN array for missing when dtype is None and copy is True
+        shared_nan_arr = None
+
+        for i, col in enumerate(columns_list):
+            if not missing_mask[i]:
+                arrays.append(data[col])
+            else:
+                if not fill_missing:
+                    # Leave scalar NaN to let _homogenize handle dtype-specific casting
+                    arrays.append(np.nan)
+                else:
+                    if dtype is not None:
+                        arr = sanitize_array(np.nan, index, dtype=dtype)
+                        arrays.append(arr)
+                    else:
+                        if shared_nan_arr is None:
+                            nan_dtype = np.dtype("object")
+                            shared_nan_arr = construct_1d_arraylike_from_scalar(
+                                np.nan, len(index), nan_dtype
+                            )
+                        if copy:
+                            arrays.append(shared_nan_arr)
+                        else:
+                            arrays.append(shared_nan_arr.copy())
+
+        columns = ensure_index(columns)
+[/REPLACE]

@@ -1,0 +1,64 @@
+pandas/core/indexes/multi.py
+[SEARCH]
+        if level is None:
+            level = range(self.nlevels)
+        else:
+            level = (self._get_level_number(lev) for lev in level)
+[/SEARCH]
+[REPLACE]
+        if level is None:
+            # fastpath: if names are identical to current, no-op
+            if len(names) == self.nlevels and all(
+                (n1 is n2) or (n1 == n2) for n1, n2 in zip(names, self._names)
+            ):
+                return
+            level_numbers = range(self.nlevels)
+        else:
+            level_numbers = [self._get_level_number(lev) for lev in level]
+            # fastpath: if setting names equal to existing for the specified levels
+            if len(names) == len(level_numbers) and all(
+                (name is self._names[lev]) or (name == self._names[lev])
+                for lev, name in zip(level_numbers, names)
+            ):
+                return
+[/REPLACE]
+
+pandas/core/indexes/multi.py
+[SEARCH]
+        # set the name
+        for lev, name in zip(level, names):
+            if name is not None:
+                # GH 20527
+                # All items in 'names' need to be hashable:
+                if not is_hashable(name):
+                    raise TypeError(
+                        f"{type(self).__name__}.name must be a hashable type"
+                    )
+            self._names[lev] = name
+[/SEARCH]
+[REPLACE]
+        # set the name
+        changed = False
+        for lev, name in zip(level_numbers, names):
+            if name is not None:
+                # GH 20527
+                # All items in 'names' need to be hashable:
+                if not is_hashable(name):
+                    raise TypeError(
+                        f"{type(self).__name__}.name must be a hashable type"
+                    )
+            if (self._names[lev] is not name) and (self._names[lev] != name):
+                self._names[lev] = name
+                changed = True
+[/REPLACE]
+
+pandas/core/indexes/multi.py
+[SEARCH]
+        # If .levels has been accessed, the names in our cache will be stale.
+        self._reset_cache()
+[/SEARCH]
+[REPLACE]
+        # If .levels has been accessed, the names in our cache will be stale.
+        if changed:
+            self._reset_cache()
+[/REPLACE]

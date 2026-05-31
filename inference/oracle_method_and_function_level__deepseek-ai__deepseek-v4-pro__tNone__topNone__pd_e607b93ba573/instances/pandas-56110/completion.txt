@@ -1,0 +1,40 @@
+pandas/core/arrays/string_arrow.py
+[SEARCH]
+class ArrowStringArray(ObjectStringArrayMixin, ArrowExtensionArray, BaseStringArray):
+[/SEARCH]
+[REPLACE]
+class ArrowStringArray(ObjectStringArrayMixin, ArrowExtensionArray, BaseStringArray):
+    def _str_get_dummies(self, sep: str = "|"):
+        arr = self._pa_array
+        # For un-chunked arrays, process in one shot.
+        if isinstance(arr, pa.ChunkedArray):
+            arr = arr.combine_chunks()
+        # Dispatch to pyarrow.compute for a native, zero-copy implementation.
+        import pyarrow.compute as pc
+
+        # The semantics: split on `sep` OR the position after the last separator
+        # is an empty-string element. Build a dict from token to indicator mask.
+        splits = pc.utf8_split_whitespace(arr) if sep == " " else pc.split_pattern(arr, sep)
+        # Flatten and deduplicate tokens → columns
+        all_tokens = pc.list_flatten(splits)
+        tokens = all_tokens.unique()
+        # Drop NA tokens if any (PyArrow split may produce nulls inside lists).
+        tokens = pc.drop_null(tokens)
+        # Map each element to its set of tokens, then build indicator columns.
+        # For each token, test membership per row.
+        # pc.list_element is not directly suitable. Instead, use pc.index_in + binary comparison
+        # but we can do it simpler: for each column token, pc.equal(membership test).
+        # However, to avoid a Python loop, we leverage list_set operations.
+
+        # pc.list_count is fast only for single pattern. We'll build columns by
+        # iterating over unique tokens in Python (unique count is typically small).
+        token_list = tokens.to_pylist()
+        masks = []
+        indices = []
+        for tok in token_list:
+            # count occurrences of token in each list
+            has_token = pc.greater(pc.list_count(splits, tok), 0)
+            masks.append(has_token)
+            indices.append(tok)
+        return masks, indices
+[/REPLACE]

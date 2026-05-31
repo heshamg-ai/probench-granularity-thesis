@@ -1,0 +1,14 @@
+
+
+pandas/core/strings/accessor.py
+[SEARCH]
+    names = {v: k for k, v in regex.groupindex.items()}
+    return [names.get(1 + i, i) for i in range(regex.groups)]
+[/SEARCH]
+[REPLACE]
+    names = {v: k for k, v in regex.groupindex.items()}
+    group_names = [names.get(1 + i, i) for i in range(regex.groups)]
+    if all(isinstance(name, int) for name in group_names):
+        return RangeIndex(len(group_names))
+    return group_names
+[/REPLACE]

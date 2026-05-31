@@ -1,0 +1,114 @@
+xarray/backends/common.py
+[SEARCH]
+def _open_datatree_netcdf(
+    ncDataset: ncDataset | ncDatasetLegacyH5,
+    filename_or_obj: str | os.PathLike[Any] | BufferedIOBase | AbstractDataStore,
+    **kwargs,
+) -> DataTree:
+    from xarray.backends.api import open_dataset
+    from xarray.core.datatree import DataTree
+    from xarray.core.treenode import NodePath
+
+    ds = open_dataset(filename_or_obj, **kwargs)
+    tree_root = DataTree.from_dict({"/": ds})
+    with ncDataset(filename_or_obj, mode="r") as ncds:
+        for path in _iter_nc_groups(ncds):
+            subgroup_ds = open_dataset(filename_or_obj, group=path, **kwargs)
+
+            # TODO refactor to use __setitem__ once creation of new nodes by assigning Dataset works again
+            node_name = NodePath(path).name
+            new_node: DataTree = DataTree(name=node_name, data=subgroup_ds)
+            tree_root._set_item(
+                path,
+                new_node,
+                allow_overwrite=False,
+                new_nodes_along_path=True,
+            )
+    return tree_root
+[/SEARCH]
+[REPLACE]
+def _open_datatree_netcdf(
+    ncDataset: ncDataset | ncDatasetLegacyH5,
+    filename_or_obj: str | os.PathLike[Any] | BufferedIOBase | AbstractDataStore,
+    **kwargs,
+) -> DataTree:
+    from xarray.backends.store import StoreBackendEntrypoint
+    from xarray.core.datatree import DataTree
+    from xarray.core.treenode import NodePath
+
+    # Separate engine-specific open kwargs from decoding kwargs
+    open_kwargs: dict[str, Any] = {}
+    # ignore any user-provided 'group' here; we enumerate groups ourselves
+    engine_open_keys = ["group"]
+    module = getattr(ncDataset, "__module__", "")
+    if "netCDF4" in module:
+        engine = "netcdf4"
+        engine_open_keys.extend(
+            ["mode", "format", "clobber", "diskless", "persist", "lock", "autoclose"]
+        )
+    else:
+        engine = "h5netcdf"
+        engine_open_keys.extend(
+            [
+                "format",
+                "lock",
+                "invalid_netcdf",
+                "phony_dims",
+                "decode_vlen_strings",
+                "driver",
+                "driver_kwds",
+            ]
+        )
+    for key in engine_open_keys:
+        if key in kwargs:
+            open_kwargs[key] = kwargs.pop(key)
+
+    store_entrypoint = StoreBackendEntrypoint()
+
+    if engine == "netcdf4":
+        # Open a shared root handle and create stores referencing it
+        root = ncDataset(filename_or_obj, mode=open_kwargs.get("mode", "r"))
+        from xarray.backends.netCDF4_ import NetCDF4DataStore as StoreClass
+
+        store_lock = open_kwargs.get("lock", None)
+        autoclose = open_kwargs.get("autoclose", False)
+        root_store = StoreClass(
+            root, group=None, mode=open_kwargs.get("mode", "r"), lock=store_lock, autoclose=autoclose
+        )
+    else:
+        import h5netcdf
+
+        # Gather h5netcdf.File kwargs
+        file_kwargs: dict[str, Any] = {}
+        for k in ("invalid_netcdf", "decode_vlen_strings", "driver", "phony_dims"):
+            if k in open_kwargs and open_kwargs[k] is not None:
+                file_kwargs[k] = open_kwargs[k]
+        if "driver_kwds" in open_kwargs and open_kwargs["driver_kwds"] is not None:
+            file_kwargs.update(open_kwargs["driver_kwds"])
+
+        root = h5netcdf.File(filename_or_obj, mode="r", **file_kwargs)
+        from xarray.backends.h5netcdf_ import H5NetCDFStore as StoreClass
+
+        store_lock = open_kwargs.get("lock", None)
+        root_store = StoreClass(root, group=None, mode="r", lock=store_lock, autoclose=False)
+
+    # Open root dataset using the store directly
+    ds = store_entrypoint.open_dataset(root_store, **kwargs)
+    tree_root = DataTree.from_dict({"/": ds})
+
+    # Iterate over all subgroups and open each using the shared root handle
+    for path in _iter_nc_groups(root):
+        subgroup_store = StoreClass(root, group=path, mode="r", lock=store_lock, autoclose=False)
+        subgroup_ds = store_entrypoint.open_dataset(subgroup_store, **kwargs)
+
+        # TODO refactor to use __setitem__ once creation of new nodes by assigning Dataset works again
+        node_name = NodePath(path).name
+        new_node: DataTree = DataTree(name=node_name, data=subgroup_ds)
+        tree_root._set_item(
+            path,
+            new_node,
+            allow_overwrite=False,
+            new_nodes_along_path=True,
+        )
+    return tree_root
+[/REPLACE]

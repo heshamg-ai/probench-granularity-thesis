@@ -1,0 +1,246 @@
+
+
+Looking at the code, I need to implement a specialized `_join_monotonic` method for `RangeIndex` that takes advantage of the range structure for O(1) join operations instead of O(n) array operations.
+
+Let me first examine the structure better to create the optimization:
+
+pandas/core/indexes/range.py
+[SEARCH]
+    _typ = "rangeindex"
+    _dtype_validation_metadata = (is_signed_integer_dtype, "signed integer")
+    _range: range
+    _values: np.ndarray
+[/SEARCH]
+[REPLACE]
+    _typ = "rangeindex"
+    _dtype_validation_metadata = (is_signed_integer_dtype, "signed integer")
+    _range: range
+    _values: np.ndarray
+
+    @final
+    def _join_monotonic(
+        self, other: Index, how: JoinHow = "left"
+    ) -> tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        # Optimized join for RangeIndex using range arithmetic
+        # This is called only when both indices are monotonic increasing
+        # and at least one is unique (ensured by caller)
+        assert other.dtype == self.dtype
+        assert self._can_use_libjoin and other._can_use_libjoin
+
+        # Fast path when both are equal
+        if self.equals(other):
+            ret_index = other if how == "right" else self
+            return ret_index, None, None
+
+        # Get range parameters
+        self_start = self._range.start
+        self_step = self._range.step
+        self_len = len(self._range)
+
+        # Convert other to RangeIndex if possible for fast path
+        other_is_range = isinstance(other, RangeIndex)
+        if other_is_range:
+            other_start = other._range.start
+            other_step = other._range.step
+            other_len = len(other._range)
+        else:
+            # For non-RangeIndex, fall back to generic implementation
+            return self._join_monotonic_fallback(other, how)
+
+        # Check if other has consistent step (same step as self for inner/outer)
+        same_step = self_step == other_step
+
+        if how == "left":
+            if other_is_range and other_step == self_step:
+                # Both are RangeIndex with same step - can use range arithmetic
+                if self_start <= other_start:
+                    # other starts after or at self - nothing matches
+                    # return self with empty ridx
+                    ridx = np.zeros(len(self), dtype=np.intp)
+                    return self, None, ridx
+                else:
+                    # Check overlap
+                    self_stop = self_start + self_len * self_step
+                    if other_start >= self_stop or other_start + other_len * self_step <= self_start:
+                        # No overlap
+                        ridx = np.zeros(len(self), dtype=np.intp)
+                        return self, None, ridx
+                    # Partial overlap - need to compute which self indices match
+                    lidx = None
+                    ridx = self._compute_ridx_for_left_join(
+                        other_start, other_step, other_len
+                    )
+                    return self, lidx, ridx
+            else:
+                return self._join_monotonic_fallback(other, how)
+        elif how == "right":
+            if self_is_range := (isinstance(self, RangeIndex)):
+                if same_step:
+                    if other_start <= self_start:
+                        lidx = np.zeros(len(other), dtype=np.intp)
+                        return other, lidx, None
+                    else:
+                        self_stop = self_start + self_len * self_step
+                        if other_start >= self_stop or other_start + other_len * self_step <= self_start:
+                            lidx = np.zeros(len(other), dtype=np.intp)
+                            return other, lidx, None
+                        lidx = self._compute_lidx_for_right_join(
+                            other_start, other_step, other_len
+                        )
+                        return other, lidx, None
+            return self._join_monotonic_fallback(other, how)
+        elif how == "inner":
+            if other_is_range and same_step:
+                return self._range_inner_join(other, how)
+            return self._join_monotonic_fallback(other, how)
+        elif how == "outer":
+            if other_is_range and same_step:
+                return self._range_outer_join(other, how)
+            return self._join_monotonic_fallback(other, how)
+
+        # Fallback for any unhandled case
+        return self._join_monotonic_fallback(other, how)
+
+    def _compute_ridx_for_left_join(
+        self, other_start: int, other_step: int, other_len: int
+    ) -> npt.NDArray[np.intp]:
+        """Compute right indexer for left join with another RangeIndex."""
+        self_start = self._range.start
+        self_step = self._range.step
+        self_len = len(self._range)
+
+        ridx = np.zeros(self_len, dtype=np.intp)
+        for i in range(self_len):
+            val = self_start + i * self_step
+            if other_start <= val < other_start + other_len * other_step:
+                if (val - other_start) % other_step == 0:
+                    ridx[i] = (val - other_start) // other_step
+                else:
+                    ridx[i] = 0
+            else:
+                ridx[i] = -1
+        return ridx
+
+    def _compute_lidx_for_right_join(
+        self, other_start: int, other_step: int, other_len: int
+    ) -> npt.NDArray[np.intp]:
+        """Compute left indexer for right join with another RangeIndex."""
+        other_len = len(other)
+        lidx = np.zeros(len(other), dtype=np.intp)
+        for j in range(other_len):
+            val = other_start + j * other_step
+            if self_start <= val < self_start + self_len * self_step:
+                if (val - self_start) % self_step == 0:
+                    lidx[j] = (val - self_start) // self_step
+                else:
+                    lidx[j] = 0
+            else:
+                lidx[j] = -1
+        return lidx
+
+    def _range_inner_join(
+        self, other: RangeIndex, how: str
+    ) -> tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        """Optimized inner join for two RangeIndex with same step."""
+        self_start = self._range.start
+        self_step = self._range.step
+        self_len = len(self._range)
+
+        other_start = other._range.start
+        other_step = other._range.step
+        other_len = len(other._range)
+
+        # Find intersection bounds
+        start = max(self_start, other_start)
+        stop = min(self_start + self_len * self_step,
+                   other_start + other_len * other_step)
+
+        if start >= stop or (start - other_start) % other_step != 0:
+            # No intersection
+            return self[:0], np.array([], dtype=np.intp), np.array([], dtype=np.intp)
+
+        # Number of elements in intersection
+        n = (stop - start) // self_step
+
+        join_index = RangeIndex(start, stop, self_step)
+        lidx = np.arange(n, dtype=np.intp)
+        ridx = np.arange(n, dtype=np.intp)
+
+        lidx = ensure_platform_int(lidx)
+        ridx = ensure_platform_int(ridx)
+        return join_index, lidx, ridx
+
+    def _range_outer_join(
+        self, other: RangeIndex, how: str
+    ) -> tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        """Optimized outer join for two RangeIndex with same step."""
+        self_start = self._range.start
+        self_step = self._range.step
+        self_len = len(self._range)
+
+        other_start = other._range.start
+        other_step = other._range.step
+        other_len = len(other._range)
+
+        self_stop = self_start + self_len * self_step
+        other_stop = other_start + other_len * other_step
+
+        start = min(self_start, other_start)
+        stop = max(self_stop, other_stop)
+
+        if stop <= start:
+            # Empty result
+            return self[:0], np.array([], dtype=np.intp), np.array([], dtype=np.intp)
+
+        n = (stop - start) // self_step
+        join_index = RangeIndex(start, stop, self_step)
+
+        # Compute indexers
+        lidx = np.full(n, -1, dtype=np.intp)
+        ridx = np.full(n, -1, dtype=np.intp)
+
+        # Fill lidx: positions in join_index that come from self
+        if self_len > 0:
+            l_start_idx = (self_start - start) // self_step
+            for i in range(self_len):
+                lidx[l_start_idx + i] = i
+
+        # Fill ridx: positions in join_index that come from other
+        if other_len > 0:
+            r_start_idx = (other_start - start) // self_step
+            for j in range(other_len):
+                ridx[r_start_idx + j] = j
+
+        lidx = ensure_platform_int(lidx)
+        ridx = ensure_platform_int(ridx)
+        return join_index, lidx, ridx
+
+    def _join_monotonic_fallback(
+        self, other: Index, how: JoinHow = "left"
+    ) -> tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        """Fallback to generic join implementation."""
+        # Import here to avoid circular imports
+        from pandas.core.arrays import ExtensionArray
+        from pandas.core.indexes.numeric import Int64Index
+
+        # For non-RangeIndex or incompatible ranges, convert to Int64Index and join
+        if isinstance(other, RangeIndex):
+            other_index = other._int_index()
+        elif isinstance(other._data, ExtensionArray):
+            other_index = other
+        else:
+            other_index = other
+
+        if isinstance(self._data, ExtensionArray):
+            self_index = self
+        else:
+            self_index = self._int_index()
+
+        # Call the parent implementation
+        return Index._join_monotonic(self_index, other_index, how)
+
+    def _int_index(self) -> "Int64Index":
+        """Convert RangeIndex to Int64Index for fallback operations."""
+        from pandas.core.indexes.numeric import Int64Index
+        return Int64Index(self._values)
+[/REPLACE]

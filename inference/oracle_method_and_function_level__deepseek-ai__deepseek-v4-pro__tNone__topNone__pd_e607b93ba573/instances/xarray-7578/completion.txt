@@ -1,0 +1,51 @@
+xarray/core/rolling.py
+[SEARCH]
+        dataset = {}
+        for key, da in self.obj.data_vars.items():
+            # keeps rollings only for the dataset depending on self.dim
+            dims = [d for d in self.dim if d in da.dims]
+            if dims:
+                wi = {d: window_dims[i] for i, d in enumerate(self.dim) if d in da.dims}
+                st = {d: strides[i] for i, d in enumerate(self.dim) if d in da.dims}
+
+                dataset[key] = self.rollings[key].construct(
+                    window_dim=wi,
+                    fill_value=fill_value,
+                    stride=st,
+                    keep_attrs=keep_attrs,
+                )
+            else:
+                dataset[key] = da.copy()
+
+            # as the DataArrays can be copied we need to delete the attrs
+            if not keep_attrs:
+                dataset[key].attrs = {}
+[/SEARCH]
+[REPLACE]
+        dataset = {}
+        dims_cached = {}
+        for key, da in self.obj.data_vars.items():
+            # keeps rollings only for the dataset depending on self.dim
+            dims = dims_cached.get(key)
+            if dims is None:
+                dims = [d for d in self.dim if d in da.dims]
+                dims_cached[key] = dims
+            if dims:
+                wi = {d: window_dims[i] for i, d in enumerate(self.dim) if d in da.dims}
+                st = {d: strides[i] for i, d in enumerate(self.dim) if d in da.dims}
+
+                constructed = self.rollings[key].construct(
+                    window_dim=wi,
+                    fill_value=fill_value,
+                    stride=st,
+                    keep_attrs=keep_attrs,
+                )
+                if not keep_attrs:
+                    constructed.attrs = {}
+                dataset[key] = constructed
+            else:
+                copied = da.copy()
+                if not keep_attrs:
+                    copied.attrs = {}
+                dataset[key] = copied
+[/REPLACE]

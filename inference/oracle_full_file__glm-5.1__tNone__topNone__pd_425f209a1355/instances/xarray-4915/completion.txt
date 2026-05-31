@@ -1,0 +1,201 @@
+xarray/core/rolling.py
+[SEARCH]
+    def _counts(self, keep_attrs):
+        """Number of non-nan entries in each rolling window."""
+
+        rolling_dim = {
+            d: utils.get_temp_dimname(self.obj.dims, f"_rolling_dim_{d}")
+            for d in self.dim
+        }
+        # We use False as the fill_value instead of np.nan, since boolean
+        # array is faster to be reduced than object array.
+        # The use of skipna==False is also faster since it does not need to
+        # copy the strided array.
+        counts = (
+            self.obj.notnull(keep_attrs=keep_attrs)
+            .rolling(
+                center={d: self.center[i] for i, d in enumerate(self.dim)},
+                **{d: w for d, w in zip(self.dim, self.window)},
+            )
+            .construct(rolling_dim, fill_value=False, keep_attrs=keep_attrs)
+            .sum(dim=list(rolling_dim.values()), skipna=False, keep_attrs=keep_attrs)
+        )
+        return counts
+[/SEARCH]
+[REPLACE]
+    def _counts(self, keep_attrs, _reuse_rolling=None):
+        """Number of non-nan entries in each rolling window."""
+
+        rolling_dim = {
+            d: utils.get_temp_dimname(self.obj.dims, f"_rolling_dim_{d}")
+            for d in self.dim
+        }
+        # We use False as the fill_value instead of np.nan, since boolean
+        # array is faster to be reduced than object array.
+        # The use of skipna==False is also faster since it does not need to
+        # copy the strided array.
+        if _reuse_rolling is not None:
+            counts = _reuse_rolling.construct(
+                rolling_dim, fill_value=False, keep_attrs=keep_attrs
+            ).sum(
+                dim=list(rolling_dim.values()), skipna=False, keep_attrs=keep_attrs
+            )
+        else:
+            counts = (
+                self.obj.notnull(keep_attrs=keep_attrs)
+                .rolling(
+                    center={d: self.center[i] for i, d in enumerate(self.dim)},
+                    **{d: w for d, w in zip(self.dim, self.window)},
+                )
+                .construct(rolling_dim, fill_value=False, keep_attrs=keep_attrs)
+                .sum(
+                    dim=list(rolling_dim.values()), skipna=False, keep_attrs=keep_attrs
+                )
+            )
+        return counts
+[/REPLACE]
+
+xarray/core/rolling.py
+[SEARCH]
+    def reduce(self, func, keep_attrs=None, **kwargs):
+        """Reduce the items in this group by applying `func` along some
+        dimension(s).
+
+        Parameters
+        ----------
+        func : callable
+            Function which can be called in the form
+            `func(x, **kwargs)` to return the result of collapsing an
+            np.ndarray over an the rolling dimension.
+        keep_attrs : bool, default: None
+            If True, the attributes (``attrs``) will be copied from the original
+            object to the new one. If False, the new object will be returned
+            without attributes. If None uses the global default.
+        **kwargs : dict
+            Additional keyword arguments passed on to `func`.
+
+        Returns
+        -------
+        reduced : DataArray
+            Array with summarized data.
+
+        Examples
+        --------
+        >>> da = xr.DataArray(np.arange(8).reshape(2, 4), dims=("a", "b"))
+        >>> rolling = da.rolling(b=3)
+        >>> rolling.construct("window_dim")
+        <xarray.DataArray (a: 2, b: 4, window_dim: 3)>
+        array([[[nan, nan,  0.],
+                [nan,  0.,  1.],
+                [ 0.,  1.,  2.],
+                [ 1.,  2.,  3.]],
+        <BLANKLINE>
+               [[nan, nan,  4.],
+                [nan,  4.,  5.],
+                [ 4.,  5.,  6.],
+                [ 5.,  6.,  7.]]])
+        Dimensions without coordinates: a, b, window_dim
+
+        >>> rolling.reduce(np.sum)
+        <xarray.DataArray (a: 2, b: 4)>
+        array([[nan, nan,  3.,  6.],
+               [nan, nan, 15., 18.]])
+        Dimensions without coordinates: a, b
+
+        >>> rolling = da.rolling(b=3, min_periods=1)
+        >>> rolling.reduce(np.nansum)
+        <xarray.DataArray (a: 2, b: 4)>
+        array([[ 0.,  1.,  3.,  6.],
+               [ 4.,  9., 15., 18.]])
+        Dimensions without coordinates: a, b
+        """
+
+        keep_attrs = self._get_keep_attrs(keep_attrs)
+
+        rolling_dim = {
+            d: utils.get_temp_dimname(self.obj.dims, f"_rolling_dim_{d}")
+            for d in self.dim
+        }
+        windows = self.construct(rolling_dim, keep_attrs=keep_attrs)
+        result = windows.reduce(
+            func, dim=list(rolling_dim.values()), keep_attrs=keep_attrs, **kwargs
+        )
+
+        # Find valid windows based on count.
+        counts = self._counts(keep_attrs=False)
+        return result.where(counts >= self.min_periods)
+[/SEARCH]
+[REPLACE]
+    def reduce(self, func, keep_attrs=None, **kwargs):
+        """Reduce the items in this group by applying `func` along some
+        dimension(s).
+
+        Parameters
+        ----------
+        func : callable
+            Function which can be called in the form
+            `func(x, **kwargs)` to return the result of collapsing an
+            np.ndarray over an the rolling dimension.
+        keep_attrs : bool, default: None
+            If True, the attributes (``attrs``) will be copied from the original
+            object to the new one. If False, the new object will be returned
+            without attributes. If None uses the global default.
+        **kwargs : dict
+            Additional keyword arguments passed on to `func`.
+
+        Returns
+        -------
+        reduced : DataArray
+            Array with summarized data.
+
+        Examples
+        --------
+        >>> da = xr.DataArray(np.arange(8).reshape(2, 4), dims=("a", "b"))
+        >>> rolling = da.rolling(b=3)
+        >>> rolling.construct("window_dim")
+        <xarray.DataArray (a: 2, b: 4, window_dim: 3)>
+        array([[[nan, nan,  0.],
+                [nan,  0.,  1.],
+                [ 0.,  1.,  2.],
+                [ 1.,  2.,  3.]],
+        <BLANKLINE>
+               [[nan, nan,  4.],
+                [nan,  4.,  5.],
+                [ 4.,  5.,  6.],
+                [ 5.,  6.,  7.]]])
+        Dimensions without coordinates: a, b, window_dim
+
+        >>> rolling.reduce(np.sum)
+        <xarray.DataArray (a: 2, b: 4)>
+        array([[nan, nan,  3.,  6.],
+               [nan, nan, 15., 18.]])
+        Dimensions without coordinates: a, b
+
+        >>> rolling = da.rolling(b=3, min_periods=1)
+        >>> rolling.reduce(np.nansum)
+        <xarray.DataArray (a: 2, b: 4)>
+        array([[ 0.,  1.,  3.,  6.],
+               [ 4.,  9., 15., 18.]])
+        Dimensions without coordinates: a, b
+        """
+
+        keep_attrs = self._get_keep_attrs(keep_attrs)
+
+        rolling_dim = {
+            d: utils.get_temp_dimname(self.obj.dims, f"_rolling_dim_{d}")
+            for d in self.dim
+        }
+        windows = self.construct(rolling_dim, keep_attrs=keep_attrs)
+        result = windows.reduce(
+            func, dim=list(rolling_dim.values()), keep_attrs=keep_attrs, **kwargs
+        )
+
+        # Find valid windows based on count.
+        # Reuse the already constructed rolling windows for counting.
+        notnull_rolling = self.obj.notnull(keep_attrs=keep_attrs).rolling(
+            center={d: self.center[i] for i, d in enumerate(self.dim)},
+            **{d: w for d, w in zip(self.dim, self.window)},
+        )
+        counts = self._counts(keep_attrs=False, _reuse_rolling=notnull_rolling)
+        return result.where(counts >= self.min_periods)
+[/REPLACE]

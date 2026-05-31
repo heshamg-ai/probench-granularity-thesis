@@ -1,0 +1,47 @@
+{
+  "id": 97,
+  "scenario_id": "xarray-7796",
+  "repo": "pydata/xarray",
+  "pr_number": 7796,
+  "baseline_sha": "2873831e5048fc630b1eaa5b3316d2e876e1afc7",
+  "reference_sha": "1eb7414980edbfc5c12cf96c08a76f936d19bf8b",
+  "task": "Optimize datetime accessor operations with CFTimeIndex",
+  "entry_point": "floor",
+  "whats_new": "Optimize ``.dt `` accessor performance with ``CFTimeIndex``.`",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/xarray-7796:baseline",
+      "digest": "sha256:48dc0a8402a303c6968f19bda6866a7408a2cd8f95f9fc6601b60feb48e8b41a"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/xarray-7796:reference",
+      "digest": "sha256:e3d5ff23ca62f21a7fd323cef22882e8145833cdf81d975bcabd76f1f6a34ed0"
+    }
+  },
+  "params": [
+    {
+      "name": "n_time",
+      "short_indicator": "nt",
+      "explanation": "Number of time points",
+      "values": [
+        "10000",
+        "100000",
+        "1000000"
+      ]
+    },
+    {
+      "name": "dt_property",
+      "short_indicator": "prop",
+      "explanation": "Datetime accessor property to access",
+      "values": [
+        "year",
+        "dayofyear"
+      ]
+    }
+  ],
+  "core_tests": [
+    "xarray/tests/test_accessor_dt.py::test_field_access"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize floor for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize datetime accessor operations with CFTimeIndex\nOptimization function: floor\n\n\n[start of xarray/core/accessor_dt.py]\n### Relevant context\n#### Class `xarray.core.accessor_dt.TimeAccessor`\n**Class Signature**\n```python\nclass TimeAccessor(Generic[T_DataArray]):\n```\n**Class Attributes**\n```python\n    __slots__ = (\"_obj\",)\n```\n**Class __init__ method**\n```python\n    def __init__(self, obj: T_DataArray) -> None:\n        self._obj = obj\n```\n##### Method `xarray.core.accessor_dt.TimeAccessor._date_field`\n```python\ndef _date_field(self, name: str, dtype: DTypeLike) -> T_DataArray:\n        if dtype is None:\n            dtype = self._obj.dtype\n        obj_type = type(self._obj)\n        result = _get_date_field(self._obj.data, name, dtype)\n        return obj_type(result, name=name, coords=self._obj.coords, dims=self._obj.dims)\n```\n##### Method `xarray.core.accessor_dt.TimeAccessor._tslib_round_accessor`\n```python\ndef _tslib_round_accessor(self, name: str, freq: str) -> T_DataArray:\n        obj_type = type(self._obj)\n        result = _round_field(self._obj.data, name, freq)\n        return obj_type(result, name=name, coords=self._obj.coords, dims=self._obj.dims)\n```\n#### Function `xarray.core.accessor_dt._access_through_cftimeindex`\n```python\ndef _access_through_cftimeindex(values, name):\n    \"\"\"Coerce an array of datetime-like values to a CFTimeIndex\n    and access requested datetime component\n    \"\"\"\n    from xarray.coding.cftimeindex import CFTimeIndex\n\n    values_as_cftimeindex = CFTimeIndex(values.ravel())\n    if name == \"season\":\n        months = values_as_cftimeindex.month\n        field_values = _season_from_months(months)\n    elif name == \"date\":\n        raise AttributeError(\n            \"'CFTimeIndex' object has no attribute `date`. Consider using the floor method instead, for instance: `.time.dt.floor('D')`.\"\n        )\n    else:\n        field_values = getattr(values_as_cftimeindex, name)\n    return field_values.reshape(values.shape)\n```\n#### Function `xarray.core.accessor_dt._get_date_field`\n```python\ndef _get_date_field(values, name, dtype):\n    \"\"\"Indirectly access pandas' libts.get_date_field by wrapping data\n    as a Series and calling through `.dt` attribute.\n\n    Parameters\n    ----------\n    values : np.ndarray or dask.array-like\n        Array-like container of datetime-like values\n    name : str\n        Name of datetime field to access\n    dtype : dtype-like\n        dtype for output date field values\n\n    Returns\n    -------\n    datetime_fields : same type as values\n        Array-like of datetime fields accessed for each element in values\n\n    \"\"\"\n    if is_np_datetime_like(values.dtype):\n        access_method = _access_through_series\n    else:\n        access_method = _access_through_cftimeindex\n\n    if is_duck_dask_array(values):\n        from dask.array import map_blocks\n\n        new_axis = chunks = None\n        # isocalendar adds adds an axis\n        if name == \"isocalendar\":\n            chunks = (3,) + values.chunksize\n            new_axis = 0\n\n        return map_blocks(\n            access_method, values, name, dtype=dtype, new_axis=new_axis, chunks=chunks\n        )\n    else:\n        return access_method(values, name).astype(dtype)\n```\n[end of xarray/core/accessor_dt.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

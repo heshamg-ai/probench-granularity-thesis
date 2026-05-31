@@ -1,0 +1,24 @@
+pandas/core/generic.py
+[SEARCH]
+            name = self._get_axis_name(axis)
+            # error: Keywords must be strings
+            return self.reindex(  # type: ignore[misc]
+                **{name: [r for r in items if r in labels]}  # type: ignore[arg-type]
+            )
+[/SEARCH]
+[REPLACE]
+            name = self._get_axis_name(axis)
+            # error: Keywords must be strings
+            from pandas.core.algorithms import isin as _algos_isin
+            import numpy as np
+
+            # Vectorized membership test of items against labels, preserving order and duplicates
+            _items_list = list(items)
+            _items_arr = np.asarray(_items_list)
+            _mask = _algos_isin(_items_arr, labels._values)
+            _filtered_list = _items_arr[_mask].tolist()
+
+            return self.reindex(  # type: ignore[misc]
+                **{name: _filtered_list}  # type: ignore[arg-type]
+            )
+[/REPLACE]

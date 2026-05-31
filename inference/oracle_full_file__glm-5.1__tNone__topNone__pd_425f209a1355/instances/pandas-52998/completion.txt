@@ -1,0 +1,26 @@
+Looking at the current implementation of `NumericArray.dtype`:
+
+```python
+@cache_readonly
+def dtype(self) -> NumericDtype:
+    mapping = self._dtype_cls._str_to_dtype_mapping()
+    return mapping[str(self._data.dtype)]
+```
+
+This does two things on every first access that can be optimized:
+1. `self._dtype_cls._str_to_dtype_mapping()` — calls a class method that returns the mapping dict. For `IntegerDtype` and `FloatingDtype`, this just returns a module-level constant (`INT_STR_TO_DTYPE` or `FLOAT_STR_TO_DTYPE`). We can avoid the method call overhead by accessing the constant directly.
+2. `str(self._data.dtype)` — converts the numpy dtype to a string. For numpy dtypes, the `.name` attribute is cached and avoids the overhead of the `str()` constructor.
+
+pandas/core/arrays/numeric.py
+[SEARCH]
+    @cache_readonly
+    def dtype(self) -> NumericDtype:
+        mapping = self._dtype_cls._str_to_dtype_mapping()
+        return mapping[str(self._data.dtype)]
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def dtype(self) -> NumericDtype:
+        mapping = self._dtype_cls._str_to_dtype_mapping()
+        return mapping[self._data.dtype.name]
+[/REPLACE]

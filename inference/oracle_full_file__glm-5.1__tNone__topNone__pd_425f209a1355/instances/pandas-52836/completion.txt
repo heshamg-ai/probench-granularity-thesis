@@ -1,0 +1,63 @@
+pandas/core/frame.py
+[SEARCH]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            # We have EAs with the same dtype. We can preserve that dtype in transpose.
+            dtype = dtypes[0]
+            arr_type = dtype.construct_array_type()
+            values = self.values
+
+            new_values = [arr_type._from_sequence(row, dtype=dtype) for row in values]
+            result = type(self)._from_arrays(
+                new_values, index=self.columns, columns=self.index
+            )
+[/SEARCH]
+[REPLACE]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            # We have EAs with the same dtype. We can preserve that dtype in transpose.
+            dtype = dtypes[0]
+
+            from pandas.core.dtypes.dtypes import BaseMaskedDtype
+
+            if isinstance(dtype, BaseMaskedDtype):
+                # Fast path for masked dtypes: build columns from the underlying
+                # _data and _mask arrays without the per-element boxing overhead
+                # of _from_sequence.
+                arr_type = dtype.construct_array_type()
+                mgr_arrays = self._mgr.arrays
+                if len(mgr_arrays) == 1 and mgr_arrays[0].ndim == 2:
+                    # Single 2D masked array — transpose _data and _mask once
+                    arr = mgr_arrays[0]
+                    new_values = [
+                        arr_type._simple_new(arr._data[i], arr._mask[i])
+                        for i in range(len(self))
+                    ]
+                else:
+                    # Multiple 1D masked arrays — extract rows positionally
+                    col_arrays = [a for a in mgr_arrays]
+                    new_values = [
+                        arr_type._simple_new(
+                            np.array([col._data[i] for col in col_arrays]),
+                            np.array([col._mask[i] for col in col_arrays]),
+                        )
+                        for i in range(len(self))
+                    ]
+            else:
+                arr_type = dtype.construct_array_type()
+                values = self.values
+
+                new_values = [
+                    arr_type._from_sequence(row, dtype=dtype) for row in values
+                ]
+
+            result = type(self)._from_arrays(
+                new_values, index=self.columns, columns=self.index
+            )
+[/REPLACE]

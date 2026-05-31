@@ -1,0 +1,285 @@
+
+
+Looking at the code, the key optimization opportunity is in `Block.replace_list`. When using a large dict, pandas converts it to two lists and calls `replace_list`, which computes masks sequentially for each replacement. The optimization should:
+
+1. Use vectorized `np.isin` for numeric dtypes instead of computing masks one by one
+2. For string dtypes, pre-compute which values need replacement once using vectorized operations
+
+Let me implement this optimization:
+
+pandas/core/internals/blocks.py
+[SEARCH]
+    @final
+    def replace_list(
+        self,
+        src_list: Iterable[Any],
+        dest_list: Sequence[Any],
+        inplace: bool = False,
+        regex: bool = False,
+        using_cow: bool = False,
+    ) -> list[Block]:
+        """
+        See BlockManager.replace_list docstring.
+        """
+        values = self.values
+
+        if isinstance(values, Categorical):
+            # TODO: avoid special-casing
+            # GH49404
+            if using_cow and inplace:
+                # TODO(CoW): Optimize
+                blk = self.copy()
+            else:
+                blk = self if inplace else self.copy()
+            values = cast(Categorical, blk.values)
+            values._replace(to_replace=src_list, value=dest_list, inplace=True)
+            return [blk]
+
+        # Exclude anything that we know we won't contain
+        pairs = [
+            (x, y) for x, y in zip(src_list, dest_list) if self._can_hold_element(x)
+        ]
+        if not len(pairs):
+            # shortcut, nothing to replace
+            return [self] if inplace else [self.copy()]
+
+        src_len = len(pairs) - 1
+
+        if is_string_dtype(values.dtype):
+            # Calculate the mask once, prior to the call of comp
+            # in order to avoid repeating the same computations
+            mask = ~isna(values)
+            masks = [
+                compare_or_regex_search(values, s[0], regex=regex, mask=mask)
+                for s in pairs
+            ]
+        else:
+            # GH#38086 faster if we know we dont need to check for regex
+            masks = [missing.mask_missing(values, s[0]) for s in pairs]
+
+        masks = [extract_bool_array(x) for x in masks]
+
+        if using_cow and inplace:
+            # TODO(CoW): Optimize
+            rb = [self.copy()]
+        else:
+            rb = [self if inplace else self.copy()]
+        for i, (src, dest) in enumerate(pairs):
+            convert = i == src_len  # only convert once at the end
+            new_rb: list[Block] = []
+
+            # GH-39338: _replace_coerce can split a block into
+            # single-column blocks, so track the index so we know
+            # where to index into the mask
+            for blk_num, blk in enumerate(rb):
+                if len(rb) == 1:
+                    m = masks[i]
+                else:
+                    mib = masks[i]
+                    assert not isinstance(mib, bool)
+                    m = mib[blk_num : blk_num + 1]
+
+                # error: Argument "mask" to "_replace_coerce" of "Block" has
+                # incompatible type "Union[ExtensionArray, ndarray[Any, Any], bool]";
+                # expected "ndarray[Any, dtype[bool_]]"
+                result = blk._replace_coerce(
+                    to_replace=src,
+                    value=dest,
+                    mask=m,  # type: ignore[arg-type]
+                    inplace=inplace,
+                    regex=regex,
+                )
+                if convert and blk.is_object and not all(x is None for x in dest_list):
+                    # GH#44498 avoid unwanted cast-back
+                    result = extend_blocks([b.convert(copy=True) for b in result])
+                new_rb.extend(result)
+            rb = new_rb
+        return rb
+[/SEARCH]
+[REPLACE]
+    @final
+    def replace_list(
+        self,
+        src_list: Iterable[Any],
+        dest_list: Sequence[Any],
+        inplace: bool = False,
+        regex: bool = False,
+        using_cow: bool = False,
+    ) -> list[Block]:
+        """
+        See BlockManager.replace_list docstring.
+        """
+        values = self.values
+
+        if isinstance(values, Categorical):
+            # TODO: avoid special-casing
+            # GH49404
+            if using_cow and inplace:
+                # TODO(CoW): Optimize
+                blk = self.copy()
+            else:
+                blk = self if inplace else self.copy()
+            values = cast(Categorical, blk.values)
+            values._replace(to_replace=src_list, value=dest_list, inplace=True)
+            return [blk]
+
+        # Exclude anything that we know we won't contain
+        pairs = [
+            (x, y) for x, y in zip(src_list, dest_list) if self._can_hold_element(x)
+        ]
+        if not len(pairs):
+            # shortcut, nothing to replace
+            return [self] if inplace else [self.copy()]
+
+        src_len = len(pairs) - 1
+
+        # Optimization for large dicts: use vectorized operations
+        # when we have enough pairs to make it worthwhile
+        if len(pairs) > 10 and not regex:
+            return self._replace_list_optimized(pairs, src_len, inplace, using_cow)
+
+        if is_string_dtype(values.dtype):
+            # Calculate the mask once, prior to the call of comp
+            # in order to avoid repeating the same computations
+            mask = ~isna(values)
+            masks = [
+                compare_or_regex_search(values, s[0], regex=regex, mask=mask)
+                for s in pairs
+            ]
+        else:
+            # GH#38086 faster if we know we dont need to check for regex
+            masks = [missing.mask_missing(values, s[0]) for s in pairs]
+
+        masks = [extract_bool_array(x) for x in masks]
+
+        if using_cow and inplace:
+            # TODO(CoW): Optimize
+            rb = [self.copy()]
+        else:
+            rb = [self if inplace else self.copy()]
+        for i, (src, dest) in enumerate(pairs):
+            convert = i == src_len  # only convert once at the end
+            new_rb: list[Block] = []
+
+            # GH-39338: _replace_coerce can split a block into
+            # single-column blocks, so track the index so we know
+            # where to index into the mask
+            for blk_num, blk in enumerate(rb):
+                if len(rb) == 1:
+                    m = masks[i]
+                else:
+                    mib = masks[i]
+                    assert not isinstance(mib, bool)
+                    m = mib[blk_num : blk_num + 1]
+
+                # error: Argument "mask" to "_replace_coerce" of "Block" has
+                # incompatible type "Union[ExtensionArray, ndarray[Any, Any], bool]";
+                # expected "ndarray[Any, dtype[bool_]]"
+                result = blk._replace_coerce(
+                    to_replace=src,
+                    value=dest,
+                    mask=m,  # type: ignore[arg-type]
+                    inplace=inplace,
+                    regex=regex,
+                )
+                if convert and blk.is_object and not all(x is None for x in dest_list):
+                    # GH#44498 avoid unwanted cast-back
+                    result = extend_blocks([b.convert(copy=True) for b in result])
+                new_rb.extend(result)
+            rb = new_rb
+        return rb
+
+    @final
+    def _replace_list_optimized(
+        self,
+        pairs: list[tuple[Any, Any]],
+        src_len: int,
+        inplace: bool,
+        using_cow: bool,
+    ) -> list[Block]:
+        """
+        Optimized replace_list for large dicts using vectorized operations.
+
+        Instead of computing masks one-by-one, we:
+        - For string dtypes: use np.isin with pre-computed valid mask
+        - For other dtypes: use np.isin to find all matches at once,
+          then apply vectorized replacement
+
+        Parameters
+        ----------
+        pairs : list of (to_replace, value) tuples
+        src_len : len(pairs) - 1, used to determine if we should convert at end
+        inplace : bool
+        using_cow : bool
+
+        Returns
+        -------
+        list[Block]
+        """
+        values = self.values
+
+        src_arr = np.array([p[0] for p in pairs])
+        dest_arr = np.array([p[1] for p in pairs], dtype=object)
+
+        if using_cow and inplace:
+            blk = self.copy()
+        else:
+            blk = self if inplace else self.copy()
+
+        new_values = blk.values
+
+        if is_string_dtype(new_values.dtype):
+            # For string dtypes, compute combined mask using np.isin
+            # This is faster than calling compare_or_regex_search for each pair
+            mask_valid = ~isna(new_values)
+            mask = np.isin(new_values, src_arr) & mask_valid
+            if not mask.any():
+                return [blk]
+
+            # Build reverse lookup: find indices in src_arr for each value
+            idx_arr = np.searchsorted(src_arr, new_values)
+            idx_arr = np.clip(idx_arr, 0, len(src_arr) - 1)
+
+            # Only replace where values actually match src_arr
+            match_mask = mask
+            valid_match = src_arr[idx_arr] == new_values
+            replace_mask = match_mask & valid_match
+
+            if replace_mask.any():
+                replace_values = dest_arr[idx_arr]
+                new_values = np.where(replace_mask, replace_values, new_values)
+        else:
+            # For non-string dtypes, use vectorized np.isin
+            # Find which values in new_values are in src_arr
+            mask = np.isin(new_values, src_arr)
+            if not mask.any():
+                return [blk]
+
+            # Build reverse lookup table using searchsorted
+            # Sort src_arr and get sorted indices
+            sorted_indices = np.argsort(src_arr)
+            sorted_src = src_arr[sorted_indices]
+            sorted_dest = dest_arr[sorted_indices]
+
+            # Find position of each value in sorted src_arr
+            idx_arr = np.searchsorted(sorted_src, new_values)
+            idx_arr = np.clip(idx_arr, 0, len(sorted_src) - 1)
+
+            # Map back through sorted indices to get original positions
+            orig_idx = sorted_indices[idx_arr]
+
+            # Check which values actually match (within bounds)
+            valid_match = sorted_src[idx_arr] == new_values
+            match_mask = mask & valid_match
+
+            if match_mask.any():
+                replace_values = sorted_dest[idx_arr]
+                new_values = np.where(match_mask, replace_values, new_values)
+
+        blk = blk.make_block(new_values)
+
+        # Apply final convert only once at end, matching original behavior
+        if blk.is_object and not all(x is None for x in dest_arr):
+            return blk.convert(copy=True)
+        return [blk]
+[/REPLACE]

@@ -1,0 +1,66 @@
+{
+  "id": 6,
+  "scenario_id": "pandas-51630",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 51630,
+  "baseline_sha": "f94386498f45de70d743a08ebcc334a3ef7c198d",
+  "reference_sha": "e6173e290cacf03dac5672ad5177ffa5683d6a55",
+  "task": "Optimize ArrowExtensionArray.isna execution for zero-null and all-null Arrow-backed arrays",
+  "entry_point": "pandas.arrays.ArrowExtensionArray.isna",
+  "whats_new": "Performance improvement in ~arrays.ArrowExtensionArray.isna when array has zero nulls or is all nulls",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-51630:baseline",
+      "digest": "sha256:a9c73a323efa727607c1d236fdf9d4aa6ed271a9a5b2565adfae76faac8aabe4"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-51630:reference",
+      "digest": "sha256:e5ffce6af90ca55c6561e3bfe9e852a6d7e750a35143455bfe4fb783658afe4b"
+    }
+  },
+  "params": [
+    {
+      "name": "Rows",
+      "short_indicator": "R",
+      "explanation": "Number of rows",
+      "values": [
+        "10000",
+        "100000"
+      ]
+    },
+    {
+      "name": "Columns",
+      "short_indicator": "C",
+      "explanation": "Number of columns",
+      "values": [
+        "100",
+        "1000"
+      ]
+    },
+    {
+      "name": "Arrow Type",
+      "short_indicator": "AT",
+      "explanation": "Arrow data type",
+      "values": [
+        "int64",
+        "float64",
+        "string"
+      ]
+    },
+    {
+      "name": "Null Pattern",
+      "short_indicator": "NP",
+      "explanation": "Null value pattern",
+      "values": [
+        "no_nulls",
+        "all_nulls"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/extension/test_arrow.py::test_to_numpy_with_defaults",
+    "pandas/tests/extension/test_arrow.py::test_to_numpy_int_with_na"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.arrays.ArrowExtensionArray.isna for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize ArrowExtensionArray.isna execution for zero-null and all-null Arrow-backed arrays\nOptimization function: pandas.arrays.ArrowExtensionArray.isna\n\n\n[start of pandas/core/arrays/arrow/array.py]\n### Relevant context\n#### Class `pandas.core.arrays.arrow.array.ArrowExtensionArray`\n**Class Signature**\n```python\nclass ArrowExtensionArray(OpsMixin, ExtensionArray, BaseStringArrayMethods):\n```\n**Class Attributes**\n```python\n    _data: pa.ChunkedArray\n    _dtype: ArrowDtype\n    _dt_dayofweek = _dt_day_of_week\n    _dt_weekday = _dt_day_of_week\n    _dt_dayofyear = _dt_day_of_year\n```\n**Class __init__ method**\n```python\n    def __init__(self, values: pa.Array | pa.ChunkedArray) -> None:\n        if pa_version_under7p0:\n            msg = \"pyarrow>=7.0.0 is required for PyArrow backed ArrowExtensionArray.\"\n            raise ImportError(msg)\n        if isinstance(values, pa.Array):\n            self._data = pa.chunked_array([values])\n        elif isinstance(values, pa.ChunkedArray):\n            self._data = values\n        else:\n            raise ValueError(\n                f\"Unsupported type '{type(values)}' for ArrowExtensionArray\"\n            )\n        self._dtype = ArrowDtype(self._data.type)\n```\n##### Method `pandas.core.arrays.arrow.array.ArrowExtensionArray.isna`\n```python\ndef isna(self) -> npt.NDArray[np.bool_]:\n        \"\"\"\n        Boolean NumPy array indicating if each value is missing.\n\n        This should return a 1-D array the same length as 'self'.\n        \"\"\"\n        return self._data.is_null().to_numpy()\n```\n[end of pandas/core/arrays/arrow/array.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

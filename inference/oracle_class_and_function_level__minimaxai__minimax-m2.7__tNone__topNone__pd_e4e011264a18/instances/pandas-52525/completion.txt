@@ -1,0 +1,95 @@
+
+
+Looking at the `to_numpy` method, I can see there's a performance bottleneck when converting to float dtype with `na_value=np.nan` for arrays with missing values. The current code does a full copy and then uses `__setitem__` to fill NA values, which is slow.
+
+The optimization should use PyArrow's `fill_null` method to replace nulls before conversion, which is much more efficient.
+
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    @doc(ExtensionArray.to_numpy)
+    def to_numpy(
+        self,
+        dtype: npt.DTypeLike | None = None,
+        copy: bool = False,
+        na_value: object = lib.no_default,
+    ) -> np.ndarray:
+        if dtype is None and self._hasna:
+            dtype = object
+        if na_value is lib.no_default:
+            na_value = self.dtype.na_value
+
+        pa_type = self._pa_array.type
+        if pa.types.is_temporal(pa_type) and not pa.types.is_date(pa_type):
+            # temporal types with units and/or timezones currently
+            #  require pandas/python scalars to pass all tests
+            # TODO: improve performance (this is slow)
+            result = np.array(list(self), dtype=dtype)
+        elif is_object_dtype(dtype) and self._hasna:
+            result = np.empty(len(self), dtype=object)
+            mask = ~self.isna()
+            result[mask] = np.asarray(self[mask]._pa_array)
+        elif pa.types.is_null(self._pa_array.type):
+            result = np.asarray(self._pa_array, dtype=dtype)
+            if not isna(na_value):
+                result[:] = na_value
+            return result
+        elif self._hasna:
+            data = self.copy()
+            data[self.isna()] = na_value
+            return np.asarray(data._pa_array, dtype=dtype)
+        else:
+            result = np.asarray(self._pa_array, dtype=dtype)
+            if copy:
+                result = result.copy()
+        if self._hasna:
+            result[self.isna()] = na_value
+        return result
+[/SEARCH]
+[REPLACE]
+    @doc(ExtensionArray.to_numpy)
+    def to_numpy(
+        self,
+        dtype: npt.DTypeLike | None = None,
+        copy: bool = False,
+        na_value: object = lib.no_default,
+    ) -> np.ndarray:
+        if dtype is None and self._hasna:
+            dtype = object
+        if na_value is lib.no_default:
+            na_value = self.dtype.na_value
+
+        pa_type = self._pa_array.type
+        if pa.types.is_temporal(pa_type) and not pa.types.is_date(pa_type):
+            # temporal types with units and/or timezones currently
+            #  require pandas/python scalars to pass all tests
+            # TODO: improve performance (this is slow)
+            result = np.array(list(self), dtype=dtype)
+        elif is_object_dtype(dtype) and self._hasna:
+            result = np.empty(len(self), dtype=object)
+            mask = ~self.isna()
+            result[mask] = np.asarray(self[mask]._pa_array)
+        elif pa.types.is_null(self._pa_array.type):
+            result = np.asarray(self._pa_array, dtype=dtype)
+            if not isna(na_value):
+                result[:] = na_value
+            return result
+        elif self._hasna:
+            if is_float_dtype(dtype) and na_value is np.nan:
+                # Fast path: use PyArrow fill_null for float with np.nan
+                # This avoids the overhead of copying the entire array
+                # and using __setitem__ for each NA value
+                filled = pc.fill_null(self._pa_array, pa.scalar(np.nan))
+                result = np.asarray(filled, dtype=dtype)
+                if copy:
+                    result = result.copy()
+                return result
+            else:
+                data = self.copy()
+                data[self.isna()] = na_value
+                return np.asarray(data._pa_array, dtype=dtype)
+        else:
+            result = np.asarray(self._pa_array, dtype=dtype)
+            if copy:
+                result = result.copy()
+        return result
+[/REPLACE]

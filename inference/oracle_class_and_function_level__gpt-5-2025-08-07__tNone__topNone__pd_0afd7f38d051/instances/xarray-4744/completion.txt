@@ -1,0 +1,49 @@
+xarray/core/dataset.py
+[SEARCH]
+        else:
+            return self._copy_listed(np.asarray(key))
+[/SEARCH]
+[REPLACE]
+        else:
+            # Avoid creating a NumPy array from large lists/tuples of names
+            # for better performance and lower memory use.
+            if isinstance(key, (list, tuple, np.ndarray)):
+                names = key
+            else:
+                # Fallback: materialize other iterables (e.g., generators)
+                # into a list of names; this mirrors prior behavior without
+                # incurring the cost of np.asarray for large inputs.
+                try:
+                    names = list(key)
+                except TypeError:
+                    # As a last resort, keep previous behavior
+                    return self._copy_listed(np.asarray(key))
+
+            # Fast-path: if selecting all data variables in their existing order,
+            # return a cheap shallow copy of the original Dataset.
+            try:
+                if isinstance(names, (list, tuple)) and list(names) == list(self.data_vars):
+                    return self.copy(deep=False)
+            except Exception:
+                # In case of any unexpected issue, fall back to the original behavior.
+                return self._copy_listed(np.asarray(key))
+
+            return self._copy_listed(names)
+[/REPLACE]
+
+xarray/core/dataset.py
+[SEARCH]
+            if set(self.variables[k].dims) <= needed_dims:
+                variables[k] = self._variables[k]
+                coord_names.add(k)
+                if k in self.indexes:
+                    indexes[k] = self.indexes[k]
+[/SEARCH]
+[REPLACE]
+            var_k = self._variables[k]
+            if set(var_k.dims) <= needed_dims:
+                variables[k] = var_k
+                coord_names.add(k)
+                if k in self.indexes:
+                    indexes[k] = self.indexes[k]
+[/REPLACE]

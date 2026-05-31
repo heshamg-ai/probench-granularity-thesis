@@ -1,0 +1,25 @@
+pandas/io/parsers/base_parser.py
+[SEARCH]
+                data_dict[colspec] = converter(
+                    np.asarray(data_dict[colspec]), col=colspec
+                )
+[/SEARCH]
+[REPLACE]
+                obj = data_dict[colspec]
+                arr = obj.to_numpy(copy=False) if hasattr(obj, "to_numpy") else np.asarray(obj)
+                data_dict[colspec] = converter(arr, col=colspec)
+[/REPLACE]
+
+pandas/io/parsers/base_parser.py
+[SEARCH]
+    if not keep_date_col:
+        for c in list(date_cols):
+            data_dict.pop(c)
+            new_cols.remove(c)
+[/SEARCH]
+[REPLACE]
+    if not keep_date_col:
+        for c in list(date_cols):
+            data_dict.pop(c)
+        new_cols = [c for c in new_cols if c not in date_cols]
+[/REPLACE]

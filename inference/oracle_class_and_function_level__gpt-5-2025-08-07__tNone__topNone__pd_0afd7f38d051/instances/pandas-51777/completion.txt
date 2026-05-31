@@ -1,0 +1,48 @@
+pandas/core/series.py
+[SEARCH]
+        new_index = self.index.union(other.index)
+        this = self.reindex(new_index, copy=False)
+        other = other.reindex(new_index, copy=False)
+        if this.dtype.kind == "M" and other.dtype.kind != "M":
+            other = to_datetime(other)
+
+        return this.where(notna(this), other)
+[/SEARCH]
+[REPLACE]
+        new_index = self.index.union(other.index)
+
+        # Fastpath: avoid constructing two reindexed Series and delegating to where()
+        # when both sides are numpy-backed (non-ExtensionArray) and indexes are misaligned.
+        if not isinstance(self._values, ExtensionArray) and not isinstance(
+            other._values, ExtensionArray
+        ):
+            # Build reindexed values via take_nd using indexers into the union
+            indexer_self = self.index.get_indexer(new_index)
+            indexer_other = other.index.get_indexer(new_index)
+
+            this_values = algorithms.take_nd(
+                self._values, indexer_self, allow_fill=True, fill_value=None
+            )
+            other_values = algorithms.take_nd(
+                other._values, indexer_other, allow_fill=True, fill_value=None
+            )
+
+            # Handle datetime64[ns] vs non-datetime inputs to match original behavior
+            if this_values.dtype.kind == "M" and other_values.dtype.kind != "M":
+                other_values = to_datetime(other_values)
+
+            try:
+                mask = notna(this_values)
+                res_values = np.where(mask, this_values, other_values)
+                return self._constructor(res_values, index=new_index, name=self.name)
+            except Exception:
+                # Fallback in case of incompatible dtypes or unexpected failures
+                pass
+
+        this = self.reindex(new_index, copy=False)
+        other = other.reindex(new_index, copy=False)
+        if this.dtype.kind == "M" and other.dtype.kind != "M":
+            other = to_datetime(other)
+
+        return this.where(notna(this), other)
+[/REPLACE]

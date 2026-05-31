@@ -1,0 +1,93 @@
+
+
+Looking at the code, the issue is that when `DataFrame._values` is an ExtensionArray (like Float64Array or pyarrow-backed arrays), the `~isna(self._values)` in `_find_valid_index` returns an ExtensionArray, but `find_valid_index` expects a numpy array. This can cause issues with `argmax()` and indexing.
+
+The fix should ensure `is_valid` is converted to a numpy array early in `find_valid_index` to handle ExtensionArrays properly.
+
+pandas/core/missing.py
+[SEARCH]
+def find_valid_index(
+    values, *, how: str, is_valid: npt.NDArray[np.bool_]
+) -> int | None:
+    """
+    Retrieves the index of the first valid value.
+
+    Parameters
+    ----------
+    values : ndarray or ExtensionArray
+    how : {'first', 'last'}
+        Use this parameter to change between the first or last valid index.
+    is_valid: np.ndarray
+        Mask to find na_values.
+
+    Returns
+    -------
+    int or None
+    """
+    assert how in ["first", "last"]
+
+    if len(values) == 0:  # early stop
+        return None
+
+    if values.ndim == 2:
+        is_valid = is_valid.any(axis=1)  # reduce axis 1
+
+    if how == "first":
+        idxpos = is_valid[::].argmax()
+
+    elif how == "last":
+        idxpos = len(values) - 1 - is_valid[::-1].argmax()
+
+    chk_notna = is_valid[idxpos]
+
+    if not chk_notna:
+        return None
+    # Incompatible return value type (got "signedinteger[Any]",
+    # expected "Optional[int]")
+    return idxpos  # type: ignore[return-value]
+[/SEARCH]
+[REPLACE]
+def find_valid_index(
+    values, *, how: str, is_valid: npt.NDArray[np.bool_]
+) -> int | None:
+    """
+    Retrieves the index of the first valid value.
+
+    Parameters
+    ----------
+    values : ndarray or ExtensionArray
+    how : {'first', 'last'}
+        Use this parameter to change between the first or last valid index.
+    is_valid: np.ndarray
+        Mask to find na_values.
+
+    Returns
+    -------
+    int or None
+    """
+    assert how in ["first", "last"]
+
+    if len(values) == 0:  # early stop
+        return None
+
+    # Convert to numpy array if necessary to handle ExtensionArrays
+    if not isinstance(is_valid, np.ndarray):
+        is_valid = np.asarray(is_valid)
+
+    if values.ndim == 2:
+        is_valid = is_valid.any(axis=1)  # reduce axis 1
+
+    if how == "first":
+        idxpos = is_valid[::].argmax()
+
+    elif how == "last":
+        idxpos = len(values) - 1 - is_valid[::-1].argmax()
+
+    chk_notna = is_valid[idxpos]
+
+    if not chk_notna:
+        return None
+    # Incompatible return value type (got "signedinteger[Any]",
+    # expected "Optional[int]")
+    return idxpos  # type: ignore[return-value]
+[/REPLACE]

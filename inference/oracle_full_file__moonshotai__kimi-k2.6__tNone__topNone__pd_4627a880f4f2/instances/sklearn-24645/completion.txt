@@ -1,0 +1,78 @@
+sklearn/neighbors/_nearest_centroid.py
+[SEARCH]
+    def predict(self, X):
+        """Perform classification on an array of test vectors `X`.
+
+        The predicted class `C` for each sample in `X` is returned.
+
+        Parameters
+        ----------
+        X : {array-like, sparse matrix} of shape (n_samples, n_features)
+            Test samples.
+
+        Returns
+        -------
+        C : ndarray of shape (n_samples,)
+            The predicted classes.
+
+        Notes
+        -----
+        If the metric constructor parameter is `"precomputed"`, `X` is assumed
+        to be the distance matrix between the data to be predicted and
+        `self.centroids_`.
+        """
+        check_is_fitted(self)
+
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        return self.classes_[
+            pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)
+        ]
+[/SEARCH]
+[REPLACE]
+    def predict(self, X):
+        """Perform classification on an array of test vectors `X`.
+
+        The predicted class `C` for each sample in `X` is returned.
+
+        Parameters
+        ----------
+        X : {array-like, sparse matrix} of shape (n_samples, n_features)
+            Test samples.
+
+        Returns
+        -------
+        C : ndarray of shape (n_samples,)
+            The predicted classes.
+
+        Notes
+        -----
+        If the metric constructor parameter is `"precomputed"`, `X` is assumed
+        to be the distance matrix between the data to be predicted and
+        `self.centroids_`.
+        """
+        check_is_fitted(self)
+
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        centroids = self.centroids_
+        metric = self.metric
+        n_classes = centroids.shape[0]
+        n_samples = X.shape[0]
+
+        # For large problems, process in chunks to avoid huge temporary arrays
+        # while keeping vectorized operations.  The chunk size is tuned so that
+        # the temporary distance matrix for one chunk fits in L2 cache.
+        if n_classes > 256 and n_samples > 1:
+            max_n_elements = 256 * 256  # ~512KB for float64
+            chunk_size = max(1, max_n_elements // n_classes)
+            indices = np.empty(n_samples, dtype=int)
+            for start in range(0, n_samples, chunk_size):
+                end = min(start + chunk_size, n_samples)
+                indices[start:end] = pairwise_distances(
+                    X[start:end], centroids, metric=metric
+                ).argmin(axis=1)
+            return self.classes_[indices]
+
+        return self.classes_[
+            pairwise_distances(X, centroids, metric=metric).argmin(axis=1)
+        ]
+[/REPLACE]

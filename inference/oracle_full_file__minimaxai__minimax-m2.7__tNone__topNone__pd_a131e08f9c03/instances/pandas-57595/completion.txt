@@ -1,0 +1,17 @@
+
+
+Looking at the code, I can see that `__len__` is defined in `BaseGroupBy` and currently calls `len(self.groups)`. The `groups` property returns `self._grouper.groups` which builds a full dictionary. There's also an `ngroups` property that returns `self._grouper.ngroups` which is likely precomputed.
+
+Let me optimize this by using `ngroups` instead of `len(groups)`:
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+    @final
+    def __len__(self) -> int:
+        return len(self.groups)
+[/SEARCH]
+[REPLACE]
+    @final
+    def __len__(self) -> int:
+        return self._grouper.ngroups
+[/REPLACE]

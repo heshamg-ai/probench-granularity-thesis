@@ -1,0 +1,402 @@
+ pandas/core/indexes/multi.py [SEARCH] def _sort_levels_monotonic(self, raise_if_incomparable: bool = False) -> MultiIndex:
+        """
+        This is an *internal* function.
+
+        Create a new MultiIndex from the current to monotonically sorted
+        items IN the levels.  This does not actually make the entire
+        MultiIndex monotonic, JUST the levels.
+
+        The resulting MultiIndex will have the same outward appearance,
+        meaning the same .values and ordering.  It will also be
+        .equals() to the original.
+
+        Returns
+        -------
+        MultiIndex
+        Examples
+        --------
+        >>> mi = MultiIndex(levels=[['a', 'b'], ['bb', 'aa']],
+        ...                 codes=[[0, 0, 1, 1], [0, 1, 0, 1]])
+        >>> mi
+        MultiIndex([('a', 'bb'), ('a', 'aa'), ('b', 'bb'), ('b', 'aa')], )
+        >>> mi.sort_values()
+        MultiIndex([('a', 'aa'), ('a', 'bb'), ('b', 'aa'), ('b', 'bb')], )
+        """
+        if self._is_lexsorted() and self.is_monotonic_increasing:
+            return self
+
+        new_levels = []
+        new_codes = []
+        for lev, level_codes in zip(self.levels, self.codes):
+            if not lev.is_monotonic_increasing:
+                try:
+                    # indexer to reorder the levels
+                    indexer = lev.argsort()
+                except TypeError:
+                    if raise_if_incomparable:
+                        raise
+                    else:
+                        lev = lev.take(indexer)
+                        # indexer to reorder the level codes
+                        indexer = ensure_platform_int(indexer)
+                        ri = lib.get_reverse_indexer(indexer, len(indexer))
+                        level_codes = algos.take_nd(ri, level_codes)
+
+            new_levels.append(lev)
+            new_codes.append(level_codes)
+
+        return MultiIndex(
+            new_levels,
+            new_codes,
+            names=self.names,
+            sortorder=self.sortorder,
+            verify_integrity=False,
+        )
+[/SEARCH] [REPLACE] def _sort_levels_monotonic(self, raise_if_incomparable: bool = False) -> MultiIndex:
+        """
+        This is an *internal* function.
+
+        Create a new MultiIndex from the current to monotonically sorted
+        items IN the levels.  This does not actually make the entire
+        MultiIndex monotonic, JUST the levels.
+
+        The resulting MultiIndex will have the same outward appearance,
+        meaning the same .values and ordering.  It will also be
+        .equals() to the original.
+
+        Returns
+        -------
+        MultiIndex
+        Examples
+        --------
+        >>> mi = MultiIndex(levels=[['a', 'b'], ['bb', 'aa']],
+        ...                 codes=[[0, 0, 1, 1], [0, 1, 0, 1]])
+        >>> mi
+        MultiIndex([('a', 'bb'), ('a', 'aa'), ('b', 'bb'), ('b', 'aa')], )
+        >>> mi.sort_values()
+        MultiIndex([('a', 'aa'), ('a', 'bb'), ('b', 'aa'), ('b', 'bb')], )
+        """
+        if self._is_lexsorted() and self.is_monotonic_increasing:
+            return self
+
+        new_levels = []
+        new_codes = []
+        for lev, level_codes in zip(self.levels, self.codes):
+            if not lev.is_monotonic_increasing:
+                try:
+                    # indexer to reorder the levels
+                    indexer = lev.argsort()
+                except TypeError:
+                    if raise_if_incomparable:
+                        raise
+                    new_levels.append(lev)
+                    new_codes.append(level_codes)
+                    continue
+
+                lev = lev.take(indexer)
+                # indexer to reorder the level codes
+                indexer = ensure_platform_int(indexer)
+                ri = lib.get_reverse_indexer(indexer, len(indexer))
+                level_codes = algos.take_nd(ri, level_codes)
+
+            new_levels.append(lev)
+            new_codes.append(level_codes)
+
+        return MultiIndex(
+            new_levels,
+            new_codes,
+            names=self.names,
+            sortorder=self.sortorder,
+            verify_integrity=False,
+        )
+[/REPLACE]
+
+pandas/core/indexes/multi.py [SEARCH]     def _get_codes_for_sorting(self) -> list[Categorical]:
+        """
+        we are categorizing our codes by using the available categories
+        (all, not just observed) excluding any missing ones (-1);
+        this is in preparation for sorting, where we need to disambiguate
+        that -1 is not a valid valid
+        """
+
+        def cats(level_codes):
+            return np.arange(
+                np.array(level_codes).max() + 1 if len(level_codes) else 0,
+                dtype=level_codes.dtype,
+            )
+
+        return [
+            Categorical.from_codes(level_codes, cats(level_codes), True, validate=False)
+            for level_codes in self.codes
+        ]
+[/SEARCH] [REPLACE]     def _get_codes_for_sorting(self) -> list[Categorical]:
+        """
+        we are categorizing our codes by using the available categories
+        (all, not just observed) excluding any missing ones (-1);
+        this is in preparation for sorting, where we need to disambiguate
+        that -1 is not a valid valid
+        """
+
+        def cats(level_codes):
+            return np.arange(
+                np.array(level_codes).max() + 1 if len(level_codes) else 0,
+                dtype=level_codes.dtype,
+            )
+
+        return [
+            Categorical.from_codes(
+                np.where(level_codes == -1, 0, level_codes),
+                np.arange(-1, np.array(level_codes).max() + 1 if len(level_codes) else 0, dtype=level_codes.dtype),
+                True,
+                validate=False,
+            )
+            for level_codes in self.codes
+        ]
+[/REPLACE]
+
+pandas/core/indexes/multi.py [SEARCH]     def _get_codes_for_sorting(self) -> list[Categorical]:
+        """
+        we are categorizing our codes by using the available categories
+        (all, not just observed) excluding any missing ones (-1);
+        this is in preparation for sorting, where we need to disambiguate
+        that -1 is not a valid valid
+        """
+
+        def cats(level_codes):
+            return np.arange(
+                np.array(level_codes).max() + 1 if len(level_codes) else 0,
+                dtype=level_codes.dtype,
+            )
+
+        return [
+            Categorical.from_codes(
+                np.where(level_codes == -1, 0, level_codes),
+                np.arange(-1, np.array(level_codes).max() + 1 if len(level_codes) else 0, dtype=level_codes.dtype),
+                True,
+                validate=False,
+            )
+            for level_codes in self.codes
+        ]
+[/SEARCH] [REPLACE]     def _get_codes_for_sorting(self) -> list[Categorical]:
+        """
+        we are categorizing our codes by using the available categories
+        (all, not just observed) excluding any missing ones (-1);
+        this is in preparation for sorting, where we need to disambiguate
+        that -1 is not a valid valid
+        """
+
+        def cats(level_codes):
+            return np.arange(
+                np.array(level_codes).max() + 1 if len(level_codes) else 0,
+                dtype=level_codes.dtype,
+            )
+
+        return [
+            Categorical.from_codes(level_codes, cats(level_codes), True, validate=False)
+            for level_codes in self.codes
+        ]
+[/REPLACE]
+
+pandas/core/indexes/multi.py [SEARCH]     def argsort(
+        self,
+        *args,
+        na_position: str = "last",
+        **kwargs,
+    ) -> npt.NDArray[np.intp]:
+        if len(args) == 0 and len(kwargs) == 0:
+            # lexsort is significantly faster than self._values.argsort()
+            target = self._sort_levels_monotonic(raise_if_incomparable=True)
+            return lexsort_indexer(
+                # error: Argument 1 to "lexsort_indexer" has incompatible type
+                # "List[Categorical]"; expected "Union[List[Union[ExtensionArray,
+                # ndarray[Any, Any]]], List[Series]]"
+                target._get_codes_for_sorting(),  # type: ignore[arg-type]
+                na_position=na_position,
+            )
+        return self._values.argsort(*args, **kwargs)
+[/SEARCH] [REPLACE]     def argsort(
+        self,
+        *args,
+        na_position: str = "last",
+        **kwargs,
+    ) -> npt.NDArray[np.intp]:
+        if len(args) == 0 and len(kwargs) == 0:
+            # lexsort is significantly faster than self._values.argsort()
+            target = self._sort_levels_monotonic(raise_if_incomparable=True)
+            return lexsort_indexer(
+                # error: Argument 1 to "lexsort_indexer" has incompatible type
+                # "List[Categorical]"; expected "Union[List[Union[ExtensionArray,
+                # ndarray[Any, Any]]], List[Series]]"
+                target._get_codes_for_sorting(),  # type: ignore[arg-type]
+                na_position=na_position,
+            )
+        return self._values.argsort(*args, **kwargs)
+[/REPLACE]
+
+pandas/core/indexes/multi.py [SEARCH]     def _get_codes_for_sorting(self) -> list[Categorical]:
+        """
+        we are categorizing our codes by using the available categories
+        (all, not just observed) excluding any missing ones (-1);
+        this is in preparation for sorting, where we need to disambiguate
+        that -1 is not a valid valid
+        """
+
+        def cats(level_codes):
+            return np.arange(
+                np.array(level_codes).max() + 1 if len(level_codes) else 0,
+                dtype=level_codes.dtype,
+            )
+
+        return [
+            Categorical.from_codes(level_codes, cats(level_codes), True, validate=False)
+            for level_codes in self.codes
+        ]
+[/SEARCH] [REPLACE]     def _get_codes_for_sorting(self) -> list[Categorical]:
+        """
+        we are categorizing our codes by using the available categories
+        (all, not just observed) excluding any missing ones (-1);
+        this is in preparation for sorting, where we need to disambiguate
+        that -1 is not a valid valid
+        """
+
+        def cats(level_codes):
+            return np.arange(
+                np.array(level_codes).max() + 1 if len(level_codes) else 0,
+                dtype=level_codes.dtype,
+            )
+
+        return [
+            Categorical.from_codes(level_codes, cats(level_codes), True, validate=False)
+            for level_codes in self.codes
+        ]
+[/REPLACE]
+
+pandas/core/sorting.py [SEARCH] def get_indexer_indexer(
+    target: Index,
+    level: Level | list[Level] | None,
+    ascending: list[bool] | bool,
+    kind: SortKind,
+    na_position: NaPosition,
+    sort_remaining: bool,
+    key: IndexKeyFunc,
+) -> npt.NDArray[np.intp] | None:
+    """
+    Helper method that return the indexer according to input parameters for
+    the sort_index method of DataFrame and Series.
+
+    Parameters
+    ----------
+    target : Index
+    level : int or level name or list of ints or list of level names
+    ascending : bool or list of bools, default True
+    kind : {'quicksort', 'mergesort', 'heapsort', 'stable'}
+    na_position : {'first', 'last'}
+    sort_remaining : bool
+    key : callable, optional
+
+    Returns
+    -------
+    Optional[ndarray[intp]]
+        The indexer for the new index.
+    """
+    # error: Incompatible types in assignment (expression has type
+    # "Union[ExtensionArray, ndarray[Any, Any], Index, Series]", variable has
+    # type "Index")
+    target = ensure_key_mapped(target, key, levels=level)  # type:ignore[assignment]
+
+    target = target._sort_levels_monotonic()
+
+    if level is not None:
+        _, indexer = target.sortlevel(
+            level,
+            ascending=ascending,
+            sort_remaining=sort_remaining,
+            na_position=na_position,
+        )
+    elif isinstance(target, ABCMultiIndex):
+        indexer = lexsort_indexer(
+            target.codes, orders=ascending, na_position=na_position, codes_given=True
+        )
+    else:
+        # Check monotonic-ness before sort an index (GH 11080)
+        if (ascending and target.is_monotonic_increasing) or (
+            not ascending and target.is_monotonic_decreasing
+        ):
+            return None
+
+        # ascending can only be a Sequence for MultiIndex
+        indexer = nargsort(
+            target,
+            kind=kind,
+            ascending=cast(bool, ascending),
+            na_position=na_position,
+        )
+
+    return indexer
+[/SEARCH] [REPLACE] def get_indexer_indexer(
+    target: Index,
+    level: Level | list[Level] | None,
+    ascending: list[bool] | bool,
+    kind: SortKind,
+    na_position: NaPosition,
+    sort_remaining: bool,
+    key: IndexKeyFunc,
+) -> npt.NDArray[np.intp] | None:
+    """
+    Helper method that return the indexer according to input parameters for
+    the sort_index method of DataFrame and Series.
+
+    Parameters
+    ----------
+    target : Index
+    level : int or level name or list of ints or list of level names
+    ascending : bool or list of bools, default True
+    kind : {'quicksort', 'mergesort', 'heapsort', 'stable'}
+    na_position : {'first', 'last'}
+    sort_remaining : bool
+    key : callable, optional
+
+    Returns
+    -------
+    Optional[ndarray[intp]]
+        The indexer for the new index.
+    """
+    # error: Incompatible types in assignment (expression has type
+    # "Union[ExtensionArray, ndarray[Any, Any], Index, Series]", variable has
+    # type "Index")
+    target = ensure_key_mapped(target, key, levels=level)  # type:ignore[assignment]
+
+    target = target._sort_levels_monotonic()
+
+    if level is not None:
+        _, indexer = target.sortlevel(
+            level,
+            ascending=ascending,
+            sort_remaining=sort_remaining,
+            na_position=na_position,
+        )
+    elif isinstance(target, ABCMultiIndex):
+        if target._is_lexsorted() and (
+            (ascending is True or ascending == [True] * target.nlevels)
+        ):
+            return None
+        indexer = lexsort_indexer(
+            target.codes, orders=ascending, na_position=na_position, codes_given=True
+        )
+    else:
+        # Check monotonic-ness before sort an index (GH 11080)
+        if (ascending and target.is_monotonic_increasing) or (
+            not ascending and target.is_monotonic_decreasing
+        ):
+            return None
+
+        # ascending can only be a Sequence for MultiIndex
+        indexer = nargsort(
+            target,
+            kind=kind,
+            ascending=cast(bool, ascending),
+            na_position=na_position,
+        )
+
+    return indexer
+[/REPLACE]

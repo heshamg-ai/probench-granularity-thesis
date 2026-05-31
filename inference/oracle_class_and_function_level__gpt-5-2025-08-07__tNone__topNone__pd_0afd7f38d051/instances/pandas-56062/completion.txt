@@ -1,0 +1,51 @@
+pandas/core/common.py
+[SEARCH]
+    if isinstance(key, (ABCSeries, np.ndarray, ABCIndex, ABCExtensionArray)):
+[/SEARCH]
+[REPLACE]
+    dtype = getattr(key, 'dtype', None)
+    if isinstance(key, (ABCSeries, np.ndarray, ABCIndex, ABCExtensionArray)):
+[/REPLACE]
+
+pandas/core/common.py
+[SEARCH]
+        if key.dtype == np.object_:
+[/SEARCH]
+[REPLACE]
+        if dtype == np.object_:
+[/REPLACE]
+
+pandas/core/common.py
+[SEARCH]
+            key_array = np.asarray(key)
+[/SEARCH]
+[REPLACE]
+            key_array = key if isinstance(key, np.ndarray) else np.asarray(key)
+[/REPLACE]
+
+pandas/core/common.py
+[SEARCH]
+        elif is_bool_dtype(key.dtype):
+[/SEARCH]
+[REPLACE]
+        elif is_bool_dtype(dtype):
+[/REPLACE]
+
+pandas/core/common.py
+[SEARCH]
+        # check if np.array(key).dtype would be bool
+        if len(key) > 0:
+            if type(key) is not list:  # noqa: E721
+                # GH#42461 cython will raise TypeError if we pass a subclass
+                key = list(key)
+            return lib.is_bool_list(key)
+[/SEARCH]
+[REPLACE]
+        # check if np.array(key).dtype would be bool
+        if not key:
+            return False
+        if type(key) is not list:  # noqa: E721
+            # GH#42461 cython will raise TypeError if we pass a subclass
+            key = list(key)
+        return lib.is_bool_list(key)
+[/REPLACE]

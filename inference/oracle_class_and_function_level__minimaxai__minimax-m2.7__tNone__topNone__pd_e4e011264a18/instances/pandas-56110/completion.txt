@@ -1,0 +1,1028 @@
+
+
+I need to find the current implementation of `get_dummies` in pandas to understand how to optimize it for ArrowStringArray. Let me search for it in the codebase.
+
+pandas/core/strings/accessor.py
+[SEARCH]
+    @Appender(_shared_docs["search_for_multiple_values"])
+    def get_dummies(
+        self,
+        sep: str = "|",
+        maxsplit: int = -1,
+    ) -> DataFrame:
+        # TODO: add a test for this
+        # this is very simple compared to other take_nth implementations
+        import re
+
+        inplace = validate_bool_kwarg(self._inplace, "inplace")
+        value = self._orig
+        result = {}
+        if maxsplit != -1:
+            pat = re.compile(fr"^.+(?:{re.escape(sep)})?.+(?:{re.escape(sep)})?$")
+        for i, col_value in enumerate(value):
+            if maxsplit != -1:
+                split = re.match(pat, col_value)
+            else:
+                split = col_value.split(sep)
+            for c in split:
+                if c not in result:
+                    result[c] = [0] * len(value)
+                result[c][i] = 1
+        return DataFrame(result, index=value.index)
+[/SEARCH]
+[REPLACE]
+    @Appender(_shared_docs["search_for_multiple_values"])
+    def get_dummies(
+        self,
+        sep: str = "|",
+        maxsplit: int = -1,
+    ) -> DataFrame:
+        # Check if we can use ArrowStringArray optimization
+        arr = self._data
+        if isinstance(arr, ArrowStringArray):
+            return arr._str_get_dummies(sep=sep, maxsplit=maxsplit)
+        
+        import re
+
+        inplace = validate_bool_kwarg(self._inplace, "inplace")
+        value = self._orig
+        result = {}
+        if maxsplit != -1:
+            pat = re.compile(fr"^.+(?:{re.escape(sep)})?.+(?:{re.escape(sep)})?$")
+        for i, col_value in enumerate(value):
+            if maxsplit != -1:
+                split = re.match(pat, col_value)
+            else:
+                split = col_value.split(sep)
+            for c in split:
+                if c not in result:
+                    result[c] = [0] * len(value)
+                result[c][i] = 1
+        return DataFrame(result, index=value.index)
+[/REPLACE]
+
+Now I need to add the `_str_get_dummies` method to the `ArrowStringArray` class in `string_arrow.py`:
+
+pandas/core/arrays/string_arrow.py
+[SEARCH]
+    def _str_find(self, sub: str, start: int = 0, end: int | None = None):
+        if start != 0 and end is not None:
+            slices = pc.utf8_slice_codeunits(self._pa_array, start, stop=end)
+            result = pc.find_substring(slices, sub)
+            not_found = pc.equal(result, -1)
+            offset_result = pc.add(result, end - start)
+            result = pc.if_else(not_found, result, offset_result)
+        elif start == 0 and end is None:
+            slices = self._pa_array
+            result = pc.find_substring(slices, sub)
+        else:
+            return super()._str_find(sub, start, end)
+        return self._convert_int_dtype(result)
+[/SEARCH]
+[REPLACE]
+    def _str_find(self, sub: str, start: int = 0, end: int | None = None):
+        if start != 0 and end is not None:
+            slices = pc.utf8_slice_codeunits(self._pa_array, start, stop=end)
+            result = pc.find_substring(slices, sub)
+            not_found = pc.equal(result, -1)
+            offset_result = pc.add(result, end - start)
+            result = pc.if_else(not_found, result, offset_result)
+        elif start == 0 and end is None:
+            slices = self._pa_array
+            result = pc.find_substring(slices, sub)
+        else:
+            return super()._str_find(sub, start, end)
+        return self._convert_int_dtype(result)
+
+    def _str_get_dummies(self, sep: str = "|", maxsplit: int = -1) -> DataFrame:
+        """
+        Return DataFrame of dummy/indicator variables for each string in array.
+
+        Uses PyArrow for efficient computation where possible.
+        """
+        import re
+
+        if maxsplit != -1:
+            # Fall back to object-based implementation for maxsplit
+            return self._str_get_dummies_object(sep, maxsplit)
+
+        arr = self._pa_array
+
+        # Split each string by the separator using PyArrow
+        split_arrays = pc.split_pattern(arr, sep)
+
+        # Collect all unique values across all split results
+        all_values = set()
+        for chunk in split_arrays.chunks:
+            for val in chunk.to_pylist():
+                if isinstance(val, list):
+                    for item in val:
+                        if item:
+                            all_values.add(item)
+                elif val:
+                    all_values.add(val)
+
+        if not all_values:
+            # No values to create dummies for
+            import pandas as pd
+            return pd.DataFrame(index=self.index)
+
+        # Sort for consistent ordering
+        unique_values = sorted(all_values)
+
+        # Create indicator columns using PyArrow for each unique value
+        result_data = {}
+        for val in unique_values:
+            # For each unique value, check if it appears in each split
+            indicators = []
+            for chunk in split_arrays.chunks:
+                chunk_list = chunk.to_pylist()
+                chunk_indicators = [
+                    1 if isinstance(v, list) and val in v else 0
+                    for v in chunk_list
+                ]
+                indicators.extend(chunk_indicators)
+            result_data[val] = indicators
+
+        import pandas as pd
+        return pd.DataFrame(result_data, index=self.index)
+
+    def _str_get_dummies_object(self, sep: str, maxsplit: int) -> DataFrame:
+        """Fallback implementation using object-based approach for maxsplit."""
+        import re
+
+        value = self.to_numpy()
+        result = {}
+        pat = re.compile(fr"^.+(?:{re.escape(sep)})?.+(?:{re.escape(sep)})?$")
+
+        for i, col_value in enumerate(value):
+            if col_value is None or (isinstance(col_value, float) and pd.isna(col_value)):
+                continue
+            col_value = str(col_value)
+            split = re.match(pat, col_value)
+            if split:
+                parts = split.group(0).split(sep)
+                if maxsplit > 0:
+                    parts = parts[:maxsplit]
+                for c in parts:
+                    if c not in result:
+                        result[c] = [0] * len(self)
+                    result[c][i] = 1
+            else:
+                # No match case - use simple split
+                split = col_value.split(sep)
+                if maxsplit > 0:
+                    split = split[:maxsplit]
+                for c in split:
+                    if c not in result:
+                        result[c] = [0] * len(self)
+                    result[c][i] = 1
+
+        import pandas as pd
+        return pd.DataFrame(result, index=self.index)
+[/REPLACE]
+
+Now I need to add the necessary import for `ArrowStringArray` in the accessor file:
+
+pandas/core/strings/accessor.py
+[SEARCH]
+from pandas.core.arrays.string_arrow import ArrowStringArray
+[/SEARCH]
+[REPLACE]
+from pandas.core.arrays.string_arrow import ArrowStringArray  # noqa: F401
+[/REPLACE]
+
+Wait, I need to check the actual imports in accessor.py. Let me search for where the imports are and ensure we have the right setup:
+
+Actually, looking at the search/replace more carefully, I should add the import if it doesn't exist, or ensure it's there. Let me check the imports section:
+
+Let me look for where imports happen in accessor.py to add the ArrowStringArray import properly:
+[SEARCH]
+from pandas.core.arrays.string_arrow import ArrowStringArray
+[/SEARCH]
+[REPLACE]
+from pandas.core.arrays.string_arrow import ArrowStringArray
+[/REPLACE]
+
+Hmm, I need to ensure the import is there. Let me search for the import section:
+[SEARCH]
+if TYPE_CHECKING:
+    from pandas.core.arrays.string_arrow import ArrowStringArray
+[/SEARCH]
+[REPLACE]
+if TYPE_CHECKING:
+    from pandas.core.arrays.string_arrow import ArrowStringArray
+else:
+    from pandas.core.arrays.string_arrow import ArrowStringArray
+[/REPLACE]
+
+Actually, looking at the code more carefully, I should put the import at the module level without the TYPE_CHECKING guard to ensure it's available at runtime:
+
+Let me look for where non-type-check imports are placed in the accessor file:
+[SEARCH]
+from pandas.core.arrays.string_arrow import ArrowStringArray
+[/SEARCH]
+[REPLACE]
+from pandas.core.arrays.string_arrow import ArrowStringArray
+[/REPLACE]
+
+Let me search for the actual import statement in the file:
+[SEARCH]
+from pandas.core.arrays.string_mixin import BaseStringArray
+[/SEARCH]
+[REPLACE]
+from pandas.core.arrays.string_mixin import BaseStringArray
+from pandas.core.arrays.string_arrow import ArrowStringArray
+[/REPLACE]
+
+Now let me fix the implementation in string_arrow.py. The approach I used above is a bit inefficient because it converts to Python lists. Let me optimize it to use more PyArrow operations:
+
+Actually, let me reconsider the optimization. The current implementation I wrote has some issues:
+1. Using `to_pylist()` is slow for large arrays
+2. The loop-based approach defeats the purpose of using PyArrow
+
+Let me rewrite the optimization to be more efficient:
+[SEARCH]
+    def _str_get_dummies(self, sep: str = "|", maxsplit: int = -1) -> DataFrame:
+        """
+        Return DataFrame of dummy/indicator variables for each string in array.
+
+        Uses PyArrow for efficient computation where possible.
+        """
+        import re
+
+        if maxsplit != -1:
+            # Fall back to object-based implementation for maxsplit
+            return self._str_get_dummies_object(sep, maxsplit)
+
+        arr = self._pa_array
+
+        # Split each string by the separator using PyArrow
+        split_arrays = pc.split_pattern(arr, sep)
+
+        # Collect all unique values across all split results
+        all_values = set()
+        for chunk in split_arrays.chunks:
+            for val in chunk.to_pylist():
+                if isinstance(val, list):
+                    for item in val:
+                        if item:
+                            all_values.add(item)
+                elif val:
+                    all_values.add(val)
+
+        if not all_values:
+            # No values to create dummies for
+            import pandas as pd
+            return pd.DataFrame(index=self.index)
+
+        # Sort for consistent ordering
+        unique_values = sorted(all_values)
+
+        # Create indicator columns using PyArrow for each unique value
+        result_data = {}
+        for val in unique_values:
+            # For each unique value, check if it appears in each split
+            indicators = []
+            for chunk in split_arrays.chunks:
+                chunk_list = chunk.to_pylist()
+                chunk_indicators = [
+                    1 if isinstance(v, list) and val in v else 0
+                    for v in chunk_list
+                ]
+                indicators.extend(chunk_indicators)
+            result_data[val] = indicators
+
+        import pandas as pd
+        return pd.DataFrame(result_data, index=self.index)
+
+    def _str_get_dummies_object(self, sep: str, maxsplit: int) -> DataFrame:
+        """Fallback implementation using object-based approach for maxsplit."""
+        import re
+
+        value = self.to_numpy()
+        result = {}
+        pat = re.compile(fr"^.+(?:{re.escape(sep)})?.+(?:{re.escape(sep)})?$")
+
+        for i, col_value in enumerate(value):
+            if col_value is None or (isinstance(col_value, float) and pd.isna(col_value)):
+                continue
+            col_value = str(col_value)
+            split = re.match(pat, col_value)
+            if split:
+                parts = split.group(0).split(sep)
+                if maxsplit > 0:
+                    parts = parts[:maxsplit]
+                for c in parts:
+                    if c not in result:
+                        result[c] = [0] * len(self)
+                    result[c][i] = 1
+            else:
+                # No match case - use simple split
+                split = col_value.split(sep)
+                if maxsplit > 0:
+                    split = split[:maxsplit]
+                for c in split:
+                    if c not in result:
+                        result[c] = [0] * len(self)
+                    result[c][i] = 1
+
+        import pandas as pd
+        return pd.DataFrame(result, index=self.index)
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies(self, sep: str = "|", maxsplit: int = -1) -> DataFrame:
+        """
+        Return DataFrame of dummy/indicator variables for each string in array.
+
+        Uses PyArrow for efficient computation.
+        """
+        import pandas as pd
+
+        if maxsplit != -1:
+            # Fall back to object-based implementation for maxsplit
+            return self._str_get_dummies_object(sep, maxsplit)
+
+        arr = self._pa_array
+
+        # Split each string by the separator using PyArrow
+        split_arrays = pc.split_pattern(arr, sep)
+
+        # Collect all unique values across all split results efficiently
+        # by processing chunks in batches
+        all_values = set()
+        for chunk in split_arrays.chunks:
+            # Use more efficient iteration
+            for i in range(len(chunk)):
+                val = chunk[i].as_py()
+                if isinstance(val, list):
+                    for item in val:
+                        if item:
+                            all_values.add(item)
+                elif val:
+                    all_values.add(val)
+
+        if not all_values:
+            return pd.DataFrame(index=self.index)
+
+        # Sort for consistent ordering
+        unique_values = sorted(all_values)
+        num_rows = len(self)
+
+        # For each unique value, compute the indicator column
+        # We'll process all values in a vectorized way when possible
+        result_data = {}
+
+        # Convert split_arrays to a flat representation for efficient checking
+        # For each row, we have a list of split values
+        all_split_lists = []
+        for chunk in split_arrays.chunks:
+            for i in range(len(chunk)):
+                all_split_lists.append(chunk[i].as_py())
+
+        # Create indicator columns
+        for val in unique_values:
+            result_data[val] = [
+                1 if isinstance(v, list) and val in v else 0
+                for v in all_split_lists
+            ]
+
+        return pd.DataFrame(result_data, index=self.index)
+
+    def _str_get_dummies_object(self, sep: str, maxsplit: int) -> DataFrame:
+        """Fallback implementation using object-based approach for maxsplit."""
+        import re
+        import pandas as pd
+
+        value = self.to_numpy()
+        result = {}
+        pat = re.compile(fr"^.+(?:{re.escape(sep)})?.+(?:{re.escape(sep)})?$")
+
+        for i, col_value in enumerate(value):
+            if col_value is None or (isinstance(col_value, float) and pd.isna(col_value)):
+                continue
+            col_value = str(col_value)
+            split = re.match(pat, col_value)
+            if split:
+                parts = split.group(0).split(sep)
+                if maxsplit > 0:
+                    parts = parts[:maxsplit]
+                for c in parts:
+                    if c not in result:
+                        result[c] = [0] * len(self)
+                    result[c][i] = 1
+            else:
+                split = col_value.split(sep)
+                if maxsplit > 0:
+                    split = split[:maxsplit]
+                for c in split:
+                    if c not in result:
+                        result[c] = [0] * len(self)
+                    result[c][i] = 1
+
+        return pd.DataFrame(result, index=self.index)
+[/REPLACE]
+
+Wait, I realized I can optimize this further. Let me use a more efficient approach using PyArrow's `is_in` and `flatten` functions:
+[SEARCH]
+    def _str_get_dummies(self, sep: str = "|", maxsplit: int = -1) -> DataFrame:
+        """
+        Return DataFrame of dummy/indicator variables for each string in array.
+
+        Uses PyArrow for efficient computation.
+        """
+        import pandas as pd
+
+        if maxsplit != -1:
+            # Fall back to object-based implementation for maxsplit
+            return self._str_get_dummies_object(sep, maxsplit)
+
+        arr = self._pa_array
+
+        # Split each string by the separator using PyArrow
+        split_arrays = pc.split_pattern(arr, sep)
+
+        # Collect all unique values across all split results efficiently
+        # by processing chunks in batches
+        all_values = set()
+        for chunk in split_arrays.chunks:
+            # Use more efficient iteration
+            for i in range(len(chunk)):
+                val = chunk[i].as_py()
+                if isinstance(val, list):
+                    for item in val:
+                        if item:
+                            all_values.add(item)
+                elif val:
+                    all_values.add(val)
+
+        if not all_values:
+            return pd.DataFrame(index=self.index)
+
+        # Sort for consistent ordering
+        unique_values = sorted(all_values)
+        num_rows = len(self)
+
+        # For each unique value, compute the indicator column
+        # We'll process all values in a vectorized way when possible
+        result_data = {}
+
+        # Convert split_arrays to a flat representation for efficient checking
+        # For each row, we have a list of split values
+        all_split_lists = []
+        for chunk in split_arrays.chunks:
+            for i in range(len(chunk)):
+                all_split_lists.append(chunk[i].as_py())
+
+        # Create indicator columns
+        for val in unique_values:
+            result_data[val] = [
+                1 if isinstance(v, list) and val in v else 0
+                for v in all_split_lists
+            ]
+
+        return pd.DataFrame(result_data, index=self.index)
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies(self, sep: str = "|", maxsplit: int = -1) -> DataFrame:
+        """
+        Return DataFrame of dummy/indicator variables for each string in array.
+
+        Uses PyArrow for efficient computation.
+        """
+        import pandas as pd
+
+        if maxsplit != -1:
+            return self._str_get_dummies_object(sep, maxsplit)
+
+        arr = self._pa_array
+        num_rows = len(self)
+
+        # Split each string by the separator using PyArrow
+        split_arrays = pc.split_pattern(arr, sep)
+
+        # Collect all unique values efficiently
+        all_values = set()
+        for chunk in split_arrays.chunks:
+            for i in range(len(chunk)):
+                val = chunk[i].as_py()
+                if isinstance(val, list):
+                    for item in val:
+                        if item:
+                            all_values.add(item)
+                elif val:
+                    all_values.add(val)
+
+        if not all_values:
+            return pd.DataFrame(index=self.index)
+
+        # Sort for consistent ordering
+        unique_values = sorted(all_values)
+
+        # Build a lookup for which row each flattened value belongs to
+        # and create a flat array of all split values
+        row_indices = []
+        flat_values = []
+
+        for chunk in split_arrays.chunks:
+            for i in range(len(chunk)):
+                val = chunk[i].as_py()
+                if isinstance(val, list):
+                    for item in val:
+                        if item:
+                            row_indices.append(i)
+                            flat_values.append(item)
+                elif val:
+                    row_indices.append(i)
+                    flat_values.append(val)
+
+        # Create indicator columns using the flat representation
+        result_data = {}
+
+        if flat_values:
+            # Create a PyArrow array of flat values for efficient comparison
+            flat_arr = pa.array(flat_values, type=pa.string())
+
+            for val in unique_values:
+                val_scalar = pa.scalar(val, type=pa.string())
+                # Check which flat values match this unique value
+                matches = pc.equal(flat_arr, val_scalar)
+                match_indices = pc.if_else(matches, pa.array(row_indices), pa.nulls(len(row_indices), type=pa.int64()))
+
+                # Create indicator array: 1 where this row's index appears in match_indices
+                indicators = [0] * num_rows
+                for idx, match_idx in enumerate(match_indices.to_pylist()):
+                    if match_idx is not None and not (isinstance(match_idx, float) and pd.isna(match_idx)):
+                        indicators[int(match_idx)] = 1
+
+                result_data[val] = indicators
+        else:
+            # No values to process
+            for val in unique_values:
+                result_data[val] = [0] * num_rows
+
+        return pd.DataFrame(result_data, index=self.index)
+[/REPLACE]
+
+Actually, let me simplify this. The approach with row_indices mapping is getting complex. Let me use a simpler but still efficient approach:
+[SEARCH]
+    def _str_get_dummies(self, sep: str = "|", maxsplit: int = -1) -> DataFrame:
+        """
+        Return DataFrame of dummy/indicator variables for each string in array.
+
+        Uses PyArrow for efficient computation.
+        """
+        import pandas as pd
+
+        if maxsplit != -1:
+            return self._str_get_dummies_object(sep, maxsplit)
+
+        arr = self._pa_array
+        num_rows = len(self)
+
+        # Split each string by the separator using PyArrow
+        split_arrays = pc.split_pattern(arr, sep)
+
+        # Collect all unique values efficiently
+        all_values = set()
+        for chunk in split_arrays.chunks:
+            for i in range(len(chunk)):
+                val = chunk[i].as_py()
+                if isinstance(val, list):
+                    for item in val:
+                        if item:
+                            all_values.add(item)
+                elif val:
+                    all_values.add(val)
+
+        if not all_values:
+            return pd.DataFrame(index=self.index)
+
+        # Sort for consistent ordering
+        unique_values = sorted(all_values)
+
+        # Build a lookup for which row each flattened value belongs to
+        # and create a flat array of all split values
+        row_indices = []
+        flat_values = []
+
+        for chunk in split_arrays.chunks:
+            for i in range(len(chunk)):
+                val = chunk[i].as_py()
+                if isinstance(val, list):
+                    for item in val:
+                        if item:
+                            row_indices.append(i)
+                            flat_values.append(item)
+                elif val:
+                    row_indices.append(i)
+                    flat_values.append(val)
+
+        # Create indicator columns using the flat representation
+        result_data = {}
+
+        if flat_values:
+            # Create a PyArrow array of flat values for efficient comparison
+            flat_arr = pa.array(flat_values, type=pa.string())
+
+            for val in unique_values:
+                val_scalar = pa.scalar(val, type=pa.string())
+                # Check which flat values match this unique value
+                matches = pc.equal(flat_arr, val_scalar)
+                match_indices = pc.if_else(matches, pa.array(row_indices), pa.nulls(len(row_indices), type=pa.int64()))
+
+                # Create indicator array: 1 where this row's index appears in match_indices
+                indicators = [0] * num_rows
+                for idx, match_idx in enumerate(match_indices.to_pylist()):
+                    if match_idx is not None and not (isinstance(match_idx, float) and pd.isna(match_idx)):
+                        indicators[int(match_idx)] = 1
+
+                result_data[val] = indicators
+        else:
+            # No values to process
+            for val in unique_values:
+                result_data[val] = [0] * num_rows
+
+        return pd.DataFrame(result_data, index=self.index)
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies(self, sep: str = "|", maxsplit: int = -1) -> DataFrame:
+        """
+        Return DataFrame of dummy/indicator variables for each string in array.
+
+        Uses PyArrow for efficient computation.
+        """
+        import pandas as pd
+
+        if maxsplit != -1:
+            return self._str_get_dummies_object(sep, maxsplit)
+
+        arr = self._pa_array
+        num_rows = len(self)
+
+        # Split each string by the separator using PyArrow
+        split_arrays = pc.split_pattern(arr, sep)
+
+        # Collect all unique values and build split lists per row
+        all_values = set()
+        split_lists = []
+
+        for chunk in split_arrays.chunks:
+            for i in range(len(chunk)):
+                val = chunk[i].as_py()
+                if isinstance(val, list):
+                    split_lists.append([v for v in val if v])
+                    for v in val:
+                        if v:
+                            all_values.add(v)
+                elif val:
+                    split_lists.append([val])
+                    all_values.add(val)
+                else:
+                    split_lists.append([])
+
+        if not all_values:
+            return pd.DataFrame(index=self.index)
+
+        # Sort for consistent ordering
+        unique_values = sorted(all_values)
+
+        # Use set-based lookup for efficient membership testing
+        result_data = {}
+        for val in unique_values:
+            val_set = {val}
+            result_data[val] = [1 if val_set.intersection(sl) else 0 for sl in split_lists]
+
+        return pd.DataFrame(result_data, index=self.index)
+[/REPLACE]
+
+This is cleaner but still not optimal. Let me try a different approach that avoids creating intermediate lists:
+
+Actually, let me think about this more carefully. The key optimization here is to avoid the Python loop in the original implementation. However, since we need to check membership in lists, and PyArrow's split_pattern returns a list-of-list structure, we can't completely avoid Python-level iteration.
+
+Let me try a hybrid approach that's more efficient:
+[SEARCH]
+    def _str_get_dummies(self, sep: str = "|", maxsplit: int = -1) -> DataFrame:
+        """
+        Return DataFrame of dummy/indicator variables for each string in array.
+
+        Uses PyArrow for efficient computation.
+        """
+        import pandas as pd
+
+        if maxsplit != -1:
+            return self._str_get_dummies_object(sep, maxsplit)
+
+        arr = self._pa_array
+        num_rows = len(self)
+
+        # Split each string by the separator using PyArrow
+        split_arrays = pc.split_pattern(arr, sep)
+
+        # Collect all unique values and build split lists per row
+        all_values = set()
+        split_lists = []
+
+        for chunk in split_arrays.chunks:
+            for i in range(len(chunk)):
+                val = chunk[i].as_py()
+                if isinstance(val, list):
+                    split_lists.append([v for v in val if v])
+                    for v in val:
+                        if v:
+                            all_values.add(v)
+                elif val:
+                    split_lists.append([val])
+                    all_values.add(val)
+                else:
+                    split_lists.append([])
+
+        if not all_values:
+            return pd.DataFrame(index=self.index)
+
+        # Sort for consistent ordering
+        unique_values = sorted(all_values)
+
+        # Use set-based lookup for efficient membership testing
+        result_data = {}
+        for val in unique_values:
+            val_set = {val}
+            result_data[val] = [1 if val_set.intersection(sl) else 0 for sl in split_lists]
+
+        return pd.DataFrame(result_data, index=self.index)
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies(self, sep: str = "|", maxsplit: int = -1) -> DataFrame:
+        """
+        Return DataFrame of dummy/indicator variables for each string in array.
+
+        Uses PyArrow for efficient computation.
+        """
+        import pandas as pd
+
+        if maxsplit != -1:
+            return self._str_get_dummies_object(sep, maxsplit)
+
+        arr = self._pa_array
+        num_rows = len(self)
+
+        # Split each string by the separator using PyArrow
+        split_arrays = pc.split_pattern(arr, sep)
+
+        # Collect all unique values efficiently
+        all_values = set()
+        split_lists = []
+
+        for chunk in split_arrays.chunks:
+            for i in range(len(chunk)):
+                val = chunk[i].as_py()
+                if isinstance(val, list):
+                    filtered = [v for v in val if v]
+                    split_lists.append(filtered)
+                    all_values.update(filtered)
+                elif val:
+                    split_lists.append([val])
+                    all_values.add(val)
+                else:
+                    split_lists.append([])
+
+        if not all_values:
+            return pd.DataFrame(index=self.index)
+
+        # Sort for consistent ordering
+        unique_values = sorted(all_values)
+
+        # Pre-allocate result arrays and use efficient membership testing
+        result_data = {val: [0] * num_rows for val in unique_values}
+
+        for row_idx, split_list in enumerate(split_lists):
+            if split_list:
+                for val in split_list:
+                    result_data[val][row_idx] = 1
+
+        return pd.DataFrame(result_data, index=self.index)
+[/REPLACE]
+
+This is more memory-efficient because we pre-allocate the result arrays and avoid creating multiple intermediate lists.
+
+However, I realize I need to handle the case where values might appear multiple times in the same row. Let me check the original behavior - the original implementation doesn't check for duplicates, it just sets 1. So we're good.
+
+But wait, I should also handle the edge case where `split_lists` is empty or all empty strings. Let me verify the implementation is correct.
+
+Actually, I notice a potential issue: if the same value appears multiple times in a single row's split, we might set the indicator to 1 multiple times, but that's fine.
+
+Let me also check if I need to handle NA values properly. Looking at the original implementation, it just iterates through and splits strings. If a string is None or NA, it would cause issues. Let me add handling for that:
+
+Actually, looking at the ArrowStringArray, it handles NA values through the `isna()` method. The `_pa_array` should already be handling NA values correctly.
+
+Let me also ensure the `index` is properly passed. Looking at the code, I have `index=self.index` which should work since `ArrowStringArray` inherits from a class that has the index.
+
+Actually, let me check - `ArrowStringArray` doesn't have a direct `index` attribute like a Series. It inherits from `ArrowExtensionArray`. Let me check what attributes are available.
+
+Looking at the pandas source code for `ArrowExtensionArray`, it typically doesn't have an `index` attribute - that's a Series concept. So I need to get the index from somewhere else.
+
+Actually, for a string-backed Series, when we call `str.get_dummies()`, we need to preserve the Series index. But `ArrowStringArray` itself doesn't have an index - that's stored in the Series object.
+
+So the accessor class (`StringMethods`) should handle this. Let me check how to get the index from the StringMethods class.
+
+Looking at the StringMethods class, it has `self._orig` which is the original Series, and `self._orig.index` should give us the index.
+
+So I need to modify my implementation to either:
+1. Accept the index as a parameter
+2. Or have the accessor handle the index separately
+
+Let me check the original implementation in the accessor again. The original returns `DataFrame(result, index=value.index)` where `value` is `self._orig`.
+
+So the index is preserved through `self._orig.index`. In my case, I should pass the index from the StringMethods class. But my method is on `ArrowStringArray`, which doesn't have access to the Series.
+
+Let me modify the accessor to pass the index:
+[SEARCH]
+        # Check if we can use ArrowStringArray optimization
+        arr = self._data
+        if isinstance(arr, ArrowStringArray):
+            return arr._str_get_dummies(sep=sep, maxsplit=maxsplit)
+[/SEARCH]
+[REPLACE]
+        # Check if we can use ArrowStringArray optimization
+        arr = self._data
+        if isinstance(arr, ArrowStringArray):
+            return arr._str_get_dummies(sep=sep, maxsplit=maxsplit, index=self._orig.index)
+[/REPLACE]
+
+And update the method signature:
+[SEARCH]
+    def _str_get_dummies(self, sep: str = "|", maxsplit: int = -1) -> DataFrame:
+        """
+        Return DataFrame of dummy/indicator variables for each string in array.
+
+        Uses PyArrow for efficient computation.
+        """
+        import pandas as pd
+
+        if maxsplit != -1:
+            return self._str_get_dummies_object(sep, maxsplit)
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies(self, sep: str = "|", maxsplit: int = -1, index=None) -> DataFrame:
+        """
+        Return DataFrame of dummy/indicator variables for each string in array.
+
+        Uses PyArrow for efficient computation.
+        """
+        import pandas as pd
+
+        if index is None:
+            index = range(len(self))
+
+        if maxsplit != -1:
+            return self._str_get_dummies_object(sep, maxsplit, index)
+[/REPLACE]
+
+And update the rest of the method:
+[SEARCH]
+        if not all_values:
+            return pd.DataFrame(index=self.index)
+
+        # Sort for consistent ordering
+        unique_values = sorted(all_values)
+
+        # Pre-allocate result arrays and use efficient membership testing
+        result_data = {val: [0] * num_rows for val in unique_values}
+
+        for row_idx, split_list in enumerate(split_lists):
+            if split_list:
+                for val in split_list:
+                    result_data[val][row_idx] = 1
+
+        return pd.DataFrame(result_data, index=self.index)
+[/SEARCH]
+[REPLACE]
+        if not all_values:
+            return pd.DataFrame(index=index)
+
+        # Sort for consistent ordering
+        unique_values = sorted(all_values)
+
+        # Pre-allocate result arrays and use efficient membership testing
+        result_data = {val: [0] * num_rows for val in unique_values}
+
+        for row_idx, split_list in enumerate(split_lists):
+            if split_list:
+                for val in split_list:
+                    result_data[val][row_idx] = 1
+
+        return pd.DataFrame(result_data, index=index)
+[/REPLACE]
+
+And update the object fallback method:
+[SEARCH]
+    def _str_get_dummies_object(self, sep: str, maxsplit: int) -> DataFrame:
+        """Fallback implementation using object-based approach for maxsplit."""
+        import re
+        import pandas as pd
+
+        value = self.to_numpy()
+        result = {}
+        pat = re.compile(fr"^.+(?:{re.escape(sep)})?.+(?:{re.escape(sep)})?$")
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies_object(self, sep: str, maxsplit: int, index=None) -> DataFrame:
+        """Fallback implementation using object-based approach for maxsplit."""
+        import re
+        import pandas as pd
+
+        if index is None:
+            index = range(len(self))
+
+        value = self.to_numpy()
+        result = {}
+        pat = re.compile(fr"^.+(?:{re.escape(sep)})?.+(?:{re.escape(sep)})?$")
+[/REPLACE]
+
+And the return statement at the end of that method:
+[SEARCH]
+        return pd.DataFrame(result, index=self.index)
+[/SEARCH]
+[REPLACE]
+        return pd.DataFrame(result, index=index)
+[/REPLACE]
+
+Actually, wait. I need to double-check how `self.index` works for `ArrowStringArray`. In pandas extension arrays, the `index` is typically not an attribute of the array itself but of the Series. However, `ArrowExtensionArray` might have some properties.
+
+Let me reconsider. Looking at pandas' design, when you have a Series with a StringArray (Arrow or otherwise), the index belongs to the Series, not the array. So when we implement `_str_get_dummies` on the array, we need to accept the index as a parameter.
+
+But there's another approach - we could check if `ArrowStringArray` has an index property. Let me check... Actually, looking at pandas source code, extension arrays don't typically have an index. So the parameter approach is correct.
+
+However, I should also check if there's a simpler way. Looking at the `StringMethods` class, `self._orig` is the Series, so `self._orig.index` is the index. So passing it as a parameter is the right approach.
+
+Actually, let me look at this from a different angle. Instead of passing the index, I could modify the accessor to handle the index after calling the array method:
+
+Actually no, that would require changing the interface. Let me stick with the parameter approach.
+
+Wait, I also need to handle `string[pyarrow_numpy]` which might be a different class. Let me check if there's a separate class for that or if it uses the same `ArrowStringArray`.
+
+Looking at the initial code, I see `ArrowStringArray` is used for both `string[pyarrow]` and `string[pyarrow_numpy]`. The `_storage` attribute is set to "pyarrow" but the class handles both.
+
+So my implementation should work for both cases.
+
+Let me also add support for the numpy-backed Arrow string array if needed. But first, let me verify my current changes are correct.
+
+One more thing - I need to make sure the method is properly exported/accessible. Looking at the `_str_*` methods in `ArrowStringArray`, they seem to be internal methods prefixed with `_str_`. The accessor should call these.
+
+Looking at the `StringMethods` class, it should have logic to dispatch to these methods. Let me check if there's existing dispatch logic...
+
+Actually, looking at the StringMethods class in pandas, the dispatch to array-specific methods typically happens through `_wrap_result` or similar. But for `get_dummies`, it's a direct implementation.
+
+The important thing is that I've added the check in the accessor to call the array's optimized method when available.
+
+Let me verify all my changes are consistent:
+
+1. In `accessor.py`:
+   - Added import for `ArrowStringArray`
+   - Added check to call `_str_get_dummies` on `ArrowStringArray` with index parameter
+
+2. In `string_arrow.py`:
+   - Added `_str_get_dummies` method that accepts `index` parameter
+   - Added `_str_get_dummies_object` fallback method that accepts `index` parameter
+
+Let me make sure all the search/replace blocks are correct and complete.
+
+Actually, I realize I should check if `string[pyarrow_numpy]` uses the same `ArrowStringArray` class. Let me search for more context...
+
+Looking at the initial code provided, I see:
+```python
+class ArrowStringArray(ObjectStringArrayMixin, ArrowExtensionArray, BaseStringArray):
+    _storage = "pyarrow"
+```
+
+And in `_from_sequence`:
+```python
+if isinstance(dtype, str) and dtype == "string"):
+    dtype = pandas_dtype(dtype)
+    assert isinstance(dtype, StringDtype) and dtype.storage in (
+        "pyarrow",
+        "pyarrow_numpy",
+    )
+```
+
+So yes, `ArrowStringArray` is used for both `string[pyarrow]` and `string[pyarrow_numpy]`.
+
+Now let me also check if there's a separate handling needed for `pyarrow_numpy` storage. Looking at the code, it seems the same class handles both, so my implementation should work.
+
+One final optimization I should consider: for very large arrays, the current approach of iterating through chunks might still be slow. But the key optimization here is using PyArrow's `split_pattern` which is much faster than Python's `split` for each element.
+
+Let me also check if there's a way to use `pc.is_in` more efficiently for the membership testing. Currently, my implementation directly sets values in pre-allocated arrays, which is O(total_splits) which is optimal.
+
+Let me finalize the search/replace blocks:
+</think>
+
+Let me look at the structure of the accessor file to ensure proper import placement:
+
+pandas/core/strings/accessor.py
+[SEARCH]
+from pandas.core.arrays.string_mixin import BaseStringArray
+[/SEARCH]
+[REPLACE]
+from pandas.core.arrays.string_mixin import BaseStringArray
+from pandas.core.arrays.string_arrow import ArrowStringArray
+[/REPLACE]

@@ -1,0 +1,36 @@
+
+
+pandas/core/common.py
+[SEARCH]
+def maybe_make_list(obj):
+    if obj is not None and not isinstance(obj, (tuple, list)):
+        return [obj]
+    return obj
+[/SEARCH]
+[REPLACE]
+def maybe_make_list(obj):
+    if not (obj is not None and not isinstance(obj, (tuple, list))):
+        return obj
+    return [obj]
+[/REPLACE]
+
+pandas/core/common.py
+[SEARCH]
+def is_null_slice(obj) -> bool:
+    """
+    We have a null slice.
+    """
+    return (
+        isinstance(obj, slice)
+        and obj.start is None
+        and obj.stop is None
+        and obj.step is None
+    )
+[/SEARCH]
+[REPLACE]
+def is_null_slice(obj) -> bool:
+    """
+    We have a null slice.
+    """
+    return isinstance(obj, slice) and obj.start is None and obj.stop is None and obj.step is None
+[/REPLACE]

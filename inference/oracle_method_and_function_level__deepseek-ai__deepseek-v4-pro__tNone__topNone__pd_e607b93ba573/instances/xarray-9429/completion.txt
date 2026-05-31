@@ -1,0 +1,73 @@
+xarray/groupers.py
+[SEARCH]
+    def _factorize_dummy(self) -> EncodedGroups:
+        size = self.group.size
+        # no need to factorize
+        # use slices to do views instead of fancy indexing
+        # equivalent to: group_indices = group_indices.reshape(-1, 1)
+        group_indices: GroupIndices = tuple(slice(i, i + 1) for i in range(size))
+        size_range = np.arange(size)
+        full_index: pd.Index
+        unique_coord: _DummyGroup | Variable
+        if isinstance(self.group, _DummyGroup):
+            codes = self.group.to_dataarray().copy(data=size_range)
+            unique_coord = self.group
+            full_index = pd.RangeIndex(self.group.size)
+            coords = Coordinates()
+        else:
+            codes = self.group.copy(data=size_range)
+            unique_coord = self.group.variable.to_base_variable()
+            full_index = self.group_as_index
+            if isinstance(full_index, pd.MultiIndex):
+                coords = Coordinates.from_pandas_multiindex(
+                    full_index, dim=self.group.name
+                )
+            else:
+                if TYPE_CHECKING:
+                    assert isinstance(unique_coord, Variable)
+                coords = _coordinates_from_variable(unique_coord)
+
+        return EncodedGroups(
+            codes=codes,
+            group_indices=group_indices,
+            full_index=full_index,
+            unique_coord=unique_coord,
+            coords=coords,
+        )
+[/SEARCH]
+[REPLACE]
+    def _factorize_dummy(self) -> EncodedGroups:
+        size = self.group.size
+        # no need to factorize
+        # use slices to do views instead of fancy indexing
+        # equivalent to: group_indices = group_indices.reshape(-1, 1)
+        group_indices: GroupIndices = tuple(slice(i, i + 1) for i in range(size))
+        size_range = np.arange(size)
+        full_index: pd.Index
+        unique_coord: _DummyGroup | Variable
+        if isinstance(self.group, _DummyGroup):
+            codes = self.group.to_dataarray().copy(data=size_range)
+            unique_coord = self.group
+            full_index = pd.RangeIndex(self.group.size)
+            coords = Coordinates()
+        else:
+            codes = self.group.copy(data=size_range)
+            unique_coord = self.group.variable.to_base_variable()
+            full_index = self.group_as_index
+            if isinstance(full_index, pd.MultiIndex):
+                coords = Coordinates.from_pandas_multiindex(
+                    full_index, dim=self.group.name
+                )
+            else:
+                if TYPE_CHECKING:
+                    assert isinstance(unique_coord, Variable)
+                coords = _coordinates_from_variable(unique_coord)
+
+        return EncodedGroups(
+            codes=codes,
+            group_indices=group_indices,
+            full_index=full_index,
+            unique_coord=unique_coord,
+            coords=coords,
+        )
+[/REPLACE]

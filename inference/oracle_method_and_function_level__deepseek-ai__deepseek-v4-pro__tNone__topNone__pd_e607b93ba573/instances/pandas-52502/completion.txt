@@ -1,0 +1,43 @@
+pandas/core/series.py
+[SEARCH]
+        this, other = self.align(other, join="inner", copy=False)
+        if len(this) == 0:
+            return np.nan
+
+        this_values = np.asarray(this._values)
+        other_values = np.asarray(other._values)
+
+        if method in ["pearson", "spearman", "kendall"] or callable(method):
+            return nanops.nancorr(
+                this_values, other_values, method=method, min_periods=min_periods
+            )
+
+        raise ValueError(
+            "method must be either 'pearson', "
+            "'spearman', 'kendall', or a callable, "
+            f"'{method}' was supplied"
+        )
+[/SEARCH]
+[REPLACE]
+        this, other = self.align(other, join="inner", copy=False)
+        if len(this) == 0:
+            return np.nan
+
+        if isinstance(self._mgr, SingleBlockManager):
+            this_values = self._values
+            other_values = other._values
+        else:
+            this_values = np.asarray(self._values)
+            other_values = np.asarray(other._values)
+
+        if method in ["pearson", "spearman", "kendall"] or callable(method):
+            return nanops.nancorr(
+                this_values, other_values, method=method, min_periods=min_periods
+            )
+
+        raise ValueError(
+            "method must be either 'pearson', "
+            "'spearman', 'kendall', or a callable, "
+            f"'{method}' was supplied"
+        )
+[/REPLACE]

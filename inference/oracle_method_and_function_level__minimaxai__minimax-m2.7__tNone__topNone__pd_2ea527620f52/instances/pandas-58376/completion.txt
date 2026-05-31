@@ -1,0 +1,143 @@
+
+
+pandas/core/indexes/range.py
+[SEARCH]
+    _hidden_attrs: frozenset[str] = frozenset(
+        ["tolist"]  # tolist is not deprecated, just suppressed in the __dir__
+    )
+[/SEARCH]
+[REPLACE]
+    _hidden_attrs: frozenset[str] = frozenset(
+        ["tolist"]  # tolist is not deprecated, just suppressed in the __dir__
+    )
+
+    def value_counts(
+        self,
+        normalize: bool = False,
+        sort: bool = True,
+        ascending: bool = False,
+        bins=None,
+        dropna: bool = True,
+    ) -> Series:
+        """
+        Return a Series containing counts of unique values.
+
+        The resulting object will be in descending order so that the
+        first element is the most frequently-occurring element.
+        Excludes NA values by default.
+
+        Parameters
+        ----------
+        normalize : bool, default False
+            If True then the object returned will contain the relative
+            frequencies of the unique values.
+        sort : bool, default True
+            Sort by frequencies when True. Preserve the order of the data when False.
+        ascending : bool, default False
+            Sort in ascending order.
+        bins : int, optional
+            Rather than count values, group them into half-open bins,
+            a convenience for ``pd.cut``, only works with numeric data.
+        dropna : bool, default True
+            Don't include counts of NaN.
+
+        Returns
+        -------
+        Series
+            Series containing counts of unique values.
+
+        See Also
+        --------
+        Series.count: Number of non-NA elements in a Series.
+        DataFrame.count: Number of non-NA elements in a DataFrame.
+        DataFrame.value_counts: Equivalent method on DataFrames.
+
+        Examples
+        --------
+        >>> index = pd.Index([3, 1, 2, 3, 4, np.nan])
+        >>> index.value_counts()
+        3.0    2
+        1.0    1
+        2.0    1
+        4.0    1
+        Name: count, dtype: int64
+
+        With `normalize` set to `True`, returns the relative frequency by
+        dividing all values by the sum of values.
+
+        >>> s = pd.Series([3, 1, 2, 3, 4, np.nan])
+        >>> s.value_counts(normalize=True)
+        3.0    0.4
+        1.0    0.2
+        2.0    0.2
+        4.0    0.2
+        Name: proportion, dtype: float64
+
+        **bins**
+
+        Bins can be useful for going from a continuous variable to a
+        categorical variable; instead of counting unique
+        apparitions of values, divide the index in the specified
+        number of half-open bins.
+
+        >>> s.value_counts(bins=3)
+        (0.996, 2.0]    2
+        (2.0, 3.0]      2
+        (3.0, 4.0]      1
+        Name: count, dtype: int64
+
+        **dropna**
+
+        With `dropna` set to `False` we can also see NaN index values.
+
+        >>> s.value_counts(dropna=False)
+        3.0    2
+        1.0    1
+        2.0    1
+        4.0    1
+        NaN    1
+        Name: count, dtype: int64
+        """
+        if bins is not None:
+            return super().value_counts(
+                normalize=normalize,
+                sort=sort,
+                ascending=ascending,
+                bins=bins,
+                dropna=dropna,
+            )
+
+        if len(self) == 0:
+            name = "proportion" if normalize else "count"
+            dtype = np.float64 if normalize else np.int64
+            return Series([], dtype=dtype, index=Index([], dtype=float), name=name)
+
+        # For RangeIndex, all values are unique, so count = 1 for each value
+        if normalize:
+            values = np.full(len(self), 1.0 / len(self), dtype=np.float64)
+        else:
+            values = np.ones(len(self), dtype=np.int64)
+
+        name = "proportion" if normalize else "count"
+        result = Series(values, index=self.astype(float), name=name)
+
+        if sort:
+            if ascending:
+                result = result.sort_index(kind="quicksort")
+            else:
+                result = result.sort_values(ascending=False, kind="quicksort")
+
+        if not dropna:
+            nan_index = Index([np.nan], dtype=float)
+            if sort:
+                if ascending:
+                    result = result.append(Series([0], index=nan_index, name=name))
+                    result = result.sort_index(kind="quicksort")
+                else:
+                    result = result.append(Series([0], index=nan_index, name=name))
+                    result = result.sort_values(ascending=False, kind="quicksort")
+            else:
+                result = result.append(Series([0], index=nan_index, name=name))
+
+        return result
+[/REPLACE]

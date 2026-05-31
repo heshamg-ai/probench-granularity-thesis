@@ -1,0 +1,86 @@
+xarray/groupers.py
+[SEARCH]
+    inverse, values = pd.factorize(ar, sort=sort)
+    if isinstance(values, pd.MultiIndex):
+        values.names = ar.names
+    return values, inverse
+[/SEARCH]
+[REPLACE]
+    # Fast-path for cftime object arrays to avoid pandas factorize overhead
+    try:
+        is_index = isinstance(ar, pd.Index)
+        data = ar.values if is_index else np.asarray(ar)
+        flat = data.ravel()
+        if flat.dtype == object and flat.size > 0:
+            first = None
+            for obj in flat:
+                if obj is not None and not pd.isna(obj):
+                    first = obj
+                    break
+            if first is not None:
+                is_cftime = False
+                try:
+                    import cftime as _cftime  # type: ignore
+                    if isinstance(first, getattr(_cftime, "datetime", object)):
+                        is_cftime = True
+                except Exception:
+                    pass
+                if not is_cftime:
+                    mod = type(first).__module__
+                    is_cftime = mod.startswith("cftime") and hasattr(first, "year") and hasattr(first, "month") and hasattr(first, "day")
+                if is_cftime:
+                    mask = pd.isna(flat)
+                    valid_idx = np.nonzero(~mask)[0]
+                    if valid_idx.size == 0:
+                        inverse = np.full(flat.shape, -1, dtype=np.intp)
+                        return np.array([], dtype=object), inverse
+                    mapping: dict[tuple[int, int, int, int, int, int, int], Any] = {}
+                    def key_for(dt):
+                        return (
+                            dt.year,
+                            dt.month,
+                            dt.day,
+                            dt.hour,
+                            dt.minute,
+                            dt.second,
+                            getattr(dt, "microsecond", 0),
+                        )
+                    keys_list: list[tuple[int, int, int, int, int, int, int]] = []
+                    for i in valid_idx:
+                        dt = flat[i]
+                        k = key_for(dt)
+                        keys_list.append(k)
+                        if k not in mapping:
+                            mapping[k] = dt
+                    keys_arr = np.asarray(keys_list, dtype=np.int64)
+                    if sort:
+                        uniq_keys, inv_valid = np.unique(keys_arr, axis=0, return_inverse=True)
+                        unique_values = np.array([mapping[tuple(k)] for k in uniq_keys], dtype=object)
+                        inverse = np.full(flat.shape, -1, dtype=inv_valid.dtype)
+                        inverse[valid_idx] = inv_valid
+                        return unique_values, inverse
+                    else:
+                        order: dict[tuple[int, int, int, int, int, int, int], int] = {}
+                        unique_values_list: list[Any] = []
+                        next_code = 0
+                        inv_valid = np.empty(valid_idx.size, dtype=np.intp)
+                        for j, k in enumerate(keys_list):
+                            code = order.get(k)
+                            if code is None:
+                                code = next_code
+                                order[k] = code
+                                unique_values_list.append(mapping[k])
+                                next_code += 1
+                            inv_valid[j] = code
+                        unique_values = np.array(unique_values_list, dtype=object)
+                        inverse = np.full(flat.shape, -1, dtype=inv_valid.dtype)
+                        inverse[valid_idx] = inv_valid
+                        return unique_values, inverse
+    except Exception:
+        # Fallback to pandas factorize on any unexpected issue
+        pass
+    inverse, values = pd.factorize(ar, sort=sort)
+    if isinstance(values, pd.MultiIndex):
+        values.names = ar.names
+    return values, inverse
+[/REPLACE]

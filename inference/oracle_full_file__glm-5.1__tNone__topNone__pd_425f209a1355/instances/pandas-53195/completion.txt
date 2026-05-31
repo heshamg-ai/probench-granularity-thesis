@@ -1,0 +1,9 @@
+pandas/core/reshape/concat.py
+[SEARCH]
+def _concat_indexes(indexes) -> Index:
+    return indexes[0].append(indexes[1:])
+[/SEARCH]
+[REPLACE]
+def _concat_indexes(indexes) -> Index:
+    return Index._concat(indexes)
+[/REPLACE]

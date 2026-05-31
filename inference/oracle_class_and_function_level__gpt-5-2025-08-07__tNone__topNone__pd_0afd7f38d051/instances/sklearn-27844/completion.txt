@@ -1,0 +1,17 @@
+sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py
+[SEARCH]
+        encoded_classes = np.argmax(self.predict_proba(X), axis=1)
+        return self.classes_[encoded_classes]
+[/SEARCH]
+[REPLACE]
+        if self.n_trees_per_iteration_ == 1:
+            # Binary classification: avoid computing predict_proba to save time and memory.
+            # For two classes, the raw score is the logit of P(class 1).
+            # Argmax on [1 - p, p] is equivalent to (p > 0.5) <=> (raw > 0).
+            raw = self._raw_predict(X).ravel()
+            encoded_classes = (raw > 0.0).astype(np.intp, copy=False)
+            return self.classes_.take(encoded_classes, axis=0)
+        else:
+            encoded_classes = np.argmax(self.predict_proba(X), axis=1)
+            return self.classes_.take(encoded_classes, axis=0)
+[/REPLACE]

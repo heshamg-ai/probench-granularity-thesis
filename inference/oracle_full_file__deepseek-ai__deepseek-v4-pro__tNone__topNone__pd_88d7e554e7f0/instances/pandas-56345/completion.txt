@@ -1,0 +1,51 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        if (
+            not isinstance(self.dtype, CategoricalDtype)
+            and self.is_monotonic_increasing
+            and other.is_monotonic_increasing
+            and self._can_use_libjoin
+            and other._can_use_libjoin
+            and (self.is_unique or other.is_unique)
+        ):
+            # Categorical is monotonic if data are ordered as categories, but join can
+            #  not handle this in case of not lexicographically monotonic GH#38502
+            try:
+                return self._join_monotonic(other, how=how)
+            except TypeError:
+                # object dtype; non-comparable objects
+                pass
+        elif not self.is_unique or not other.is_unique:
+            return self._join_non_unique(other, how=how, sort=sort)
+
+        return self._join_via_get_indexer(other, how, sort)
+[/SEARCH]
+[REPLACE]
+        if isinstance(self.dtype, CategoricalDtype):
+            # For unordered CategoricalIndex, convert to object and use faster
+            # join paths via libjoin.
+            if not self.ordered and not other.ordered:
+                self_unordered = self.astype(object, copy=False)
+                other_unordered = other.astype(object, copy=False)
+                return self_unordered.join(
+                    other_unordered, how=how, return_indexers=True, sort=sort
+                )
+            # Ordered Categorical: fall through to standard path (cannot use libjoin
+            # if not lexicographically monotonic).
+        if (
+            self.is_monotonic_increasing
+            and other.is_monotonic_increasing
+            and self._can_use_libjoin
+            and other._can_use_libjoin
+            and (self.is_unique or other.is_unique)
+        ):
+            try:
+                return self._join_monotonic(other, how=how)
+            except TypeError:
+                # object dtype; non-comparable objects
+                pass
+        elif not self.is_unique or not other.is_unique:
+            return self._join_non_unique(other, how=how, sort=sort)
+
+        return self._join_via_get_indexer(other, how, sort)
+[/REPLACE]

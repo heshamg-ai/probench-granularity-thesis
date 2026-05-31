@@ -1,0 +1,50 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        else:
+            if how == "left":
+                join_array, lidx, ridx = self._left_indexer(other)
+            elif how == "right":
+                join_array, ridx, lidx = other._left_indexer(self)
+            elif how == "inner":
+                join_array, lidx, ridx = self._inner_indexer(other)
+            elif how == "outer":
+                join_array, lidx, ridx = self._outer_indexer(other)
+
+            assert lidx is not None
+            assert ridx is not None
+
+            join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+[/SEARCH]
+[REPLACE]
+        else:
+            if how == "left":
+                if other.is_unique:
+                    join_index = self
+                    lidx = None
+                    ridx = other.get_indexer(self)
+                else:
+                    join_array, lidx, ridx = self._left_indexer(other)
+                    assert lidx is not None
+                    assert ridx is not None
+                    join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+            elif how == "right":
+                if self.is_unique:
+                    join_index = other
+                    lidx = self.get_indexer(other)
+                    ridx = None
+                else:
+                    join_array, ridx, lidx = other._left_indexer(self)
+                    assert lidx is not None
+                    assert ridx is not None
+                    join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+            elif how == "inner":
+                join_array, lidx, ridx = self._inner_indexer(other)
+                assert lidx is not None
+                assert ridx is not None
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+            elif how == "outer":
+                join_array, lidx, ridx = self._outer_indexer(other)
+                assert lidx is not None
+                assert ridx is not None
+                join_index = self._wrap_joined_index(join_array, other, lidx, ridx)
+[/REPLACE]

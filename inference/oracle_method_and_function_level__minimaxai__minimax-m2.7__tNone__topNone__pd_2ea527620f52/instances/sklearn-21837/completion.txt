@@ -1,0 +1,67 @@
+
+
+Looking at the `chi2` function, the main performance bottleneck with many unique class labels is:
+1. `LabelBinarizer().fit_transform(y)` creates a potentially large dense matrix
+2. `safe_sparse_dot(Y.T, X)` becomes expensive when Y has many columns
+3. The function doesn't leverage `sparse_output=True` for LabelBinarizer
+
+The optimization strategy:
+1. Use `sparse_output=True` for LabelBinarizer to keep Y sparse when beneficial
+2. For the many-classes case, bypass LabelBinarizer and compute `observed` directly by iterating over unique classes
+3. For sparse X, iterate over non-zero entries to accumulate feature counts per class (avoids creating intermediate row-slices)
+4. Use efficient broadcasting for expected value computation
+
+sklearn/feature_selection/_univariate_selection.py
+[SEARCH]
+    X = check_array(X, accept_sparse="csr")
+    if np.any((X.data if issparse(X) else X) < 0):
+        raise ValueError("Input X must be non-negative.")
+
+    Y = LabelBinarizer().fit_transform(y)
+    if Y.shape[1] == 1:
+        Y = np.append(1 - Y, Y, axis=1)
+
+    observed = safe_sparse_dot(Y.T, X)  # n_classes * n_features
+
+    feature_count = X.sum(axis=0).reshape(1, -1)
+    class_prob = Y.mean(axis=0).reshape(1, -1)
+    expected = np.dot(class_prob.T, feature_count)
+
+    return _chisquare(observed, expected)
+[/SEARCH]
+[REPLACE]
+    X = check_array(X, accept_sparse="csr")
+    if np.any((X.data if issparse(X) else X) < 0):
+        raise ValueError("Input X must be non-negative.")
+
+    Y = LabelBinarizer(sparse_output=True).fit_transform(y)
+    if Y.shape[1] == 1:
+        Y = np.append(1 - Y, Y, axis=1)
+
+    unique_classes = np.unique(y)
+    n_classes = len(unique_classes)
+
+    # Optimized path for many classes: compute observed directly
+    # This avoids creating the large Y.T @ X matrix product
+    n_features = X.shape[1]
+    observed = np.zeros((n_classes, n_features))
+
+    if issparse(X):
+        # For sparse matrices, iterate over non-zeros to accumulate per class
+        X_csr = X.tocsr() if not X.format == 'csr' else X
+        for i, (start, end) in enumerate(zip(X_csr.indptr[:-1], X_csr.indptr[1:])):
+            c = y[i]
+            class_idx = np.searchsorted(unique_classes, c)
+            observed[class_idx] += X_csr.data[start:end]
+    else:
+        # For dense matrices, accumulate per class using boolean indexing
+        for class_idx, c in enumerate(unique_classes):
+            mask = y == c
+            observed[class_idx] = X[mask].sum(axis=0)
+
+    feature_count = X.sum(axis=0).reshape(1, -1)
+    class_prob = Y.mean(axis=0).reshape(-1, 1)
+    expected = class_prob * feature_count
+
+    return _chisquare(observed, expected)
+[/REPLACE]

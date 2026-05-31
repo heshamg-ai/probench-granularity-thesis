@@ -1,0 +1,28 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        indices = ensure_platform_int(indices)
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+
+        # Note: we discard fill_value and use self._na_value, only relevant
+        #  in the case where allow_fill is True and fill_value is not None
+        values = self._values
+[/SEARCH]
+[REPLACE]
+        indices = ensure_platform_int(indices)
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+
+        # fastpath: if taking the full range (identity), avoid materializing a copy
+        if (
+            not allow_fill
+            and isinstance(indices, np.ndarray)
+            and indices.ndim == 1
+            and len(indices) == len(self)
+            and (len(self) == 0 or np.array_equal(indices, np.arange(len(self), dtype=indices.dtype)))
+            and not isinstance(self, ABCRangeIndex)
+        ):
+            return self._view()
+
+        # Note: we discard fill_value and use self._na_value, only relevant
+        #  in the case where allow_fill is True and fill_value is not None
+        values = self._values
+[/REPLACE]

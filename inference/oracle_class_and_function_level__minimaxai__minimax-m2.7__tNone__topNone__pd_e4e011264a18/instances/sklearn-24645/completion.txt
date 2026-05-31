@@ -1,0 +1,80 @@
+
+
+sklearn/neighbors/_nearest_centroid.py
+[SEARCH]
+    def predict(self, X):
+        """Perform classification on an array of test vectors `X`.
+
+        The predicted class `C` for each sample in `X` is returned.
+
+        Parameters
+        ----------
+        X : {array-like, sparse matrix} of shape (n_samples, n_features)
+            Test samples.
+
+        Returns
+        -------
+        C : ndarray of shape (n_samples,)
+            The predicted classes.
+
+        Notes
+        -----
+        If the metric constructor parameter is `"precomputed"`, `X` is assumed
+        to be the distance matrix between the data to be predicted and
+        `self.centroids_`.
+        """
+        check_is_fitted(self)
+
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        return self.classes_[
+            pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)
+        ]
+[/SEARCH]
+[REPLACE]
+    def predict(self, X):
+        """Perform classification on an array of test vectors `X`.
+
+        The predicted class `C` for each sample in `X` is returned.
+
+        Parameters
+        ----------
+        X : {array-like, sparse matrix} of shape (n_samples, n_features)
+            Test samples.
+
+        Returns
+        -------
+        C : ndarray of shape (n_samples,)
+            The predicted classes.
+
+        Notes
+        -----
+        If the metric constructor parameter is `"precomputed"`, `X` is assumed
+        to be the distance matrix between the data to be predicted and
+        `self.centroids_`.
+        """
+        check_is_fitted(self)
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+
+        # Optimized path for dense euclidean distance
+        if self.metric == "euclidean" and not sp.issparse(X):
+            X = np.asarray(X, dtype=np.float64)
+            centroids = np.asarray(self.centroids_, dtype=np.float64)
+
+            # Compute squared euclidean distances efficiently:
+            # ||x - c||^2 = ||x||^2 + ||c||^2 - 2 * x @ c.T
+            # Using einsum for efficient squared norm computation
+            X_sq_norms = np.einsum("ij,ij->i", X, X)
+            centroid_sq_norms = np.einsum("ij,ij->i", centroids, centroids)
+
+            distances = (
+                X_sq_norms[:, np.newaxis]
+                + centroid_sq_norms[np.newaxis, :]
+                - 2.0 * X @ centroids.T
+            )
+
+            return self.classes_[distances.argmin(axis=1)]
+
+        return self.classes_[
+            pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)
+        ]
+[/REPLACE]

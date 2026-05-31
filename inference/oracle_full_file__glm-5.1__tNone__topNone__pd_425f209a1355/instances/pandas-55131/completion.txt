@@ -1,0 +1,134 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _groupby_op(
+        self,
+        *,
+        how: str,
+        has_dropped_na: bool,
+        min_count: int,
+        ngroups: int,
+        ids: npt.NDArray[np.intp],
+        **kwargs,
+    ):
+        if isinstance(self.dtype, StringDtype):
+            return super()._groupby_op(
+                how=how,
+                has_dropped_na=has_dropped_na,
+                min_count=min_count,
+                ngroups=ngroups,
+                ids=ids,
+                **kwargs,
+            )
+
+        masked = self._to_masked()
+
+        result = masked._groupby_op(
+            how=how,
+            has_dropped_na=has_dropped_na,
+            min_count=min_count,
+            ngroups=ngroups,
+            ids=ids,
+            **kwargs,
+        )
+        if isinstance(result, np.ndarray):
+            return result
+        return type(self)._from_sequence(result, copy=False)
+[/SEARCH]
+[REPLACE]
+    def _groupby_op(
+        self,
+        *,
+        how: str,
+        has_dropped_na: bool,
+        min_count: int,
+        ngroups: int,
+        ids: npt.NDArray[np.intp],
+        **kwargs,
+    ):
+        if isinstance(self.dtype, StringDtype):
+            return super()._groupby_op(
+                how=how,
+                has_dropped_na=has_dropped_na,
+                min_count=min_count,
+                ngroups=ngroups,
+                ids=ids,
+                **kwargs,
+            )
+
+        # Fast path for min/max on timestamp/duration types to avoid
+        # expensive conversion to masked type and back
+        pa_type = self._pa_array.type
+        if how in ("min", "max") and (
+            pa.types.is_timestamp(pa_type) or pa.types.is_duration(pa_type)
+        ):
+            from pandas.core.arrays.masked import BaseMaskedArray
+
+            data = self._pa_array
+            mask = self.isna()
+
+            if pa.types.is_duration(pa_type):
+                data = data.cast(pa.int64())
+
+            result = getattr(pc, how)(data, skip_nulls=True)
+
+            if pa.types.is_duration(pa_type):
+                result = result.cast(pa_type)
+
+            out_mask = np.zeros(ngroups, dtype=np.bool_)
+            out_arr = np.empty(ngroups, dtype=data.type.to_pandas_dtype())
+
+            if has_dropped_na:
+                out_mask[ids == -1] = True
+
+            is_valid = ids != -1
+            uniques, unique_indices = np.unique(ids[is_valid], return_index=True)
+            if len(uniques):
+                max_idx = pc.max(unique_indices).as_py()
+                if max_idx >= len(result):
+                    result = pa.array(result, type=data.type)
+
+            has_result = not (isinstance(result, pa.Scalar) and pc.is_null(result).as_py())
+
+            if has_result:
+                if isinstance(result, pa.Scalar):
+                    fill_values = [result.as_py()] * len(uniques)
+                else:
+                    fill_values = result.to_pylist()
+
+                if len(uniques):
+                    if pa.types.is_duration(pa_type):
+                        np_fill = np.array(
+                            [v._value if hasattr(v, "_value") else v for v in fill_values],
+                            dtype=out_arr.dtype,
+                        )
+                    else:
+                        np_fill = np.array(fill_values, dtype=out_arr.dtype)
+                    out_arr[uniques] = np_fill
+                    out_mask[uniques] = False
+
+            dtype = _arrow_dtype_mapping()[pa_type]
+            masked_arr = dtype.construct_array_type()(out_arr, out_mask)
+
+            if min_count > 0:
+                nvalid = np.bincount(
+                    ids[is_valid] if has_dropped_na else ids,
+                    minlength=ngroups,
+                )
+                masked_arr[mask] = nvalid < min_count
+
+            return type(self)._from_sequence(masked_arr, copy=False)
+
+        masked = self._to_masked()
+
+        result = masked._groupby_op(
+            how=how,
+            has_dropped_na=has_dropped_na,
+            min_count=min_count,
+            ngroups=ngroups,
+            ids=ids,
+            **kwargs,
+        )
+        if isinstance(result, np.ndarray):
+            return result
+        return type(self)._from_sequence(result, copy=False)
+[/REPLACE]

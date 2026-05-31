@@ -1,0 +1,15 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        result = DataFrame({name: self}, copy=False)
+
+        if index:
+            result.index = self
+        return result
+[/SEARCH]
+[REPLACE]
+        if index:
+            result = DataFrame({name: self}, index=self, copy=False)
+        else:
+            result = DataFrame({name: self}, copy=False)
+        return result
+[/REPLACE]

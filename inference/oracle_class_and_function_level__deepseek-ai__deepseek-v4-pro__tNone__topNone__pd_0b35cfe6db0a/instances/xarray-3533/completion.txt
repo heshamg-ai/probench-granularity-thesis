@@ -1,0 +1,62 @@
+xarray/core/dataarray.py
+[SEARCH]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/SEARCH]
+[REPLACE]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        # fast path: when all indexers are plain ints, apply them directly
+        # to the Variable without round-tripping through Dataset
+        if (
+            not drop
+            and isinstance(indexers, dict)
+            and all(isinstance(v, (int, np.integer)) for v in indexers.values())
+        ):
+            variable = self._variable.isel(indexers=indexers)
+            # drop any coordinate that used an indexed dimension
+            indexed_dims = set(indexers.keys())
+            coords = {
+                k: v
+                for k, v in self._coords.items()
+                if not set(v.dims).intersection(indexed_dims)
+            }
+            # rebuild indexes from remaining coords
+            indexes = {
+                k: v
+                for k, v in self._indexes.items()
+                if k in coords
+            } if self._indexes is not None else None
+            return self._replace(variable, coords, indexes=indexes)
+
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/REPLACE]

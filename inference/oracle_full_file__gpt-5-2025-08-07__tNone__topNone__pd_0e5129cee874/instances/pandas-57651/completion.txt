@@ -1,0 +1,92 @@
+pandas/core/indexes/range.py
+[SEARCH]
+        if step != self.step:
+            # We reversed this range: transform to original locs
+            locs[valid] = len(self) - 1 - locs[valid]
+        return ensure_platform_int(locs)
+[/SEARCH]
+[REPLACE]
+        if step != self.step:
+            # We reversed this range: transform to original locs
+            locs[valid] = len(self) - 1 - locs[valid]
+        return ensure_platform_int(locs)
+
+    @ibase._maybe_return_indexers
+    def join(
+        self,
+        other,
+        *,
+        how="left",
+        level=None,
+        return_indexers: bool = False,
+        sort: bool = False,
+    ):
+        other = ibase.ensure_index(other)
+        sort = sort or how == "outer"
+
+        # Delegate cases not applicable for RangeIndex optimization
+        if level is not None or not isinstance(other, RangeIndex):
+            return super().join(
+                other, how=how, level=level, return_indexers=True, sort=sort
+            )
+
+        # Validate method
+        ibase._validate_join_method(how)
+
+        # Handle empties via base implementation to preserve exact semantics
+        if len(self) == 0 or len(other) == 0:
+            return self._join_empty(other, how, sort)
+
+        def _positions_from_ranges(jrng: RangeIndex, brng: RangeIndex) -> np.ndarray:
+            jlen = len(jrng)
+            if jlen == 0:
+                return np.empty(0, dtype=np.intp)
+            i = np.arange(jlen, dtype=np.int64)
+            rel = (np.int64(jrng.start) - np.int64(brng.start)) + i * np.int64(jrng.step)
+            # floor division and modulo work with negative steps as desired
+            k = rel // np.int64(brng.step)
+            valid = (rel % np.int64(brng.step) == 0) & (k >= 0) & (k < len(brng))
+            out = np.where(valid, k, -1).astype(np.intp, copy=False)
+            return out
+
+        if how == "left":
+            if sort:
+                join_index, lindexer = self.sort_values(return_indexer=True)
+                # ensure numpy array for indexer
+                lindexer = np.asarray(lindexer, dtype=np.intp)
+            else:
+                join_index = self
+                lindexer = None
+            rindexer = _positions_from_ranges(join_index, other)
+
+        elif how == "right":
+            if sort:
+                join_index, rindexer = other.sort_values(return_indexer=True)
+                rindexer = np.asarray(rindexer, dtype=np.intp)
+            else:
+                join_index = other
+                rindexer = None
+            lindexer = _positions_from_ranges(join_index, self)
+
+        elif how == "inner":
+            join_index = self.intersection(other, sort=sort)
+            lindexer = _positions_from_ranges(join_index, self)
+            rindexer = _positions_from_ranges(join_index, other)
+
+        elif how == "outer":
+            join_index = self.union(other, sort=sort)
+            if not isinstance(join_index, RangeIndex):
+                # Fallback to base for non-RangeIndex union result
+                return super().join(
+                    other, how=how, level=level, return_indexers=True, sort=sort
+                )
+            lindexer = _positions_from_ranges(join_index, self)
+            rindexer = _positions_from_ranges(join_index, other)
+
+        # Match name-setting semantics from base implementation
+        names = other.names if how == "right" else self.names
+        if join_index.names != names:
+            join_index = join_index.set_names(names)
+
+        return join_index, lindexer, rindexer
+[/REPLACE]

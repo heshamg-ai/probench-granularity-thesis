@@ -1,0 +1,53 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    # error: Return type "Type[Index]" of "_constructor" incompatible with return
+    # type "Type[RangeIndex]" in supertype "Index"
+    @cache_readonly
+    def _constructor(self) -> type[Index]:  # type: ignore[override]
+        """return the class to use for construction"""
+        return Index
+[/SEARCH]
+[REPLACE]
+    # error: Return type "Type[Index]" of "_constructor" incompatible with return
+    # type "Type[RangeIndex]" in supertype "Index"
+    @cache_readonly
+    def _constructor(self) -> type[Index]:  # type: ignore[override]
+        """return the class to use for construction"""
+        return Index
+
+    @doc(Index.take)
+    def take(
+        self,
+        indices,
+        axis: int = 0,
+        allow_fill: bool = True,
+        fill_value=None,
+        **kwargs,
+    ):
+        nv.validate_take((), kwargs)
+        if is_scalar(indices):
+            raise TypeError("Expected indices to be array-like")
+        indices = ensure_platform_int(indices)
+
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+
+        if allow_fill:
+            # RangeIndex cannot hold NA
+            raise ValueError(
+                "Unable to fill values because RangeIndex cannot contain NA"
+            )
+
+        try:
+            # Fast path: use arithmetic to compute values from RangeIndex
+            taken_start = self._range.start
+            taken_step = self._range.step
+            # Compute result as RangeIndex if step != 0;
+            # fallback for empty/single element cases
+            taken = taken_start + indices * taken_step
+        except TypeError:
+            # Could happen with weird indexer types; fallback to materializing
+            taken = self._data[indices]
+            return self._constructor._simple_new(taken, name=self.name)
+
+        return self._shallow_copy(taken, name=self.name)
+[/REPLACE]

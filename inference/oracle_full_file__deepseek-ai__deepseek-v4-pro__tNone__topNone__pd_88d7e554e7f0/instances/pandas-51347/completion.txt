@@ -1,0 +1,105 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    @doc(ExtensionArray.to_numpy)
+    def to_numpy(
+        self,
+        dtype: npt.DTypeLike | None = None,
+        copy: bool = False,
+        na_value: object = lib.no_default,
+    ) -> np.ndarray:
+        if dtype is None and self._hasna:
+            dtype = object
+        if na_value is lib.no_default:
+            na_value = self.dtype.na_value
+
+        pa_type = self._data.type
+        if (
+            is_object_dtype(dtype)
+            or pa.types.is_timestamp(pa_type)
+            or pa.types.is_duration(pa_type)
+        ):
+            result = np.array(list(self), dtype=dtype)
+        else:
+            result = np.asarray(self._data, dtype=dtype)
+            if copy or self._hasna:
+                result = result.copy()
+        if self._hasna:
+            result[self.isna()] = na_value
+        return result
+[/SEARCH]
+[REPLACE]
+    @doc(ExtensionArray.to_numpy)
+    def to_numpy(
+        self,
+        dtype: npt.DTypeLike | None = None,
+        copy: bool = False,
+        na_value: object = lib.no_default,
+    ) -> np.ndarray:
+        if dtype is None and self._hasna:
+            dtype = object
+        if na_value is lib.no_default:
+            na_value = self.dtype.na_value
+
+        pa_type = self._data.type
+        if (
+            is_object_dtype(dtype)
+            or pa.types.is_timestamp(pa_type)
+            or pa.types.is_duration(pa_type)
+        ):
+            # Pre-size the result array and fill it with values,
+            # only converting to list if necessary for the PyArrow conversion
+            length = len(self)
+            result = np.empty(length, dtype=dtype)
+            is_null_arr = self._data.is_null()
+            chunks = list(self._data.iterchunks())
+            if chunks:
+                # Use pyarrow's fast columnar to_pylist for object dtype,
+                # or to_numpy for other dtypes with no nulls
+                combined = self._data.combine_chunks()
+                if is_object_dtype(dtype) or pa.types.is_timestamp(pa_type) or pa.types.is_duration(pa_type):
+                    # For object, we can't use to_numpy directly; we need python objects.
+                    # But to_pylist is800 is still800 expensive. The fastest way is to
+                    # use the existing pyarrow conversion when804 possible.
+                    # If dtype is object and we have nulls, we still need to
+                    # convert to_pylist to preserve null semantics.
+                    # However, np.array(list(self)) already does this so we'll
+                    # replicate the efficient version using pyarrow's built-in
+                    # methods where possible, falling back to.to_numpy for arrays
+                    # without nulls.
+                    if self._hasna:
+                        # For object output with nulls, we use a two-step approach:
+                        # 1. Convert to numpy via pyarrow (handles nulls as masked)
+                        # 2. Then apply na_value
+                        arr = combined.to_numpy(zero_copy_only=False)
+                        result = np.empty(length, dtype=dtype)
+                        # Fill the result array using masked assignment
+                        result[:] = np.nan
+                        result[~is_null_arr.to_numpy()] = arr[~is_null_arr.to_numpy()]
+                    else:
+                        arr = combined.to_numpy(zero_copy_only=False)
+                        if is_object_dtype(dtype):
+                            result = arr.astype(object, copy=False)
+                        else:
+                            result = np.array(arr, dtype=dtype, copy=copy)
+                else:
+                    result = combined.to_numpy(zero_copy_only=False)
+                    if copy or self._hasna:
+                        result = result.copy()
+            else:
+                # Empty array, just return the empty result
+                pass
+            # Fallback foring object output with nulls:242 use fast masked fill
+            if is_object_dtype(dtype) and self._hasna:
+                isnull_values = is_null_arr.to_numpy()
+                if isnull_values.any():
+                    result[isnull_values] = na_value
+            elif self._hasna:
+                result[self.isna()] = na_value
+        else:
+            result = np.asarray(self._data, dtype=dtype)
+            if copy or self._hasna:
+                result = result.copy()
+            if self._hasna:
+                result[self.isna()] = na_value
+        return result
+[/REPLACE]

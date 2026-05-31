@@ -1,0 +1,75 @@
+pandas/core/frame.py
+[SEARCH]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            if isinstance(dtypes[0], BaseMaskedDtype):
+                # We have masked arrays with the same dtype. We can transpose faster.
+                from pandas.core.arrays.masked import transpose_homogenous_masked_arrays
+
+                if isinstance(self._mgr, ArrayManager):
+                    masked_arrays = self._mgr.arrays
+                else:
+                    masked_arrays = list(self._iter_column_arrays())
+                new_values = transpose_homogenous_masked_arrays(
+                    cast(list[BaseMaskedArray], masked_arrays)
+                )
+            else:
+                # We have other EAs with the same dtype. We preserve dtype in transpose.
+                dtyp = dtypes[0]
+                arr_typ = dtyp.construct_array_type()
+                values = self.values
+                new_values = [arr_typ._from_sequence(row, dtype=dtyp) for row in values]
+[/SEARCH]
+[REPLACE]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            if isinstance(dtypes[0], ArrowDtype):
+                # Fast transpose for homogeneous PyArrow-backed columns.
+                from pandas.core.arrays import ArrowExtensionArray
+
+                import pyarrow as pa
+
+                if isinstance(self._mgr, ArrayManager):
+                    arrays = self._mgr.arrays
+                else:
+                    arrays = list(self._iter_column_arrays())
+                pa_arrays = [arr._pa_array.combine_chunks() for arr in arrays]
+                table = pa.table(
+                    {str(i): col for i, col in enumerate(pa_arrays)}
+                )
+                transposed = table.to_pydict()
+                pa_type = arrays[0]._pa_array.type
+                new_values = []
+                for row_idx in range(len(arrays[0])):
+                    new_values.append(
+                        ArrowExtensionArray(
+                            pa.array(
+                                [transposed[str(col_idx)][row_idx] for col_idx in range(len(arrays))],
+                                type=pa_type,
+                            )
+                        )
+                    )
+            elif isinstance(dtypes[0], BaseMaskedDtype):
+                # We have masked arrays with the same dtype. We can transpose faster.
+                from pandas.core.arrays.masked import transpose_homogenous_masked_arrays
+
+                if isinstance(self._mgr, ArrayManager):
+                    masked_arrays = self._mgr.arrays
+                else:
+                    masked_arrays = list(self._iter_column_arrays())
+                new_values = transpose_homogenous_masked_arrays(
+                    cast(list[BaseMaskedArray], masked_arrays)
+                )
+            else:
+                # We have other EAs with the same dtype. We preserve dtype in transpose.
+                dtyp = dtypes[0]
+                arr_typ = dtyp.construct_array_type()
+                values = self.values
+                new_values = [arr_typ._from_sequence(row, dtype=dtyp) for row in values]
+[/REPLACE]

@@ -1,0 +1,68 @@
+sklearn/neighbors/_nearest_centroid.py
+[SEARCH]
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        return self.classes_[
+            pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)
+        ]
+[/SEARCH]
+[REPLACE]
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        n_samples = X.shape[0]
+        n_centroids = self.centroids_.shape[0]
+
+        # Heuristic: compute full distance matrix when reasonably small to avoid overhead
+        # Each distance is a float64 (8 bytes)
+        max_bytes = 64 * 1024 * 1024  # 64 MiB
+        if n_samples == 0 or n_centroids == 0:
+            # Handle empty input gracefully
+            return np.empty((n_samples,), dtype=self.classes_.dtype)
+        if n_samples * n_centroids * 8 <= max_bytes:
+            return self.classes_[
+                pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)
+            ]
+
+        # Chunked computation over both samples and centroids to bound memory usage
+        # Choose chunk sizes so that (sample_chunk * centroid_chunk * 8) <= max_bytes
+        budget_count = max_bytes // 8
+        # Balance chunks roughly equally within the budget
+        sample_chunk = int(np.sqrt(budget_count)) or 1
+        sample_chunk = min(n_samples, max(1, sample_chunk))
+        centroid_chunk = int(budget_count // sample_chunk) or 1
+        centroid_chunk = min(n_centroids, max(1, centroid_chunk))
+
+        best_indices = np.empty(n_samples, dtype=np.intp)
+
+        for start_s in range(0, n_samples, sample_chunk):
+            end_s = min(start_s + sample_chunk, n_samples)
+            X_chunk = X[start_s:end_s]
+
+            best_dist = None
+            best_idx = None
+
+            for start_c in range(0, n_centroids, centroid_chunk):
+                end_c = min(start_c + centroid_chunk, n_centroids)
+                D = pairwise_distances(
+                    X_chunk, self.centroids_[start_c:end_c], metric=self.metric
+                )
+                # Compute per-row minima within this centroids chunk
+                local_min_idx = D.argmin(axis=1)
+                # Ensure we have an ndarray for advanced indexing
+                if sp.issparse(D):
+                    D = D.toarray()
+                local_min_val = D[np.arange(D.shape[0]), local_min_idx]
+
+                if best_dist is None:
+                    best_dist = local_min_val
+                    # Convert to absolute centroid indices
+                    best_idx = local_min_idx.astype(np.intp, copy=False) + start_c
+                else:
+                    # Update only when strictly smaller to preserve first-index tie-breaking
+                    mask = local_min_val < best_dist
+                    if np.any(mask):
+                        best_dist[mask] = local_min_val[mask]
+                        best_idx[mask] = local_min_idx[mask] + start_c
+
+            best_indices[start_s:end_s] = best_idx
+
+        return self.classes_[best_indices]
+[/REPLACE]

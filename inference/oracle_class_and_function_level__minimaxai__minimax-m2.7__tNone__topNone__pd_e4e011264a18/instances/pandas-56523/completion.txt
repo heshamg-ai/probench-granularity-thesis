@@ -1,0 +1,262 @@
+
+
+pandas/core/reshape/merge.py
+[SEARCH]
+def get_join_indexers(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    sort: bool = False,
+    how: JoinHow = "inner",
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+    """
+
+    Parameters
+    ----------
+    left_keys : list[ndarray, ExtensionArray, Index, Series]
+    right_keys : list[ndarray, ExtensionArray, Index, Series]
+    sort : bool, default False
+    how : {'inner', 'outer', 'left', 'right'}, default 'inner'
+
+    Returns
+    -------
+    np.ndarray[np.intp]
+        Indexer into the left_keys.
+    np.ndarray[np.intp]
+        Indexer into the right_keys.
+    """
+    assert len(left_keys) == len(
+        right_keys
+    ), "left_keys and right_keys must be the same length"
+
+    # fast-path for empty left/right
+    left_n = len(left_keys[0])
+    right_n = len(right_keys[0])
+    if left_n == 0:
+        if how in ["left", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["right", "outer"]:
+            return _get_no_sort_one_missing_indexer(right_n, True)
+    elif right_n == 0:
+        if how in ["right", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["left", "outer"]:
+            return _get_no_sort_one_missing_indexer(left_n, False)
+
+    # get left & right join labels and num. of levels at each location
+    mapped = (
+        _factorize_keys(left_keys[n], right_keys[n], sort=sort)
+        for n in range(len(left_keys))
+    )
+    zipped = zip(*mapped)
+    llab, rlab, shape = (list(x) for x in zipped)
+
+    # get flat i8 keys from label lists
+    lkey, rkey = _get_join_keys(llab, rlab, tuple(shape), sort)
+
+    # factorize keys to a dense i8 space
+    # `count` is the num. of unique keys
+    # set(lkey) | set(rkey) == range(count)
+
+    lkey, rkey, count = _factorize_keys(lkey, rkey, sort=sort)
+    # preserve left frame order if how == 'left' and sort == False
+    kwargs = {}
+    if how in ("inner", "left", "right"):
+        kwargs["sort"] = sort
+    join_func = {
+        "inner": libjoin.inner_join,
+        "left": libjoin.left_outer_join,
+        "right": lambda x, y, count, **kwargs: libjoin.left_outer_join(
+            y, x, count, **kwargs
+        )[::-1],
+        "outer": libjoin.full_outer_join,
+    }[how]
+
+    # error: Cannot call function of unknown type
+    return join_func(lkey, rkey, count, **kwargs)  # type: ignore[operator]
+[/SEARCH]
+[REPLACE]
+def _is_sorted_monotonic(arr: ArrayLike) -> bool:
+    """
+    Check if an array is monotonically increasing.
+    This is used to detect pre-sorted keys for optimized merge.
+    """
+    if len(arr) <= 1:
+        return True
+    if hasattr(arr, "is_monotonic_increasing"):
+        return arr.is_monotonic_increasing
+    if isinstance(arr, np.ndarray):
+        return bool(np.all(arr[:-1] <= arr[1:]))
+    return False
+
+
+def _get_join_indexers_monotonic(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    sort: bool,
+    how: JoinHow,
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+    """
+    Optimized join indexers for monotonic sorted keys.
+    Uses a merge-based algorithm that avoids factorization overhead.
+    """
+    lk = np.asarray(left_keys[0])
+    rk = np.asarray(right_keys[0])
+
+    n_left = len(lk)
+    n_right = len(rk)
+
+    # Find group boundaries in left (where value changes)
+    left_diff = np.empty(n_left, dtype=np.bool_)
+    left_diff[0] = True
+    left_diff[1:] = lk[1:] != lk[:-1]
+    left_group_starts = np.append(np.where(left_diff)[0], n_left)
+    n_left_groups = len(left_group_starts) - 1
+
+    # Find group boundaries in right
+    right_diff = np.empty(n_right, dtype=np.bool_)
+    right_diff[0] = True
+    right_diff[1:] = rk[1:] != rk[:-1]
+    right_group_starts = np.append(np.where(right_diff)[0], n_right)
+    n_right_groups = len(right_group_starts) - 1
+
+    # Initialize indexers
+    left_indexer = np.empty(n_left, dtype=np.intp)
+    right_indexer = np.empty(n_right, dtype=np.intp)
+
+    li = ri = 0
+    while li < n_left_groups and ri < n_right_groups:
+        l_start = left_group_starts[li]
+        l_end = left_group_starts[li + 1]
+        r_start = right_group_starts[ri]
+        r_end = right_group_starts[ri + 1]
+
+        l_val = lk[l_start]
+        r_val = rk[r_start]
+
+        if l_val == r_val:
+            # Match - cross product of all rows in both groups
+            l_count = l_end - l_start
+            r_count = r_end - r_start
+            for i in range(l_count):
+                for j in range(r_count):
+                    left_indexer[l_start + i] = r_start + j
+                    right_indexer[r_start + j] = l_start + i
+            li += 1
+            ri += 1
+        elif l_val < r_val:
+            # Left key is smaller
+            if how == "right":
+                for j in range(r_end - r_start):
+                    left_indexer[l_start + j] = r_start + j
+                ri += 1
+            elif how == "outer":
+                for j in range(r_end - r_start):
+                    left_indexer[l_start + j] = -1
+                ri += 1
+            # For left/inner, mark as unmatched
+            li += 1
+        else:
+            # Right key is smaller
+            if how == "left":
+                for i in range(l_end - l_start):
+                    right_indexer[l_start + i] = -1
+                li += 1
+            elif how == "outer":
+                for i in range(l_end - l_start):
+                    right_indexer[l_start + i] = -1
+                li += 1
+            ri += 1
+
+    # Handle remaining unmatched rows
+    if how in ("right", "outer") and ri < n_right_groups:
+        for i in range(n_right - right_group_starts[ri]):
+            left_indexer[i] = -1
+
+    if how in ("left", "outer") and li < n_left_groups:
+        for i in range(n_left - left_group_starts[li]):
+            right_indexer[i] = -1
+
+    return left_indexer, right_indexer
+
+
+def get_join_indexers(
+    left_keys: list[ArrayLike],
+    right_keys: list[ArrayLike],
+    sort: bool = False,
+    how: JoinHow = "inner",
+) -> tuple[npt.NDArray[np.intp], npt.NDArray[np.intp]]:
+    """
+
+    Parameters
+    ----------
+    left_keys : list[ndarray, ExtensionArray, Index, Series]
+    right_keys : list[ndarray, ExtensionArray, Index, Series]
+    sort : bool, default False
+    how : {'inner', 'outer', 'left', 'right'}, default 'inner'
+
+    Returns
+    -------
+    np.ndarray[np.intp]
+        Indexer into the left_keys.
+    np.ndarray[np.intp]
+        Indexer into the right_keys.
+    """
+    assert len(left_keys) == len(
+        right_keys
+    ), "left_keys and right_keys must be the same length"
+
+    # fast-path for empty left/right
+    left_n = len(left_keys[0])
+    right_n = len(right_keys[0])
+    if left_n == 0:
+        if how in ["left", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["right", "outer"]:
+            return _get_no_sort_one_missing_indexer(right_n, True)
+    elif right_n == 0:
+        if how in ["right", "inner"]:
+            return _get_empty_indexer()
+        elif not sort and how in ["left", "outer"]:
+            return _get_no_sort_one_missing_indexer(left_n, False)
+
+    # Fast path for single monotonic sorted key
+    if (
+        len(left_keys) == 1
+        and not sort
+        and _is_sorted_monotonic(left_keys[0])
+        and _is_sorted_monotonic(right_keys[0])
+    ):
+        return _get_join_indexers_monotonic(left_keys, right_keys, sort, how)
+
+    # get left & right join labels and num. of levels at each location
+    mapped = (
+        _factorize_keys(left_keys[n], right_keys[n], sort=sort)
+        for n in range(len(left_keys))
+    )
+    zipped = zip(*mapped)
+    llab, rlab, shape = (list(x) for x in zipped)
+
+    # get flat i8 keys from label lists
+    lkey, rkey = _get_join_keys(llab, rlab, tuple(shape), sort)
+
+    # factorize keys to a dense i8 space
+    # `count` is the num. of unique keys
+    # set(lkey) | set(rkey) == range(count)
+
+    lkey, rkey, count = _factorize_keys(lkey, rkey, sort=sort)
+    # preserve left frame order if how == 'left' and sort == False
+    kwargs = {}
+    if how in ("inner", "left", "right"):
+        kwargs["sort"] = sort
+    join_func = {
+        "inner": libjoin.inner_join,
+        "left": libjoin.left_outer_join,
+        "right": lambda x, y, count, **kwargs: libjoin.left_outer_join(
+            y, x, count, **kwargs
+        )[::-1],
+        "outer": libjoin.full_outer_join,
+    }[how]
+
+    # error: Cannot call function of unknown type
+    return join_func(lkey, rkey, count, **kwargs)  # type: ignore[operator]
+[/REPLACE]

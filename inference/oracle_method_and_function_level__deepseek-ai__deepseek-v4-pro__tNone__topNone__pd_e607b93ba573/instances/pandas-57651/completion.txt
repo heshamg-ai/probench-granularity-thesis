@@ -1,0 +1,57 @@
+pandas/core/indexes/range.py
+[SEARCH]
+class RangeIndex(Index):
+[/SEARCH]
+[REPLACE]
+class RangeIndex(Index):
+    _typ = "rangeindex"
+    _dtype_validation_metadata = (is_signed_integer_dtype, "signed integer")
+    _range: range
+    _values: np.ndarray
+
+    @final
+    def _join_monotonic(
+        self, other: Index, how: JoinHow = "left"
+    ) -> tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        # Optimized path for RangeIndex joining.
+        # RangeIndex is always monotonic increasing, has unique values,
+        # and its _data is lazy. We can compute the join indexers
+        # without materializing the full array.
+        assert other.dtype == self.dtype
+        assert self._can_use_libjoin and other._can_use_libjoin
+
+        if self.equals(other):
+            ret_index = other if how == "right" else self
+            return ret_index, None, None
+
+        # For left/right joins where we can use the unique property
+        # of RangeIndex to produce efficient indexers directly.
+        if how == "left":
+            join_index = self
+            lidx = None
+            ridx = self._left_indexer_unique(other)
+            ridx = None if ridx is None else ensure_platform_int(ridx)
+            return join_index, lidx, ridx
+        elif how == "right":
+            # For right join, self is unique (RangeIndex always is),
+            # use other._left_indexer_unique(self)
+            join_index = other
+            lidx = other._left_indexer_unique(self)
+            lidx = None if lidx is None else ensure_platform_int(lidx)
+            ridx = None
+            return join_index, lidx, ridx
+        elif how == "inner":
+            join_array, lidx, ridx = self._inner_indexer(other)
+            join_index, lidx, ridx = self._wrap_join_result(
+                join_array, other, lidx, ridx, how
+            )
+        elif how == "outer":
+            join_array, lidx, ridx = self._outer_indexer(other)
+            join_index, lidx, ridx = self._wrap_join_result(
+                join_array, other, lidx, ridx, how
+            )
+
+        lidx = None if lidx is None else ensure_platform_int(lidx)
+        ridx = None if ridx is None else ensure_platform_int(ridx)
+        return join_index, lidx, ridx
+[/REPLACE]

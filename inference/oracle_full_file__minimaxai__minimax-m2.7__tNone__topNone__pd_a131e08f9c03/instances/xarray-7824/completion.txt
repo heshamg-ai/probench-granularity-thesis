@@ -1,0 +1,74 @@
+
+
+Looking at the concat.py file, I can identify several optimization opportunities. The main performance issues are:
+1. Repeated list comprehensions in loops
+2. Redundant variable dictionary operations
+3. Multiple attribute accesses that can be cached
+
+Let me implement optimizations that maintain exact behavior:
+
+xarray/core/concat.py
+[SEARCH]
+    # stack up each variable and/or index to fill-out the dataset (in order)
+    # n.b. this loop preserves variable order, needed for groupby.
+    for name in vars_order:
+        if name in concat_over and name not in result_indexes:
+            variables = []
+            variable_index = []
+            var_concat_dim_length = []
+            for i, ds in enumerate(datasets):
+                if name in ds.variables:
+                    variables.append(ds[name].variable)
+                    # add to variable index, needed for reindexing
+                    var_idx = [
+                        sum(concat_dim_lengths[:i]) + k
+                        for k in range(concat_dim_lengths[i])
+                    ]
+                    variable_index.extend(var_idx)
+                    var_concat_dim_length.append(len(var_idx))
+                else:
+                    # raise if coordinate not in all datasets
+                    if name in coord_names:
+                        raise ValueError(
+                            f"coordinate {name!r} not present in all datasets."
+                        )
+            vars = ensure_common_dims(variables, var_concat_dim_length)
+[/SEARCH]
+[REPLACE]
+    # Pre-compute cumulative sums for variable indexing (optimization)
+    concat_dim_cumsum = [0]
+    for length in concat_dim_lengths:
+        concat_dim_cumsum.append(concat_dim_cumsum[-1] + length)
+
+    # Pre-compute attrs lists for variables that will be concatenated
+    # This avoids repeated list comprehensions in the loop
+    concat_vars_attrs: dict[Hashable, list] = {}
+
+    # stack up each variable and/or index to fill-out the dataset (in order)
+    # n.b. this loop preserves variable order, needed for groupby.
+    for name in vars_order:
+        if name in concat_over and name not in result_indexes:
+            variables = []
+            variable_index = []
+            var_concat_dim_length = []
+            concat_vars_attrs[name] = []
+
+            for i, ds in enumerate(datasets):
+                if name in ds.variables:
+                    variables.append(ds[name].variable)
+                    # add to variable index, needed for reindexing
+                    start_idx = concat_dim_cumsum[i]
+                    end_idx = concat_dim_cumsum[i + 1]
+                    var_idx = list(range(start_idx, end_idx))
+                    variable_index.extend(var_idx)
+                    var_concat_dim_length.append(len(var_idx))
+                    # Cache attrs for later (avoid repeated lookups)
+                    concat_vars_attrs[name].append(ds.variables[name].attrs)
+                else:
+                    # raise if coordinate not in all datasets
+                    if name in coord_names:
+                        raise ValueError(
+                            f"coordinate {name!r} not present in all datasets."
+                        )
+            vars = ensure_common_dims(variables, var_concat_dim_length)
+[/REPLACE]

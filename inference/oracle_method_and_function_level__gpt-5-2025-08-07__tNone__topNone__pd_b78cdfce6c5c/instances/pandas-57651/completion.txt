@@ -1,0 +1,60 @@
+pandas/core/indexes/range.py
+[SEARCH]
+class RangeIndex(Index):
+[/SEARCH]
+[REPLACE]
+class RangeIndex(Index):
+
+    def _join_monotonic(self, other, how: "JoinHow" = "left"):
+        # Fast-path for RangeIndex joins on monotonic increasing ranges
+        if isinstance(other, RangeIndex):
+            if self.equals(other):
+                ret_index = other if how == "right" else self
+                return ret_index, None, None
+
+            # Only handle strictly increasing ranges; otherwise, fall back
+            if self.step > 0 and other.step > 0:
+                if how == "left":
+                    m = len(self)
+                    if m == 0:
+                        return self, None, np.empty(0, dtype=np.intp)
+                    n = len(other)
+                    if n == 0:
+                        return self, None, np.full(m, -1, dtype=np.intp)
+
+                    a0 = self.start
+                    sa = self.step
+                    b0 = other.start
+                    sb = other.step
+
+                    i = np.arange(m, dtype=np.int64)
+                    diff = (a0 - b0) + i * sa
+                    mask = (diff % sb == 0)
+                    j = np.where(mask, diff // sb, -1)
+                    mask &= (j >= 0) & (j < n)
+                    ridx = np.where(mask, j, -1).astype(np.intp, copy=False)
+                    return self, None, ridx
+
+                elif how == "right":
+                    n = len(other)
+                    if n == 0:
+                        return other, np.empty(0, dtype=np.intp), None
+                    m = len(self)
+                    if m == 0:
+                        return other, np.full(n, -1, dtype=np.intp), None
+
+                    a0 = other.start
+                    sa = other.step
+                    b0 = self.start
+                    sb = self.step
+
+                    j = np.arange(n, dtype=np.int64)
+                    diff = (a0 - b0) + j * sa
+                    mask = (diff % sb == 0)
+                    i_pos = np.where(mask, diff // sb, -1)
+                    mask &= (i_pos >= 0) & (i_pos < m)
+                    lidx = np.where(mask, i_pos, -1).astype(np.intp, copy=False)
+                    return other, lidx, None
+
+        return super()._join_monotonic(other, how)
+[/REPLACE]

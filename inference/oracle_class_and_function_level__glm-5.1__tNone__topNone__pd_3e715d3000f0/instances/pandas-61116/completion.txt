@@ -1,0 +1,45 @@
+pandas/core/methods/selectn.py
+[SEARCH]
+        nbase = n
+        narr = len(arr)
+        n = min(n, narr)
+
+        # arr passed into kth_smallest must be contiguous. We copy
+        # here because kth_smallest will modify its input
+        # avoid OOB access with kth_smallest_c when n <= 0
+        if len(arr) > 0:
+            kth_val = libalgos.kth_smallest(arr.copy(order="C"), n - 1)
+        else:
+            kth_val = np.nan
+        (ns,) = np.nonzero(arr <= kth_val)
+        inds = ns[arr[ns].argsort(kind="mergesort")]
+[/SEARCH]
+[REPLACE]
+        nbase = n
+        narr = len(arr)
+        n = min(n, narr)
+
+        if narr > 0:
+            # arr passed into kth_smallest must be contiguous. We copy
+            # here because kth_smallest will modify its input
+            arr_copy = arr.copy(order="C")
+            kth_val = libalgos.kth_smallest(arr_copy, n - 1)
+
+            if self.keep != "all":
+                (ns,) = np.nonzero(arr < kth_val)
+                if len(ns) >= n:
+                    inds = ns[arr[ns].argsort(kind="mergesort")][:n]
+                else:
+                    (eq_ns,) = np.nonzero(arr == kth_val)
+                    eq_inds = eq_ns[arr[eq_ns].argsort(kind="mergesort")]
+                    inds = np.concatenate([
+                        ns[arr[ns].argsort(kind="mergesort")],
+                        eq_inds[: n - len(ns)],
+                    ])
+            else:
+                (ns,) = np.nonzero(arr <= kth_val)
+                inds = ns[arr[ns].argsort(kind="mergesort")]
+        else:
+            kth_val = np.nan
+            inds = np.array([], dtype=np.intp)
+[/REPLACE]

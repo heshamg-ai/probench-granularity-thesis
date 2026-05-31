@@ -1,0 +1,24 @@
+sklearn/neighbors/_nearest_centroid.py
+[SEARCH]
+from sklearn.metrics import pairwise_distances
+[/SEARCH]
+[REPLACE]
+from sklearn.metrics import pairwise_distances, pairwise_distances_argmin
+[/REPLACE]
+
+sklearn/neighbors/_nearest_centroid.py
+[SEARCH]
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        return self.classes_[
+            pairwise_distances(X, self.centroids_, metric=self.metric).argmin(axis=1)
+        ]
+[/SEARCH]
+[REPLACE]
+        X = self._validate_data(X, accept_sparse="csr", reset=False)
+        metric = self.metric
+        try:
+            indices = pairwise_distances_argmin(X, self.centroids_, metric=metric)
+        except Exception:
+            indices = pairwise_distances(X, self.centroids_, metric=metric).argmin(axis=1)
+        return self.classes_[indices]
+[/REPLACE]

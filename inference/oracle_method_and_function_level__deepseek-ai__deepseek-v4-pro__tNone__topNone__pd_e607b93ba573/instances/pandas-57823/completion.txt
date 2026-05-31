@@ -1,0 +1,47 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def argmin(self, axis=None, skipna=True, *args, **kwargs):
+        # override to add additional tuple of rangeIndex
+        nv.validate_argmin(args, kwargs)
+        nv.validate_minmax_axis(axis)
+
+        if not len(self):
+            raise ValueError("attempt to get argmin of an empty sequence")
+        if not skipna:
+            warnings.warn(
+                f"The behavior of {type(self).__name__}.argmax/argmin "
+                "with skipna=False is deprecated, in a future version "
+                "this will reduce to a single positional index "
+                "instead of a tuple",
+                FutureWarning,
+                stacklevel=find_stack_level(),
+            )
+            return self._minmax("min")
+        return self._minmax("min")
+[/SEARCH]
+[REPLACE]
+    def argmin(self, axis=None, skipna=True, *args, **kwargs):
+        nv.validate_argmin(args, kwargs)
+        nv.validate_minmax_axis(axis)
+
+        if not len(self):
+            raise ValueError("attempt to get argmin of an empty sequence")
+
+        step = self.step
+        if not skipna:
+            warnings.warn(
+                f"The behavior of {type(self).__name__}.argmax/argmin "
+                "with skipna=False is deprecated, in a future version "
+                "this will reduce to a single positional index "
+                "instead of a tuple",
+                FutureWarning,
+                stacklevel=find_stack_level(),
+            )
+            if step > 0:
+                return self.start
+            return self.start + step * (len(self) - 1)
+
+        if step > 0:
+            return 0
+        return max(0, len(self) - 1)
+[/REPLACE]

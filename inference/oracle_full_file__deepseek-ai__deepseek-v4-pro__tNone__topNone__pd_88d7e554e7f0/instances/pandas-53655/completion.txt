@@ -1,0 +1,52 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        result_data = []
+        for lst in split.to_pylist():
+            if lst is None:
+                result_data.append([False] * len(uniques_sorted))
+            else:
+                res = pc.is_in(uniques_sorted, pa.array(set(lst)))
+                result_data.append(res.to_pylist())
+        result = type(self)(pa.array(result_data))
+        return result, uniques_sorted.to_pylist()
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        # Pre-allocate the full result array at once: rows x unique-cols
+        n_rows = len(split)
+        n_cols = len(uniques_sorted)
+        null_mask = pc.is_null(split)
+        # Convert each list to a set for O(1) lookups (hash-based)
+        py_lists = split.to_pylist()
+        # Flatten boolean map: for each row, for each unique, check membership
+        # Build a single numpy boolean buffer, then create one pa.array
+        import itertools
+
+        # Use a single flat list via list comprehension
+        uniques_pylist = uniques_sorted.to_pylist()
+        # For null rows we must emit all-False
+        all_false = [False] * n_cols
+        flat = list(
+            itertools.chain.from_iterable(
+                (
+                    all_false
+                    if lst is None
+                    else [val in lst_set for val in uniques_pylist]
+                )
+                for lst, lst_set in (
+                    (lst, None if lst is None else set(lst)) for lst in py_lists
+                )
+            )
+        )
+        result = type(self)(
+            pa.array(flat, type=pa.bool_()).reshape((n_rows, n_cols))
+        )
+        return result, uniques_pylist
+[/REPLACE]

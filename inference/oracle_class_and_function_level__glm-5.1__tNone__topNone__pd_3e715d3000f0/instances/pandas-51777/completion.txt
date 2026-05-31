@@ -1,0 +1,149 @@
+Looking at the current `combine_first` implementation:
+
+```python
+def combine_first(self, other) -> Series:
+    new_index = self.index.union(other.index)
+    this = self.reindex(new_index, copy=False)
+    other = other.reindex(new_index, copy=False)
+    if this.dtype.kind == "M" and other.dtype.kind != "M":
+        other = to_datetime(other)
+    return this.where(notna(this), other)
+```
+
+The key bottleneck is the two `reindex` calls which each compute an indexer for the entire union index independently. We can optimize by:
+1. Computing the indexers once using `Index.get_indexer` / `Index.get_indexer_for`
+2. Using `algorithms.take_nd` to create reindexed values directly (avoiding full `reindex` overhead)
+3. Using `putmask` to fill NA values from `other` in-place (avoiding the `where` overhead of creating a new array + combined mask)
+
+pandas/core/series.py
+[SEARCH]
+    def combine_first(self, other) -> Series:
+        """
+        Update null elements with value in the same location in 'other'.
+
+        Combine two Series objects by filling null values in one Series with
+        non-null values from the other Series. Result index will be the union
+        of the two indexes.
+
+        Parameters
+        ----------
+        other : Series
+            The value(s) to be used for filling null values.
+
+        Returns
+        -------
+        Series
+            The result of combining the provided Series with the other object.
+
+        See Also
+        --------
+        Series.combine : Perform element-wise operation on two Series
+            using a given function.
+
+        Examples
+        --------
+        >>> s1 = pd.Series([1, np.nan])
+        >>> s2 = pd.Series([3, 4, 5])
+        >>> s1.combine_first(s2)
+        0    1.0
+        1    4.0
+        2    5.0
+        dtype: float64
+
+        Null values still persist if the location of that null value
+        does not exist in `other`
+
+        >>> s1 = pd.Series({'falcon': np.nan, 'eagle': 160.0})
+        >>> s2 = pd.Series({'eagle': 200.0, 'duck': 30.0})
+        >>> s1.combine_first(s2)
+        duck       30.0
+        eagle     160.0
+        falcon      NaN
+        dtype: float64
+        """
+        new_index = self.index.union(other.index)
+        this = self.reindex(new_index, copy=False)
+        other = other.reindex(new_index, copy=False)
+        if this.dtype.kind == "M" and other.dtype.kind != "M":
+            other = to_datetime(other)
+
+        return this.where(notna(this), other)
+[/SEARCH]
+[REPLACE]
+    def combine_first(self, other) -> Series:
+        """
+        Update null elements with value in the same location in 'other'.
+
+        Combine two Series objects by filling null values in one Series with
+        non-null values from the other Series. Result index will be the union
+        of the two indexes.
+
+        Parameters
+        ----------
+        other : Series
+            The value(s) to be used for filling null values.
+
+        Returns
+        -------
+        Series
+            The result of combining the provided Series with the other object.
+
+        See Also
+        --------
+        Series.combine : Perform element-wise operation on two Series
+            using a given function.
+
+        Examples
+        --------
+        >>> s1 = pd.Series([1, np.nan])
+        >>> s2 = pd.Series([3, 4, 5])
+        >>> s1.combine_first(s2)
+        0    1.0
+        1    4.0
+        2    5.0
+        dtype: float64
+
+        Null values still persist if the location of that null value
+        does not exist in `other`
+
+        >>> s1 = pd.Series({'falcon': np.nan, 'eagle': 160.0})
+        >>> s2 = pd.Series({'eagle': 200.0, 'duck': 30.0})
+        >>> s1.combine_first(s2)
+        duck       30.0
+        eagle     160.0
+        falcon      NaN
+        dtype: float64
+        """
+        from pandas.core.arrays import DatetimeArray
+        from pandas.core.arrays._mixins import NDArrayBackedExtensionArray
+
+        new_index = self.index.union(other.index)
+
+        this_indexer = new_index.get_indexer_for(self.index)
+        other_indexer = new_index.get_indexer_for(other.index)
+
+        this_values = self._values
+        other_values = other._values
+
+        this_reindex = algorithms.take_nd(this_values, this_indexer, fill_value=None)
+        other_reindex = algorithms.take_nd(other_values, other_indexer, fill_value=None)
+
+        if isinstance(this_reindex, DatetimeArray) and not isinstance(
+            other_reindex, DatetimeArray
+        ):
+            other_reindex = to_datetime(other_reindex)._values
+
+        this_mask = isna(this_reindex)
+        if this_mask.any():
+            other_mask = isna(other_reindex)
+            fill_mask = this_mask & ~other_mask
+
+            if isinstance(this_reindex, NDArrayBackedExtensionArray):
+                this_reindex = this_reindex.copy()
+                this_reindex[fill_mask] = other_reindex[fill_mask]
+            else:
+                this_reindex = this_reindex.copy()
+                np.putmask(this_reindex, fill_mask, other_reindex)
+
+        return self._constructor(this_reindex, index=new_index, name=self.name)
+[/REPLACE]

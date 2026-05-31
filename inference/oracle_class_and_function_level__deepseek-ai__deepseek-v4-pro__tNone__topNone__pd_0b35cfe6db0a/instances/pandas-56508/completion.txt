@@ -1,0 +1,207 @@
+pandas/core/arrays/masked.py
+[SEARCH]
+    @doc(ExtensionArray.factorize)
+    def factorize(
+        self,
+        use_na_sentinel: bool = True,
+    ) -> tuple[np.ndarray, ExtensionArray]:
+        arr = self._data
+        mask = self._mask
+
+        # Use a sentinel for na; recode and add NA to uniques if necessary below
+        codes, uniques = factorize_array(arr, use_na_sentinel=True, mask=mask)
+
+        # check that factorize_array correctly preserves dtype.
+        assert uniques.dtype == self.dtype.numpy_dtype, (uniques.dtype, self.dtype)
+
+        has_na = mask.any()
+        if use_na_sentinel or not has_na:
+            size = len(uniques)
+        else:
+            # Make room for an NA value
+            size = len(uniques) + 1
+        uniques_mask = np.zeros(size, dtype=bool)
+        if not use_na_sentinel and has_na:
+            na_index = mask.argmax()
+            # Insert na with the proper code
+            if na_index == 0:
+                na_code = np.intp(0)
+            else:
+                na_code = codes[:na_index].max() + 1
+            codes[codes >= na_code] += 1
+            codes[codes == -1] = na_code
+            # dummy value for uniques; not used since uniques_mask will be True
+            uniques = np.insert(uniques, na_code, 0)
+            uniques_mask[na_code] = True
+        uniques_ea = self._simple_new(uniques, uniques_mask)
+
+        return codes, uniques_ea
+[/SEARCH]
+[REPLACE]
+    @doc(ExtensionArray.factorize)
+    def factorize(
+        self,
+        use_na_sentinel: bool = True,
+    ) -> tuple[np.ndarray, ExtensionArray]:
+        arr = self._data
+        mask = self._mask
+
+        # Use a sentinel for na; recode and add NA to uniques if necessary below
+        codes, uniques = factorize_array(arr, use_na_sentinel=True, mask=mask)
+
+        # check that factorize_array correctly preserves dtype.
+        assert uniques.dtype == self.dtype.numpy_dtype, (uniques.dtype, self.dtype)
+
+        has_na = mask.any()
+        if use_na_sentinel or not has_na:
+            size = len(uniques)
+        else:
+            # Make room for an NA value
+            size = len(uniques) + 1
+        uniques_mask = np.zeros(size, dtype=bool)
+        if not use_na_sentinel and has_na:
+            na_index = mask.argmax()
+            # Insert na with the proper code
+            if na_index == 0:
+                na_code = np.intp(0)
+            else:
+                na_code = codes[:na_index].max() + 1
+            codes[codes >= na_code] += 1
+            codes[codes == -1] = na_code
+            # dummy value for uniques; not used since uniques_mask will be True
+            uniques = np.insert(uniques, na_code, 0)
+            uniques_mask[na_code] = True
+        uniques_ea = self._simple_new(uniques, uniques_mask)
+
+        return codes, uniques_ea
+
+    def _hash_pandas_object(
+        self, *, encoding: str, hash_key: str, categorize: bool
+    ) -> npt.NDArray[np.uint64]:
+        from pandas.core.util.hashing import hash_array
+
+        has_na = self._hasna
+        if not has_na:
+            return hash_array(
+                self._data,
+                encoding=encoding,
+                hash_key=hash_key,
+                categorize=categorize,
+            )
+        # Avoid expensive conversion to object for the common case.
+        # If there are no NAs, hash the underlying numpy data directly.
+        return hash_array(
+            self._data,
+            encoding=encoding,
+            hash_key=hash_key,
+            categorize=categorize,
+            mask=self._mask,
+        )
+[/REPLACE]
+
+pandas/core/base.py
+[SEARCH]
+    def _hash_pandas_object(
+        self, *, encoding: str, hash_key: str, categorize: bool
+    ) -> npt.NDArray[np.uint64]:
+        """
+        Hook for hash_pandas_object.
+
+        Default is to use the values returned by _values_for_factorize.
+
+        Parameters
+        ----------
+        encoding : str
+            Encoding for data & key when strings.
+        hash_key : str
+            Hash_key for string key to encode.
+        categorize : bool
+            Whether to first categorize object arrays before hashing. This is more
+            efficient when the array contains duplicate values.
+
+        Returns
+        -------
+        np.ndarray[uint64]
+
+        Examples
+        --------
+        >>> pd.array([1, 2])._hash_pandas_object(encoding='utf-8',
+        ...                                      hash_key="1000000000000000",
+        ...                                      categorize=False
+        ...                                      )
+        array([11381023671546835630,  4641644667904626417], dtype=uint64)
+        """
+        from pandas.core.util.hashing import hash_array
+
+        values, _ = self._values_for_factorize()
+        return hash_array(
+            values, encoding=encoding, hash_key=hash_key, categorize=categorize
+        )
+[/SEARCH]
+[REPLACE]
+    def _hash_pandas_object(
+        self, *, encoding: str, hash_key: str, categorize: bool
+    ) -> npt.NDArray[np.uint64]:
+        """
+        Hook for hash_pandas_object.
+
+        Default is to use the values returned by _values_for_factorize.
+
+        Parameters
+        ----------
+        encoding : str
+            Encoding for data & key when strings.
+        hash_key : str
+            Hash_key for string key to encode.
+        categorize : bool
+            Whether to first categorize object arrays before hashing. This is more
+            efficient when the array contains duplicate values.
+
+        Returns
+        -------
+        np.ndarray[uint64]
+
+        Examples
+        --------
+        >>> pd.array([1, 2])._hash_pandas_object(encoding='utf-8',
+        ...                                      hash_key="1000000000000000",
+        ...                                      categorize=False
+        ...                                      )
+        array([11381023671546835630,  4641644667904626417], dtype=uint64)
+        """
+        from pandas.core.util.hashing import hash_array
+
+        values, _ = self._values_for_factorize()
+        return hash_array(
+            values, encoding=encoding, hash_key=hash_key, categorize=categorize
+        )
+
+    def _values_for_factorize(self) -> tuple[np.ndarray, Any]:
+        """
+        Return an array and missing value suitable for factorization.
+
+        Returns
+        -------
+        values : ndarray
+            An array suitable for factorization. This should maintain order
+            and be a supported dtype (Float64, Int64, UInt64, String, Object).
+            By default, the extension array is cast to object dtype.
+        na_value : object
+            The value in `values` to consider missing. This will be treated
+            as NA in the factorization routines, so it will be coded as
+            `-1` and not included in `uniques`. By default,
+            ``np.nan`` is used.
+
+        Notes
+        -----
+        The values returned by this method are also used in
+        :func:`pandas.util.hash_pandas_object`. If needed, this can be
+        overridden in the ``self._hash_pandas_object()`` method.
+
+        Examples
+        --------
+        >>> pd.array([1, 2, 3])._values_for_factorize()
+        (array([1, 2, 3], dtype=object), nan)
+        """
+        return self.astype(object), np.nan
+[/REPLACE]

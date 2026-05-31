@@ -1,0 +1,70 @@
+pandas/core/generic.py
+[SEARCH]
+    def _find_valid_index(self, *, how: str) -> Hashable | None:
+        """
+        Retrieves the index of the first valid value.
+
+        Parameters
+        ----------
+        how : {'first', 'last'}
+            Use this parameter to change between the first or last valid index.
+
+        Returns
+        -------
+        idx_first_valid : type of index
+        """
+        idxpos = find_valid_index(self._values, how=how, is_valid=~isna(self._values))
+        if idxpos is None:
+            return None
+        return self.index[idxpos]
+[/SEARCH]
+[REPLACE]
+    def _find_valid_index(self, *, how: str) -> Hashable | None:
+        """
+        Retrieves the index of the first valid value.
+
+        Parameters
+        ----------
+        how : {'first', 'last'}
+            Use this parameter to change between the first or last valid index.
+
+        Returns
+        -------
+        idx_first_valid : type of index
+        """
+        # Fast-path for DataFrame with ExtensionArray-backed columns to avoid
+        # constructing a potentially large 2D mask from self._values.
+        if (
+            self.ndim == 2
+            and isinstance(self, ABCDataFrame)
+            and getattr(self._mgr, "any_extension_types", False)
+        ):
+            best: int | None = None
+            n = len(self.index)
+            if how == "first":
+                for _, ser in self.items():
+                    arr = ser._values
+                    pos = find_valid_index(arr, how="first", is_valid=~isna(arr))
+                    if pos is not None:
+                        if best is None or pos < best:
+                            best = pos
+                            if best == 0:
+                                break
+            else:  # how == "last"
+                for _, ser in self.items():
+                    arr = ser._values
+                    pos = find_valid_index(arr, how="last", is_valid=~isna(arr))
+                    if pos is not None:
+                        if best is None or pos > best:
+                            best = pos
+                            if best == n - 1:
+                                break
+            if best is None:
+                return None
+            return self.index[best]
+
+        idxpos = find_valid_index(self._values, how=how, is_valid=~isna(self._values))
+        if idxpos is None:
+            return None
+        return self.index[idxpos]
+[/REPLACE]

@@ -1,0 +1,18 @@
+pandas/core/groupby/ops.py
+[SEARCH]
+        else:
+            to_groupby = zip(*(ping.grouping_vector for ping in self.groupings))
+            index = Index(to_groupby)
+            return self.axis.groupby(index)
+[/SEARCH]
+[REPLACE]
+        else:
+            groupings = self.groupings
+            n = len(self.axis)
+            values = np.empty(n, dtype=object)
+            it = zip(*(ping.grouping_vector for ping in groupings))
+            for i, key in enumerate(it):
+                values[i] = key
+            index = Index(values)
+            return self.axis.groupby(index)
+[/REPLACE]

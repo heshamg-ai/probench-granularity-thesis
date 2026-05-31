@@ -1,0 +1,60 @@
+pandas/io/formats/csvs.py
+[SEARCH]
+    def _initialize_index_label(self, index_label: IndexLabel | None) -> IndexLabel:
+        if index_label is not False:
+            if index_label is None:
+                return self._get_index_label_from_obj()
+            elif not isinstance(index_label, (list, tuple, np.ndarray, ABCIndex)):
+                # given a string for a DF with Index
+                return [index_label]
+        return index_label
+[/SEARCH]
+[REPLACE]
+    def _initialize_index_label(self, index_label: IndexLabel | None) -> IndexLabel:
+        if not self.index:
+            return index_label
+        if index_label is not False:
+            if index_label is None:
+                return self._get_index_label_from_obj()
+            elif not isinstance(index_label, (list, tuple, np.ndarray, ABCIndex)):
+                # given a string for a DF with Index
+                return [index_label]
+        return index_label
+[/REPLACE]
+
+pandas/io/formats/csvs.py
+[SEARCH]
+    def _save_body(self) -> None:
+        nrows = len(self.data_index)
+        chunks = (nrows // self.chunksize) + 1
+[/SEARCH]
+[REPLACE]
+    def _save_body(self) -> None:
+        nrows = len(self.obj) if not self.index else len(self.data_index)
+        chunks = (nrows // self.chunksize) + 1
+[/REPLACE]
+
+pandas/io/formats/csvs.py
+[SEARCH]
+        ix = self.data_index[slicer]._get_values_for_csv(**self._number_format)
+        libwriters.write_csv_rows(
+            data,
+            ix,
+            self.nlevels,
+            self.cols,
+            self.writer,
+        )
+[/SEARCH]
+[REPLACE]
+        if self.index:
+            ix = self.data_index[slicer]._get_values_for_csv(**self._number_format)
+        else:
+            ix = None
+        libwriters.write_csv_rows(
+            data,
+            ix,
+            self.nlevels,
+            self.cols,
+            self.writer,
+        )
+[/REPLACE]

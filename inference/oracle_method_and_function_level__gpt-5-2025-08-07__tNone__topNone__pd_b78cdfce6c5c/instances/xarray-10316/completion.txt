@@ -1,0 +1,39 @@
+xarray/core/indexing.py
+[SEARCH]
+                if k.ndim > 1:  # type: ignore[union-attr]
+                    raise TypeError(
+                        f"invalid indexer array for {type(self).__name__}; must be scalar "
+                        f"or have 1 dimension: {k!r}"
+                    )
+                k = k.astype(np.int64)  # type: ignore[union-attr]
+[/SEARCH]
+[REPLACE]
+                if k.ndim > 1:  # type: ignore[union-attr]
+                    raise TypeError(
+                        f"invalid indexer array for {type(self).__name__}; must be scalar "
+                        f"or have 1 dimension: {k!r}"
+                    )
+                if k.dtype != np.int64:  # type: ignore[union-attr]
+                    k = k.astype(np.int64, copy=False)  # type: ignore[union-attr]
+[/REPLACE]
+
+xarray/core/indexing.py
+[SEARCH]
+                elif ndim != k.ndim:  # type: ignore[union-attr]
+                    ndims = [k.ndim for k in key if isinstance(k, np.ndarray)]
+                    raise ValueError(
+                        "invalid indexer key: ndarray arguments "
+                        f"have different numbers of dimensions: {ndims}"
+                    )
+                k = k.astype(np.int64)  # type: ignore[union-attr]
+[/SEARCH]
+[REPLACE]
+                elif ndim != k.ndim:  # type: ignore[union-attr]
+                    ndims = [k.ndim for k in key if isinstance(k, np.ndarray)]
+                    raise ValueError(
+                        "invalid indexer key: ndarray arguments "
+                        f"have different numbers of dimensions: {ndims}"
+                    )
+                if k.dtype != np.int64:  # type: ignore[union-attr]
+                    k = k.astype(np.int64, copy=False)  # type: ignore[union-attr]
+[/REPLACE]

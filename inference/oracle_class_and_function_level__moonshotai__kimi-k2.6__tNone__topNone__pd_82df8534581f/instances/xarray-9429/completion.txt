@@ -1,0 +1,275 @@
+xarray/groupers.py
+[SEARCH]
+    def _init_properties(self, group: T_Group) -> None:
+        from xarray import CFTimeIndex
+
+        group_as_index = safe_cast_to_index(group)
+        offset = self.offset
+
+        if not group_as_index.is_monotonic_increasing:
+            # TODO: sort instead of raising an error
+            raise ValueError("Index must be monotonic for resampling")
+
+        if isinstance(group_as_index, CFTimeIndex):
+            from xarray.core.resample_cftime import CFTimeGrouper
+
+            self.index_grouper = CFTimeGrouper(
+                freq=self.freq,
+                closed=self.closed,
+                label=self.label,
+                origin=self.origin,
+                offset=offset,
+            )
+        else:
+            self.index_grouper = pd.Grouper(
+                # TODO remove once requiring pandas >= 2.2
+                freq=_new_to_legacy_freq(self.freq),
+                closed=self.closed,
+                label=self.label,
+                origin=self.origin,
+                offset=offset,
+            )
+        self.group_as_index = group_as_index
+
+    def _get_index_and_items(self) -> tuple[pd.Index, pd.Series, np.ndarray]:
+        first_items = self.first_items()
+        if first_items.isnull().any():
+            first_items = first_items.dropna()
+
+        full_index = first_items.index
+        return full_index, first_items, codes
+
+    def first_items(self) -> tuple[pd.Series, np.ndarray]:
+        from xarray.coding.cftimeindex import CFTimeIndex
+        from xarray.core.resample_cftime import CFTimeGrouper
+
+        if isinstance(self.index_grouper, CFTimeGrouper):
+            return self.index_grouper.first_items(
+                cast(CFTimeIndex, self.group_as_index)
+            )
+        else:
+            s = pd.Series(np.arange(self.group_as_index.size), self.group_as_index)
+            grouped = s.groupby(self.index_grouper)
+            first_items = grouped.first()
+            counts = grouped.count()
+            # This way we generate codes for the final output index:
+            # for _flox_reduce we avoid one reindex and copy by avoiding
+            # _maybe_restore_empty_groups
+            codes = np.repeat(np.arange(len(first_items)), counts)
+            return first_items, codes
+
+    def factorize(self, group: T_Group) -> EncodedGroups:
+        self._init_properties(group)
+        full_index, first_items, codes_ = self._get_index_and_items()
+        sbins = first_items.values.astype(np.int64)
+        group_indices: GroupIndices = tuple(
+            [slice(i, j) for i, j in zip(sbins[:-1], sbins[1:])]
+            + [slice(sbins[-1], None)]
+        )
+
+        unique_coord = Variable(
+            dims=group.name, data=full_index, attrs=group.attrs
+        )
+        codes = group.copy(data=codes_.reshape(group.shape))
+
+        return EncodedGroups(
+            codes=codes,
+            group_indices=group_indices,
+            full_index=full_index,
+            unique_coord=unique_coord,
+            coords=_coordinates_from_variable(unique_coord),
+        )
+[/SEARCH]
+[REPLACE]
+    def _init_properties(self, group: T_Group) -> None:
+        from xarray import CFTimeIndex
+
+        group_as_index = safe_cast_to_index(group)
+        offset = self.offset
+
+        if not group_as_index.is_monotonic_increasing:
+            # TODO: sort instead of raising an error
+            raise ValueError("Index must be monotonic for resampling")
+
+        if isinstance(group_as_index, CFTimeIndex):
+            from xarray.core.resample_cftime import CFTimeGrouper
+
+            self.index_grouper = CFTimeGrouper(
+                freq=self.freq,
+                closed=self.closed,
+                label=self.label,
+                origin=self.origin,
+                offset=offset,
+            )
+        else:
+            self.index_grouper = pd.Grouper(
+                # TODO remove once requiring pandas >= 2.2
+                freq=_new_to_legacy_freq(self.freq),
+                closed=self.closed,
+                label=self.label,
+                origin=self.origin,
+                offset=offset,
+            )
+        self.group_as_index = group_as_index
+
+    def _get_index_and_items(self) -> tuple[pd.Index, pd.Series, np.ndarray]:
+        first_items, codes = self.first_items()
+        if first_items.isnull().any():
+            first_items = first_items.dropna()
+
+        full_index = first_items.index
+        return full_index, first_items, codes
+
+    def first_items(self) -> tuple[pd.Series, np.ndarray]:
+        from xarray.coding.cftimeindex import CFTimeIndex
+        from xarray.core.resample_cftime import CFTimeGrouper
+
+        if isinstance(self.index_grouper, CFTimeGrouper):
+            return self.index_grouper.first_items(
+                cast(CFTimeIndex, self.group_as_index)
+            )
+        else:
+            s = pd.Series(np.arange(self.group_as_index.size), self.group_as_index)
+            grouped = s.groupby(self.index_grouper)
+            first_items = grouped.first()
+            counts = grouped.count()
+            # This way we generate codes for the final output index:
+            # for _flox_reduce we avoid one reindex and copy by avoiding
+            # _maybe_restore_empty_groups
+            codes = np.repeat(np.arange(len(first_items)), counts)
+            return first_items, codes
+
+    def factorize(self, group: T_Group) -> EncodedGroups:
+        self._init_properties(group)
+        full_index, first_items, codes_ = self._get_index_and_items()
+        sbins = first_items.values.astype(np.int64)
+        # Pre-allocate with exact size to avoid list growth overhead
+        n_bins = len(sbins)
+        group_indices: GroupIndices = [slice(0, 0) for _ in range(n_bins)]
+        for idx in range(n_bins - 1):
+            group_indices[idx] = slice(sbins[idx], sbins[idx + 1])
+        group_indices[-1] = slice(sbins[-1], None)
+        group_indices = tuple(group_indices)  # type: ignore[assignment]
+
+        unique_coord = Variable(
+            dims=group.name, data=full_index, attrs=group.attrs
+        )
+        codes = group.copy(data=codes_.reshape(group.shape))
+
+        return EncodedGroups(
+            codes=codes,
+            group_indices=group_indices,
+            full_index=full_index,
+            unique_coord=unique_coord,
+            coords=_coordinates_from_variable(unique_coord),
+        )
+[/REPLACE]
+
+xarray/groupers.py
+[SEARCH]
+    def factorize(self, group: T_Group) -> EncodedGroups:
+        self.group = group
+
+        index = self.group_as_index
+        is_unique_and_monotonic = isinstance(self.group, _DummyGroup) or (
+            index.is_unique
+            and (index.is_monotonic_increasing or index.is_monotonic_decreasing)
+        )
+        is_dimension = self.group.dims == (self.group.name,)
+        can_squeeze = is_dimension and is_unique_and_monotonic
+
+        if can_squeeze:
+            return self._factorize_dummy()
+        else:
+            return self._factorize_unique()
+[/SEARCH]
+[REPLACE]
+    def factorize(self, group: T_Group) -> EncodedGroups:
+        self.group = group
+
+        index = self.group_as_index
+        is_unique_and_monotonic = isinstance(self.group, _DummyGroup) or (
+            index.is_unique
+            and (index.is_monotonic_increasing or index.is_monotonic_decreasing)
+        )
+        is_dimension = self.group.dims == (self.group.name,)
+        can_squeeze = is_dimension and is_unique_and_monotonic
+
+        if can_squeeze:
+            return self._factorize_dummy()
+        else:
+            return self._factorize_unique()
+[/REPLACE]
+
+xarray/groupers.py
+[SEARCH]
+    def _factorize_dummy(self) -> EncodedGroups:
+        size = self.group.size
+        # no need to factorize
+        # use slices to do views instead of fancy indexing
+        # equivalent to: group_indices = group_indices.reshape(-1, 1)
+        group_indices: GroupIndices = tuple(slice(i, i + 1) for i in range(size))
+        full_index: pd.Index
+        unique_coord: _DummyGroup | Variable
+        if isinstance(self.group, _DummyGroup):
+            codes = self.group.to_dataarray().copy(data=size_range)
+            unique_coord = self.group
+            full_index = pd.RangeIndex(size)
+            coords = Coordinates()
+        else:
+            codes = self.group.copy(data=size_range)
+            unique_coord = self.group.variable.to_base_variable()
+            full_index = self.group_as_index
+            if isinstance(full_index, pd.MultiIndex):
+                coords = Coordinates.from_pandas_multiindex(
+                    full_index, dim=self.group.name
+                )
+            else:
+                if TYPE_CHECKING:
+                    assert isinstance(unique_coord, Variable)
+                coords = _coordinates_from_variable(unique_coord)
+
+        return EncodedGroups(
+            codes=codes,
+            group_indices=group_indices,
+            full_index=full_index,
+            unique_coord=unique_coord,
+            coords=coords,
+        )
+[/SEARCH]
+[REPLACE]
+    def _factorize_dummy(self) -> EncodedGroups:
+        size = self.group.size
+        # no need to factorize
+        # use slices to do views instead of fancy indexing
+        # equivalent to: group_indices = group_indices.reshape(-1, 1)
+        group_indices: GroupIndices = tuple(slice(i, i + 1) for i in range(size))
+        full_index: pd.Index
+        unique_coord: _DummyGroup | Variable
+        size_range = np.arange(size)
+        if isinstance(self.group, _DummyGroup):
+            codes = self.group.to_dataarray().copy(data=size_range)
+            unique_coord = self.group
+            full_index = pd.RangeIndex(size)
+            coords = Coordinates()
+        else:
+            codes = self.group.copy(data=size_range)
+            unique_coord = self.group.variable.to_base_variable()
+            full_index = self.group_as_index
+            if isinstance(full_index, pd.MultiIndex):
+                coords = Coordinates.from_pandas_multiindex(
+                    full_index, dim=self.group.name
+                )
+            else:
+                if TYPE_CHECKING:
+                    assert isinstance(unique_coord, Variable)
+                coords = _coordinates_from_variable(unique_coord)
+
+        return EncodedGroups(
+            codes=codes,
+            group_indices=group_indices,
+            full_index=full_index,
+            unique_coord=unique_coord,
+            coords=coords,
+        )
+[/REPLACE]

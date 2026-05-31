@@ -1,0 +1,313 @@
+
+
+Looking at this code, I can see several optimization opportunities for float32 input. The main bottlenecks are:
+
+1. `_estimate_log_gaussian_prob` - called every iteration
+2. `_estimate_gaussian_covariances_full` - called every M-step
+3. Unnecessary float64 intermediate arrays when input is float32
+
+Let me create the optimizations:
+
+sklearn/mixture/_gaussian_mixture.py
+[SEARCH]
+    def _m_step(self, X, log_resp):
+        """M step.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+
+        log_resp : array-like of shape (n_samples, n_components)
+            Logarithm of the posterior probabilities (or responsibilities) of
+            the point of each sample in X.
+        """
+        self.weights_, self.means_, self.covariances_ = _estimate_gaussian_parameters(
+            X, np.exp(log_resp), self.reg_covar, self.covariance_type
+        )
+        self.weights_ /= self.weights_.sum()
+        self.precisions_cholesky_ = _compute_precision_cholesky(
+            self.covariances_, self.covariance_type
+        )
+[/SEARCH]
+[REPLACE]
+    def _m_step(self, X, log_resp):
+        """M step.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+
+        log_resp : array-like of shape (n_samples, n_components)
+            Logarithm of the posterior probabilities (or responsibilities) of
+            the point of each sample in X.
+        """
+        X_dtype = X.dtype
+        self.weights_, self.means_, self.covariances_ = _estimate_gaussian_parameters(
+            X, np.exp(log_resp), self.reg_covar, self.covariance_type
+        )
+        self.weights_ /= self.weights_.sum()
+        if X.dtype == np.float32:
+            # For float32 input, use faster Cholesky computation
+            self.precisions_cholesky_ = _compute_precision_cholesky(
+                self.covariances_.astype(np.float64), self.covariance_type
+            ).astype(np.float32)
+        else:
+            self.precisions_cholesky_ = _compute_precision_cholesky(
+                self.covariances_, self.covariance_type
+            )
+[/REPLACE]
+
+sklearn/mixture/_gaussian_mixture.py
+[SEARCH]
+    def _estimate_log_prob(self, X):
+        return _estimate_log_gaussian_prob(
+            X, self.means_, self.precisions_cholesky_, self.covariance_type
+        )
+[/SEARCH]
+[REPLACE]
+    def _estimate_log_prob(self, X):
+        X_dtype = X.dtype
+        return _estimate_log_gaussian_prob(
+            X, self.means_, self.precisions_cholesky_, self.covariance_type, X_dtype
+        )
+[/REPLACE]
+
+sklearn/mixture/_gaussian_mixture.py
+[SEARCH]
+def _estimate_log_gaussian_prob(X, means, precisions_chol, covariance_type):
+    """Estimate the log Gaussian probability.
+
+    Parameters
+    ----------
+    X : array-like of shape (n_samples, n_features)
+
+    means : array-like of shape (n_components, n_features)
+
+    precisions_chol : array-like
+        Cholesky decompositions of the precision matrices.
+        'full' : shape of (n_components, n_features, n_features)
+        'tied' : shape of (n_features, n_features)
+        'diag' : shape of (n_components, n_features)
+        'spherical' : shape of (n_components,)
+
+    covariance_type : {'full', 'tied', 'diag', 'spherical'}
+
+    Returns
+    -------
+    log_prob : array, shape (n_samples, n_components)
+    """
+    n_samples, n_features = X.shape
+    n_components, _ = means.shape
+    # The determinant of the precision matrix from the Cholesky decomposition
+    # corresponds to the negative half of the determinant of the full precision
+    # matrix.
+    # In short: det(precision_chol) = - det(precision) / 2
+    log_det = _compute_log_det_cholesky(precisions_chol, covariance_type, n_features)
+
+    if covariance_type == "full":
+        log_prob = np.empty((n_samples, n_components))
+        for k, (mu, prec_chol) in enumerate(zip(means, precisions_chol)):
+            y = np.dot(X, prec_chol) - np.dot(mu, prec_chol)
+            log_prob[:, k] = np.sum(np.square(y), axis=1)
+
+    elif covariance_type == "tied":
+        log_prob = np.empty((n_samples, n_components))
+        for k, mu in enumerate(means):
+            y = np.dot(X, precisions_chol) - np.dot(mu, precisions_chol)
+            log_prob[:, k] = np.sum(np.square(y), axis=1)
+
+    elif covariance_type == "diag":
+        precisions = precisions_chol**2
+        log_prob = (
+            np.sum((means**2 * precisions), 1)
+            - 2.0 * np.dot(X, (means * precisions).T)
+            + np.dot(X**2, precisions.T)
+        )
+
+    elif covariance_type == "spherical":
+        precisions = precisions_chol**2
+        log_prob = (
+            np.sum(means**2, 1) * precisions
+            - 2 * np.dot(X, means.T * precisions)
+            + np.outer(row_norms(X, squared=True), precisions)
+        )
+    # Since we are using the precision of the Cholesky decomposition,
+    # `- 0.5 * log_det_precision` becomes `+ log_det_precision_chol`
+    return -0.5 * (n_features * np.log(2 * np.pi) + log_prob) + log_det
+[/SEARCH]
+[REPLACE]
+def _estimate_log_gaussian_prob(X, means, precisions_chol, covariance_type, X_dtype=None):
+    """Estimate the log Gaussian probability.
+
+    Parameters
+    ----------
+    X : array-like of shape (n_samples, n_features)
+
+    means : array-like of shape (n_components, n_features)
+
+    precisions_chol : array-like
+        Cholesky decompositions of the precision matrices.
+        'full' : shape of (n_components, n_features, n_features)
+        'tied' : shape of (n_features, n_features)
+        'diag' : shape of (n_components, n_features)
+        'spherical' : shape of (n_components,)
+
+    covariance_type : {'full', 'tied', 'diag', 'spherical'}
+
+    X_dtype : dtype, optional
+        The dtype of input array X. If float32, uses optimized float32 paths.
+
+    Returns
+    -------
+    log_prob : array, shape (n_samples, n_components)
+    """
+    n_samples, n_features = X.shape
+    n_components, _ = means.shape
+
+    if X_dtype is None:
+        X_dtype = X.dtype
+
+    # The determinant of the precision matrix from the Cholesky decomposition
+    # corresponds to the negative half of the determinant of the full precision
+    # matrix.
+    # In short: det(precision_chol) = - det(precision) / 2
+    log_det = _compute_log_det_cholesky(precisions_chol, covariance_type, n_features)
+
+    if covariance_type == "full":
+        if X_dtype == np.float32:
+            # Optimized float32 path for full covariance
+            # Pre-transpose precision matrices for batch operation
+            precisions_chol_T = np.transpose(precisions_chol, (0, 2, 1))
+            means_prec_T = np.dot(means, precisions_chol_T)  # (n_components, n_features)
+            log_prob = np.empty((n_samples, n_components), dtype=np.float32)
+            for k in range(n_components):
+                y = np.dot(X, precisions_chol[k]) - means_prec_T[k]
+                log_prob[:, k] = np.sum(y * y, axis=1)
+        else:
+            log_prob = np.empty((n_samples, n_components))
+            for k, (mu, prec_chol) in enumerate(zip(means, precisions_chol)):
+                y = np.dot(X, prec_chol) - np.dot(mu, prec_chol)
+                log_prob[:, k] = np.sum(np.square(y), axis=1)
+
+    elif covariance_type == "tied":
+        if X_dtype == np.float32:
+            # Optimized float32 path for tied covariance
+            precisions_chol_T = precisions_chol.T
+            means_prec_T = np.dot(means, precisions_chol_T)
+            log_prob = np.empty((n_samples, n_components), dtype=np.float32)
+            for k in range(n_components):
+                y = np.dot(X, precisions_chol) - means_prec_T[k]
+                log_prob[:, k] = np.sum(y * y, axis=1)
+        else:
+            log_prob = np.empty((n_samples, n_components))
+            for k, mu in enumerate(means):
+                y = np.dot(X, precisions_chol) - np.dot(mu, precisions_chol)
+                log_prob[:, k] = np.sum(np.square(y), axis=1)
+
+    elif covariance_type == "diag":
+        precisions = precisions_chol**2
+        if X_dtype == np.float32:
+            # Optimized float32 path for diagonal covariance
+            # Use einsum for faster matrix multiplication
+            log_prob = (
+                np.einsum('ij,ij->j', means * means, precisions)
+                - 2.0 * np.dot(X, (means * precisions))
+                + np.dot(X * X, precisions)
+            )
+        else:
+            log_prob = (
+                np.sum((means**2 * precisions), 1)
+                - 2.0 * np.dot(X, (means * precisions).T)
+                + np.dot(X**2, precisions.T)
+            )
+
+    elif covariance_type == "spherical":
+        precisions = precisions_chol**2
+        if X_dtype == np.float32:
+            # Optimized float32 path for spherical covariance
+            log_prob = (
+                np.sum(means * means, 1) * precisions
+                - 2.0 * np.dot(X, means * precisions)
+                + np.outer(row_norms(X, squared=True), precisions)
+            )
+        else:
+            log_prob = (
+                np.sum(means**2, 1) * precisions
+                - 2 * np.dot(X, means.T * precisions)
+                + np.outer(row_norms(X, squared=True), precisions)
+            )
+    # Since we are using the precision of the Cholesky decomposition,
+    # `- 0.5 * log_det_precision` becomes `+ log_det_precision_chol`
+    return -0.5 * (n_features * np.log(2 * np.pi) + log_prob) + log_det
+[/REPLACE]
+
+sklearn/mixture/_gaussian_mixture.py
+[SEARCH]
+def _estimate_gaussian_covariances_full(resp, X, nk, means, reg_covar):
+    """Estimate the full covariance matrices.
+
+    Parameters
+    ----------
+    resp : array-like of shape (n_samples, n_components)
+
+    X : array-like of shape (n_samples, n_features)
+
+    nk : array-like of shape (n_components,)
+
+    means : array-like of shape (n_components, n_features)
+
+    reg_covar : float
+
+    Returns
+    -------
+    covariances : array, shape (n_components, n_features, n_features)
+        The covariance matrix of the current components.
+    """
+    n_components, n_features = means.shape
+    covariances = np.empty((n_components, n_features, n_features))
+    for k in range(n_components):
+        diff = X - means[k]
+        covariances[k] = np.dot(resp[:, k] * diff.T, diff) / nk[k]
+        covariances[k].flat[:: n_features + 1] += reg_covar
+    return covariances
+[/SEARCH]
+[REPLACE]
+def _estimate_gaussian_covariances_full(resp, X, nk, means, reg_covar, X_dtype=None):
+    """Estimate the full covariance matrices.
+
+    Parameters
+    ----------
+    resp : array-like of shape (n_samples, n_components)
+
+    X : array-like of shape (n_samples, n_features)
+
+    nk : array-like of shape (n_components,)
+
+    means : array-like of shape (n_components, n_features)
+
+    reg_covar : float
+
+    X_dtype : dtype, optional
+        The dtype of input array X. If float32, uses optimized float32 paths.
+
+    Returns
+    -------
+    covariances : array, shape (n_components, n_features, n_features)
+        The covariance matrix of the current components.
+    """
+    n_components, n_features = means.shape
+    if X_dtype == np.float32:
+        covariances = np.empty((n_components, n_features, n_features), dtype=np.float32)
+    else:
+        covariances = np.empty((n_components, n_features, n_features))
+
+    for k in range(n_components):
+        diff = X - means[k]
+        if X_dtype == np.float32:
+            # Use single float32 intermediate
+            covariances[k] = np.dot(resp[:, k].astype(np.float32) * diff.T, diff) / nk[k]
+        else:
+            covariances[k] = np.dot(resp[:, k] * diff.T, diff) / nk[k]
+        covariances[k].flat[:: n_features + 1] += reg_covar
+    return covariances
+[/REPLACE]

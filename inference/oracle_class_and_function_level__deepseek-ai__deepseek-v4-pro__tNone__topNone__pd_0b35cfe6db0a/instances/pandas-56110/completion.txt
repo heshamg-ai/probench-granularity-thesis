@@ -1,0 +1,210 @@
+pandas/core/arrays/string_arrow.py
+[SEARCH]
+    def _str_map(
+        self, f, na_value=None, dtype: Dtype | None = None, convert: bool = True
+    ):
+        # TODO: de-duplicate with StringArray method. This method is moreless copy and
+        # paste.
+
+        from pandas.arrays import (
+            BooleanArray,
+            IntegerArray,
+        )
+
+        if dtype is None:
+            dtype = self.dtype
+        if na_value is None:
+            na_value = self.dtype.na_value
+
+        mask = isna(self)
+        arr = np.asarray(self)
+
+        if is_integer_dtype(dtype) or is_bool_dtype(dtype):
+            constructor: type[IntegerArray | BooleanArray]
+            if is_integer_dtype(dtype):
+                constructor = IntegerArray
+            else:
+                constructor = BooleanArray
+
+            na_value_is_na = isna(na_value)
+            if na_value_is_na:
+                na_value = 1
+            result = lib.map_infer_mask(
+                arr,
+                f,
+                mask.view("uint8"),
+                convert=False,
+                na_value=na_value,
+                # error: Argument 1 to "dtype" has incompatible type
+                # "Union[ExtensionDtype, str, dtype[Any], Type[object]]"; expected
+                # "Type[object]"
+                dtype=np.dtype(dtype),  # type: ignore[arg-type]
+            )
+
+            if not na_value_is_na:
+                mask[:] = False
+
+            return constructor(result, mask)
+
+        elif is_string_dtype(dtype) and not is_object_dtype(dtype):
+            # i.e. StringDtype
+            result = lib.map_infer_mask(
+                arr, f, mask.view("uint8"), convert=False, na_value=na_value
+            )
+            result = pa.array(result, mask=mask, type=pa.string(), from_pandas=True)
+            return type(self)(result)
+        else:
+            # This is when the result type is object. We reach this when
+            # -> We know the result type is truly object (e.g. .encode returns bytes
+            #    or .findall returns a list).
+            # -> We don't know the result type. E.g. `.get` can return anything.
+            return lib.map_infer_mask(arr, f, mask.view("uint8"))
+[/SEARCH]
+[REPLACE]
+    def _str_map(
+        self, f, na_value=None, dtype: Dtype | None = None, convert: bool = True
+    ):
+        # TODO: de-duplicate with StringArray method. This method is moreless copy and
+        # paste.
+
+        from pandas.arrays import (
+            BooleanArray,
+            IntegerArray,
+        )
+
+        if dtype is None:
+            dtype = self.dtype
+        if na_value is None:
+            na_value = self.dtype.na_value
+
+        mask = isna(self)
+        arr = np.asarray(self)
+
+        if is_integer_dtype(dtype) or is_bool_dtype(dtype):
+            constructor: type[IntegerArray | BooleanArray]
+            if is_integer_dtype(dtype):
+                constructor = IntegerArray
+            else:
+                constructor = BooleanArray
+
+            na_value_is_na = isna(na_value)
+            if na_value_is_na:
+                na_value = 1
+            result = lib.map_infer_mask(
+                arr,
+                f,
+                mask.view("uint8"),
+                convert=False,
+                na_value=na_value,
+                # error: Argument 1 to "dtype" has incompatible type
+                # "Union[ExtensionDtype, str, dtype[Any], Type[object]]"; expected
+                # "Type[object]"
+                dtype=np.dtype(dtype),  # type: ignore[arg-type]
+            )
+
+            if not na_value_is_na:
+                mask[:] = False
+
+            return constructor(result, mask)
+
+        elif is_string_dtype(dtype) and not is_object_dtype(dtype):
+            # i.e. StringDtype
+            result = lib.map_infer_mask(
+                arr, f, mask.view("uint8"), convert=False, na_value=na_value
+            )
+            result = pa.array(result, mask=mask, type=pa.string(), from_pandas=True)
+            return type(self)(result)
+        else:
+            # This is when the result type is object. We reach this when
+            # -> We know the result type is truly object (e.g. .encode returns bytes
+            #    or .findall returns a list).
+            # -> We don't know the result type. E.g. `.get` can return anything.
+            return lib.map_infer_mask(arr, f, mask.view("uint8"))
+
+    def _str_get_dummies(self, sep: str = "|"):
+        # Optimized for ArrowStringArray: avoid python-loop overhead by
+        # operating on pyarrow arrays for the heavy lifting.
+        #
+        # Algorithm:
+        # 1. Split strings on `sep` using pyarrow's utf8_split_whitespace
+        #    equivalent (pc.split_pattern) for exact separator semantics.
+        # 2. Collect all unique tokens from all arrays.
+        # 3. For each token, call pc.equal on the original array with a mask
+        #    for NA propagation.
+        #
+        # Note: For a single string column with modest cardinality of tokens,
+        # this is both faster and more memory-efficient than materializing a
+        # Python-level indicator matrix.
+        import numpy as np
+
+        from pandas import BooleanDtype
+
+        # Step 1: split
+        arr = self._pa_array
+        # pc.split_pattern returns a list-array (list<string>)
+        split_lists = pc.split_pattern(arr, sep)
+
+        # Step 2: extract unique tokens efficiently.
+        # We flatten the list column and take unique.
+        flat = pc.list_flatten(split_lists)
+        unique_tokens = pc.unique(flat)
+        # drop NA from unique tokens
+        mask_na = pc.is_null(unique_tokens)
+        unique_tokens = pc.filter(unique_tokens, pc.invert(mask_na))
+
+        # drop empty string if present (pandas never generates columns for empty token)
+        mask_empty = pc.equal(unique_tokens, "")
+        unique_tokens = pc.filter(unique_tokens, pc.invert(mask_empty))
+
+        # Handle empty result (all NA / no tokens)
+        n_tokens = len(unique_tokens)
+        if n_tokens == 0:
+            # Return a DataFrame with zero columns and index matching caller
+            index = range(len(arr))
+            return DataFrame(index=index, dtype=BooleanDtype())
+
+        # Step 3: check membership for each token using list element matching
+        # to mimic "token in split(sep)" semantics exactly.
+        #
+        # We use pc.equal on the split lists? Not directly—we need to test
+        # membership of a scalar in each list element. The fastest pyarrow
+        # method for a scalar-vs-list-array test is pc.index_in on the
+        # flattened array reshaped back, but more directly we can use
+        # pc.is_in with a value_set for each list element via
+        # pc.list_count (for exact integer counting).  Actually,
+        # pc.is_in(list_arr, value_set=pa.array([token])) returns a
+        # list<bool>; we need to reduce to bool.  A simpler approach:
+        # for each token, pc.is_in(split_lists, value_set=pa.array([token]))
+        # produces a list<bool>; then check pc.list_any.
+        #
+        # However, the original pandas get_dummies uses simple `token in
+        # split_text` for each string individually, which is true if the
+        # token equals any element of the split list.  So list_any over
+        # pc.is_in works.
+
+        # Preallocate output columns as BooleanDtype arrays
+        columns_data = {}
+        for token_bytes in unique_tokens:
+            token_str = token_bytes.as_py()
+            # boolean mask: True where token is in the split list
+            val_set = pa.array([token_str], type=pa.string())
+            member_lists = pc.is_in(split_lists, value_set=val_set, skip_nulls=True)
+            member_vec = pc.list_any(member_lists)
+            columns_data[token_str] = BooleanDtype().__from_arrow__(member_vec)
+
+        # Build DataFrame
+        from pandas import DataFrame, RangeIndex
+
+        # Preserve original label ordering (sorted by first appearance)
+        token_order = [tok.as_py() for tok in unique_tokens]
+        data = {
+            tok: columns_data[tok].astype(np.uint8, copy=False)
+            for tok in token_order
+        }
+        result = DataFrame(
+            data,
+            index=RangeIndex(len(arr)),
+            dtype=np.uint8,
+        )
+        return result
+[/REPLACE]

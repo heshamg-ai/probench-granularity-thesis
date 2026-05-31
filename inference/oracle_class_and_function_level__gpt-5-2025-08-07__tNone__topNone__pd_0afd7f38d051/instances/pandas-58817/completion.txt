@@ -1,0 +1,57 @@
+pandas/core/reshape/reshape.py
+[SEARCH]
+    ratio = 0 if frame.empty else len(result) // len(frame)
+[/SEARCH]
+[REPLACE]
+    ratio = 0 if frame.empty else len(stack_cols.unique())
+[/REPLACE]
+
+pandas/core/reshape/reshape.py
+[SEARCH]
+    else:
+        codes, uniques = factorize(frame.index, use_na_sentinel=False)
+        index_levels = [uniques]
+        index_codes = list(np.tile(codes, (1, ratio)))
+[/SEARCH]
+[REPLACE]
+    else:
+        if frame.index.is_unique:
+            uniques = frame.index
+            base_codes = np.arange(len(frame), dtype=np.intp)
+        else:
+            base_codes, uniques = factorize(frame.index, use_na_sentinel=False)
+        index_levels = [uniques]
+        if ratio == 0:
+            tiled = base_codes[:0]
+        else:
+            tiled = np.tile(base_codes, ratio)
+        index_codes = [tiled]
+[/REPLACE]
+
+pandas/core/reshape/reshape.py
+[SEARCH]
+    if isinstance(ordered_stack_cols, MultiIndex):
+        column_levels = ordered_stack_cols.levels
+        column_codes = ordered_stack_cols.drop_duplicates().codes
+    else:
+        column_levels = [ordered_stack_cols_unique]
+        column_codes = [factorize(ordered_stack_cols_unique, use_na_sentinel=False)[0]]
+
+    # error: Incompatible types in assignment (expression has type "list[ndarray[Any,
+    # dtype[Any]]]", variable has type "FrozenList")
+    column_codes = [np.repeat(codes, len(frame)) for codes in column_codes]  # type: ignore[assignment]
+[/SEARCH]
+[REPLACE]
+    if isinstance(ordered_stack_cols, MultiIndex):
+        column_levels = ordered_stack_cols.levels
+        column_codes = ordered_stack_cols.drop_duplicates().codes
+        column_codes = [np.repeat(codes, len(frame)) for codes in column_codes]  # type: ignore[assignment]
+    else:
+        column_levels = [ordered_stack_cols_unique]
+        n_unique_cols = len(ordered_stack_cols_unique)
+        if n_unique_cols == 0:
+            col_codes = np.array([], dtype=np.intp)
+        else:
+            col_codes = np.repeat(np.arange(n_unique_cols, dtype=np.intp), len(frame))
+        column_codes = [col_codes]
+[/REPLACE]

@@ -1,0 +1,13 @@
+pandas/core/dtypes/dtypes.py
+[SEARCH]
+        else:
+            # from here on, dtype is a CategoricalDtype
+            dtype = cast(CategoricalDtype, dtype)
+[/SEARCH]
+[REPLACE]
+        else:
+            # from here on, dtype is a CategoricalDtype
+            dtype = cast(CategoricalDtype, dtype)
+            if dtype.categories is not None and dtype.ordered is not None:
+                return dtype
+[/REPLACE]

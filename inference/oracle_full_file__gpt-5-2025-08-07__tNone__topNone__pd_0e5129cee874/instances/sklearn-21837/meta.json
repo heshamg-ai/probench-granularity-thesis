@@ -1,0 +1,10 @@
+{
+  "scenario_id": "sklearn-21837",
+  "repo": "scikit-learn/scikit-learn",
+  "seconds": 71.07655191421509,
+  "provider": "openai_chat",
+  "model": "gpt-5-2025-08-07",
+  "temperature": null,
+  "top_p": null,
+  "prompt_dataset_path": "prompt_oracle_gpt52_full_file.json"
+}

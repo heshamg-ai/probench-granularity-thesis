@@ -1,0 +1,100 @@
+{
+  "id": 6,
+  "scenario_id": "pandas-51574",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 51574,
+  "baseline_sha": "b99e2961e1aa89f80dbc9561d8ed47afbe4bc822",
+  "reference_sha": "cd9c3579ffaf2c7991f8aaa6b0c4bc9814447cfb",
+  "task": "Optimize DataFrame.where execution when the cond mask is an ExtensionArray-backed DataFrame",
+  "entry_point": "pandas.DataFrame.where",
+  "whats_new": "Performance improvement in DataFrame.where when ``cond`` is backed by an extension dtype",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-51574:baseline",
+      "digest": "sha256:485e5a7403f4d7190603d80fcf6f34f8ac3760000a77511a40c85606a6148612"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-51574:reference",
+      "digest": "sha256:41f0b327791c07cc2eca96770f44191e56016be0e5076d31fd1355e8c998e70d"
+    }
+  },
+  "params": [
+    {
+      "name": "Rows",
+      "short_indicator": "R",
+      "explanation": "Number of rows",
+      "values": [
+        "10000",
+        "100000",
+        "1000000"
+      ]
+    },
+    {
+      "name": "Columns",
+      "short_indicator": "C",
+      "explanation": "Number of columns",
+      "values": [
+        "10",
+        "100"
+      ]
+    },
+    {
+      "name": "Dtype",
+      "short_indicator": "DT",
+      "explanation": "Extension Array dtype",
+      "values": [
+        "Float64",
+        "Int64",
+        "float64_pyarrow"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_get",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_alignment",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_invalid",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_set",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_series_slicing",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_array_like",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_invalid_input_single",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_invalid_input_multiple",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_dataframe_col_match",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_ndframe_align",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_bug",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_bug_mixed",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_bug_transposition",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_datetime",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_none",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_empty_df_and_empty_cond_having_non_bool_dtypes",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_align",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_complex",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_axis",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_axis_with_upcast",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_axis_multiple_dtypes",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_callable",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_tz_values",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_df_where_change_dtype",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_df_where_with_category",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_categorical_filtering",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_ea_other",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_interval_noop",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_interval_fullop_downcast",
+    "pandas/tests/frame/indexing/test_where.py::TestDataFrameIndexingWhere::test_where_datetimelike_noop",
+    "pandas/tests/frame/indexing/test_where.py::test_where_int_downcasting_deprecated",
+    "pandas/tests/frame/indexing/test_where.py::test_where_copies_with_noop",
+    "pandas/tests/frame/indexing/test_where.py::test_where_string_dtype",
+    "pandas/tests/frame/indexing/test_where.py::test_where_bool_comparison",
+    "pandas/tests/frame/indexing/test_where.py::test_where_none_nan_coerce",
+    "pandas/tests/frame/indexing/test_where.py::test_where_duplicate_axes_mixed_dtypes",
+    "pandas/tests/frame/indexing/test_where.py::test_where_columns_casting",
+    "pandas/tests/frame/indexing/test_where.py::test_where_period_invalid_na",
+    "pandas/tests/frame/indexing/test_where.py::test_where_nullable_invalid_na",
+    "pandas/tests/frame/indexing/test_where.py::test_where_inplace_casting",
+    "pandas/tests/frame/indexing/test_where.py::test_where_downcast_to_td64",
+    "pandas/tests/frame/indexing/test_where.py::test_where_dt64_2d",
+    "pandas/tests/frame/indexing/test_where.py::test_where_producing_ea_cond_for_np_dtype",
+    "pandas/tests/frame/indexing/test_where.py::test_where_int_overflow"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.DataFrame.where for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n- Only change what directly improves the optimization target.\n\nOPTIMIZATION REQUEST:\nOptimize DataFrame.where execution when the cond mask is an ExtensionArray-backed DataFrame\nOptimization function: pandas.DataFrame.where\n\n\n[start of pandas/core/generic.py]\n### Relevant context\n#### Class `pandas.core.generic.NDFrame`\n**Class Signature**\n```python\nclass NDFrame(PandasObject, indexing.IndexingMixin):\n```\n**Class Attributes**\n```python\n    _internal_names: list[str] = [\n        \"_mgr\",\n        \"_cacher\",\n        \"_item_cache\",\n        \"_cache\",\n        \"_is_copy\",\n        \"_subtyp\",\n        \"_name\",\n        \"_default_kind\",\n        \"_default_fill_value\",\n        \"_metadata\",\n        \"__array_struct__\",\n        \"__array_interface__\",\n        \"_flags\",\n    ]\n    _internal_names_set: set[str] = set(_internal_names)\n    _accessors: set[str] = set()\n    _hidden_attrs: frozenset[str] = frozenset([])\n    _metadata: list[str] = []\n    _is_copy: weakref.ReferenceType[NDFrame] | None = None\n    _mgr: Manager\n    _attrs: dict[Hashable, Any]\n    _typ: str\n    _stat_axis_number = 0\n    _stat_axis_name = \"index\"\n    _AXIS_ORDERS: list[Literal[\"index\", \"columns\"]]\n    _AXIS_TO_AXIS_NUMBER: dict[Axis, AxisInt] = {0: 0, \"index\": 0, \"rows\": 0}\n    _info_axis_number: int\n    _info_axis_name: Literal[\"index\", \"columns\"]\n    _AXIS_LEN: int\n    __bool__ = __nonzero__\n    __hash__: ClassVar[None]  # type: ignore[assignment]\n    __array_priority__: int = 1000\n    kurtosis = kurt\n    product = prod\n```\n**Class __init__ method**\n```python\n    def __init__(\n        self,\n        data: Manager,\n        copy: bool_t = False,\n        attrs: Mapping[Hashable, Any] | None = None,\n    ) -> None:\n        # copy kwarg is retained for mypy compat, is not used\n\n        object.__setattr__(self, \"_is_copy\", None)\n        object.__setattr__(self, \"_mgr\", data)\n        object.__setattr__(self, \"_item_cache\", {})\n        if attrs is None:\n            attrs = {}\n        else:\n            attrs = dict(attrs)\n        object.__setattr__(self, \"_attrs\", attrs)\n        object.__setattr__(self, \"_flags\", Flags(self, allows_duplicate_labels=True))\n```\n##### Method `pandas.core.generic.NDFrame._clip_with_scalar`\n```python\n@final\n    def _clip_with_scalar(self, lower, upper, inplace: bool_t = False):\n        if (lower is not None and np.any(isna(lower))) or (\n            upper is not None and np.any(isna(upper))\n        ):\n            raise ValueError(\"Cannot use an NA value as a clip threshold\")\n\n        mgr = self._mgr\n\n        if inplace:\n            # cond (for putmask) identifies values to be updated.\n            # exclude boundary as values at the boundary should be no-ops.\n            if upper is not None:\n                cond = self > upper\n                mgr = mgr.putmask(mask=cond, new=upper, align=False)\n            if lower is not None:\n                cond = self < lower\n                mgr = mgr.putmask(mask=cond, new=lower, align=False)\n        else:\n            # cond (for where) identifies values to be left as-is.\n            # include boundary as values at the boundary should be no-ops.\n            mask = isna(self)\n            if upper is not None:\n                cond = mask | (self <= upper)\n                mgr = mgr.where(other=upper, cond=cond, align=False)\n            if lower is not None:\n                cond = mask | (self >= lower)\n                mgr = mgr.where(other=lower, cond=cond, align=False)\n\n        result = self._constructor(mgr)\n        if inplace:\n            return self._update_inplace(result)\n        else:\n            return result.__finalize__(self)\n```\n##### Method `pandas.core.generic.NDFrame._where`\n```python\n@final\n    def _where(\n        self,\n        cond,\n        other=lib.no_default,\n        inplace: bool_t = False,\n        axis: Axis | None = None,\n        level=None,\n    ):\n        \"\"\"\n        Equivalent to public method `where`, except that `other` is not\n        applied as a function even if callable. Used in __setitem__.\n        \"\"\"\n        inplace = validate_bool_kwarg(inplace, \"inplace\")\n\n        if axis is not None:\n            axis = self._get_axis_number(axis)\n\n        # align the cond to same shape as myself\n        cond = common.apply_if_callable(cond, self)\n        if isinstance(cond, NDFrame):\n            # CoW: Make sure reference is not kept alive\n            cond = cond.align(self, join=\"right\", broadcast_axis=1, copy=False)[0]\n        else:\n            if not hasattr(cond, \"shape\"):\n                cond = np.asanyarray(cond)\n            if cond.shape != self.shape:\n                raise ValueError(\"Array conditional must be same shape as self\")\n            cond = self._constructor(cond, **self._construct_axes_dict())\n\n        # make sure we are boolean\n        fill_value = bool(inplace)\n        cond = cond.fillna(fill_value)\n\n        msg = \"Boolean array expected for the condition, not {dtype}\"\n\n        if not cond.empty:\n            if not isinstance(cond, ABCDataFrame):\n                # This is a single-dimensional object.\n                if not is_bool_dtype(cond):\n                    raise ValueError(msg.format(dtype=cond.dtype))\n            else:\n                for _dt in cond.dtypes:\n                    if not is_bool_dtype(_dt):\n                        raise ValueError(msg.format(dtype=_dt))\n        else:\n            # GH#21947 we have an empty DataFrame/Series, could be object-dtype\n            cond = cond.astype(bool)\n\n        cond = -cond if inplace else cond\n        cond = cond.reindex(self._info_axis, axis=self._info_axis_number, copy=False)\n\n        # try to align with other\n        if isinstance(other, NDFrame):\n            # align with me\n            if other.ndim <= self.ndim:\n                # CoW: Make sure reference is not kept alive\n                other = self.align(\n                    other,\n                    join=\"left\",\n                    axis=axis,\n                    level=level,\n                    fill_value=None,\n                    copy=False,\n                )[1]\n\n                # if we are NOT aligned, raise as we cannot where index\n                if axis is None and not other._indexed_same(self):\n                    raise InvalidIndexError\n\n                if other.ndim < self.ndim:\n                    # TODO(EA2D): avoid object-dtype cast in EA case GH#38729\n                    other = other._values\n                    if axis == 0:\n                        other = np.reshape(other, (-1, 1))\n                    elif axis == 1:\n                        other = np.reshape(other, (1, -1))\n\n                    other = np.broadcast_to(other, self.shape)\n\n            # slice me out of the other\n            else:\n                raise NotImplementedError(\n                    \"cannot align with a higher dimensional NDFrame\"\n                )\n\n        elif not isinstance(other, (MultiIndex, NDFrame)):\n            # mainly just catching Index here\n            other = extract_array(other, extract_numpy=True)\n\n        if isinstance(other, (np.ndarray, ExtensionArray)):\n            if other.shape != self.shape:\n                if self.ndim != 1:\n                    # In the ndim == 1 case we may have\n                    #  other length 1, which we treat as scalar (GH#2745, GH#4192)\n                    #  or len(other) == icond.sum(), which we treat like\n                    #  __setitem__ (GH#3235)\n                    raise ValueError(\n                        \"other must be the same shape as self when an ndarray\"\n                    )\n\n            # we are the same shape, so create an actual object for alignment\n            else:\n                other = self._constructor(other, **self._construct_axes_dict())\n\n        if axis is None:\n            axis = 0\n\n        if self.ndim == getattr(other, \"ndim\", 0):\n            align = True\n        else:\n            align = self._get_axis_number(axis) == 1\n\n        if inplace:\n            # we may have different type blocks come out of putmask, so\n            # reconstruct the block manager\n\n            self._check_inplace_setting(other)\n            new_data = self._mgr.putmask(mask=cond, new=other, align=align)\n            result = self._constructor(new_data)\n            return self._update_inplace(result)\n\n        else:\n            new_data = self._mgr.where(\n                other=other,\n                cond=cond,\n                align=align,\n            )\n            result = self._constructor(new_data)\n            return result.__finalize__(self)\n```\n[end of pandas/core/generic.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

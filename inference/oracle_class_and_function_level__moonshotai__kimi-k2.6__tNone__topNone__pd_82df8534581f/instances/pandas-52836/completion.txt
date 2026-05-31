@@ -1,0 +1,182 @@
+pandas/core/arrays/masked.py
+[SEARCH]
+[end of pandas/core/arrays/masked.py]
+[/SEARCH]
+[REPLACE]
+def transpose_homogenous_masked_arrays(arrs, dtype=None, copy: bool = False):
+    """
+    Perform a "fast" transpose for a DataFrame with a single masked dtype.
+
+    Given a list of 1D masked arrays (column data), produce a list of 1D
+    masked arrays (row data) for the transpose. The transpose is performed
+    by directly manipulating the underlying data and mask arrays rather than
+    going through the generic numpy object-array machinery.
+
+    Parameters
+    ----------
+    arrs : list of BaseMaskedArray
+        Arrays representing each column of the original DataFrame.
+    dtype : ExtensionDtype, optional
+        The dtype of the masked arrays. If None, inferred from arrs[0].
+    copy : bool, default False
+        Whether to copy the data.
+
+    Returns
+    -------
+    list of BaseMaskedArray
+        Arrays representing each row of the transposed DataFrame.
+    """
+    import numpy as np
+
+    from pandas.core.arrays.masked import BaseMaskedArray
+
+    if not arrs:
+        return []
+
+    if dtype is None:
+        dtype = arrs[0].dtype
+
+    ncols = len(arrs)
+    nrows = len(arrs[0])
+
+    # Stack underlying data and masks
+    data_blocks = np.empty((ncols, nrows), dtype=dtype.numpy_dtype)
+    mask_blocks = np.empty((ncols, nrows), dtype=bool)
+
+    for i, arr in enumerate(arrs):
+        data_blocks[i, :] = arr._data
+        mask_blocks[i, :] = arr._mask
+
+    # Transpose
+    data_t = data_blocks.T
+    mask_t = mask_blocks.T
+
+    if copy:
+        data_t = data_t.copy()
+        mask_t = mask_t.copy()
+
+    result = []
+    for i in range(nrows):
+        arr = type(arrs[0])._simple_new(data_t[i], mask_t[i], dtype=dtype)
+        result.append(arr)
+
+    return result
+[/REPLACE]
+pandas/core/frame.py
+[SEARCH]
+        nv.validate_transpose(args, {})
+        # construct the args
+
+        dtypes = list(self.dtypes)
+
+        if self._can_fast_transpose:
+            # Note: tests pass without this, but this improves perf quite a bit.
+            new_vals = self._values.T
+            if copy and not using_copy_on_write():
+                new_vals = new_vals.copy()
+
+            result = self._constructor(
+                new_vals,
+                index=self.columns,
+                columns=self.index,
+                copy=False,
+                dtype=new_vals.dtype,
+            )
+            if using_copy_on_write() and len(self) > 0:
+                result._mgr.add_references(self._mgr)  # type: ignore[arg-type]
+
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            # We have EAs with the same dtype. We can preserve that dtype in transpose.
+            dtype = dtypes[0]
+            arr_type = dtype.construct_array_type()
+            values = self.values
+
+            new_values = [arr_type._from_sequence(row, dtype=dtype) for row in values]
+            result = type(self)._from_arrays(
+                new_values, index=self.columns, columns=self.index
+            )
+
+        else:
+            new_arr = self.values.T
+            if copy and not using_copy_on_write():
+                new_arr = new_arr.copy()
+            result = self._constructor(
+                new_arr,
+                index=self.columns,
+                columns=self.index,
+                dtype=new_arr.dtype,
+                # We already made a copy (more than one block)
+                copy=False,
+            )
+
+        return result.__finalize__(self, method="transpose")
+[/SEARCH]
+[REPLACE]
+        nv.validate_transpose(args, {})
+        # construct the args
+
+        dtypes = list(self.dtypes)
+
+        if self._can_fast_transpose:
+            # Note: tests pass without this, but this improves perf quite a bit.
+            new_vals = self._values.T
+            if copy and not using_copy_on_write():
+                new_vals = new_vals.copy()
+
+            result = self._constructor(
+                new_vals,
+                index=self.columns,
+                columns=self.index,
+                copy=False,
+                dtype=new_vals.dtype,
+            )
+            if using_copy_on_write() and len(self) > 0:
+                result._mgr.add_references(self._mgr)  # type: ignore[arg-type]
+
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            # We have EAs with the same dtype. We can preserve that dtype in transpose.
+            dtype = dtypes[0]
+            arr_type = dtype.construct_array_type()
+            values = self.values
+
+            # Check if we have masked arrays that we can transpose more efficiently
+            from pandas.core.arrays.masked import BaseMaskedArray
+
+            if issubclass(arr_type, BaseMaskedArray):
+                # Fast path for masked arrays (e.g., Int64, Float64, boolean)
+                arrs = [self._get_column_array(i) for i in range(len(self.columns))]
+                new_values = transpose_homogenous_masked_arrays(
+                    arrs, dtype=dtype, copy=copy
+                )
+                result = type(self)._from_arrays(
+                    new_values, index=self.columns, columns=self.index
+                )
+            else:
+                new_values = [arr_type._from_sequence(row, dtype=dtype) for row in values]
+                result = type(self)._from_arrays(
+                    new_values, index=self.columns, columns=self.index
+                )
+
+        else:
+            new_arr = self.values.T
+            if copy and not using_copy_on_write():
+                new_arr = new_arr.copy()
+            result = self._constructor(
+                new_arr,
+                index=self.columns,
+                columns=self.index,
+                dtype=new_arr.dtype,
+                # We already made a copy (more than one block)
+                copy=False,
+            )
+
+        return result.__finalize__(self, method="transpose")
+[/REPLACE]

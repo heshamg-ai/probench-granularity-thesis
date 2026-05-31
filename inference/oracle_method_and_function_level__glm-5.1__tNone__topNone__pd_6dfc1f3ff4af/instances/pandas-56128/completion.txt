@@ -1,0 +1,57 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        # GH 35584. Sort missing values according to na_position kwarg
+        # ignore na_position for MultiIndex
+        if not isinstance(self, ABCMultiIndex):
+            _as = nargsort(
+                items=self, ascending=ascending, na_position=na_position, key=key
+            )
+        else:
+            idx = cast(Index, ensure_key_mapped(self, key))
+            _as = idx.argsort(na_position=na_position)
+            if not ascending:
+                _as = _as[::-1]
+
+        sorted_index = self.take(_as)
+[/SEARCH]
+[REPLACE]
+        # GH 35584. Sort missing values according to na_position kwarg
+        # ignore na_position for MultiIndex
+        if not isinstance(self, ABCMultiIndex):
+            # Fast path for already-sorted indexes
+            if key is None and self.is_monotonic_increasing:
+                if ascending and na_position == "last":
+                    _as = np.arange(len(self), dtype=np.intp)
+                elif not ascending and na_position == "first":
+                    _as = np.arange(len(self) - 1, -1, -1, dtype=np.intp)
+                else:
+                    _as = nargsort(
+                        items=self,
+                        ascending=ascending,
+                        na_position=na_position,
+                        key=key,
+                    )
+            elif key is None and self.is_monotonic_decreasing:
+                if not ascending and na_position == "last":
+                    _as = np.arange(len(self), dtype=np.intp)
+                elif ascending and na_position == "first":
+                    _as = np.arange(len(self) - 1, -1, -1, dtype=np.intp)
+                else:
+                    _as = nargsort(
+                        items=self,
+                        ascending=ascending,
+                        na_position=na_position,
+                        key=key,
+                    )
+            else:
+                _as = nargsort(
+                    items=self, ascending=ascending, na_position=na_position, key=key
+                )
+        else:
+            idx = cast(Index, ensure_key_mapped(self, key))
+            _as = idx.argsort(na_position=na_position)
+            if not ascending:
+                _as = _as[::-1]
+
+        sorted_index = self.take(_as)
+[/REPLACE]

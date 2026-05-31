@@ -1,0 +1,82 @@
+
+
+Looking at the context, I need to:
+1. Add an optimized path for PyArrow-backed dtypes in the `transpose` method in `pandas/core/frame.py`
+2. The function `transpose_homogeneous_pyarrow` already exists in `pandas/core/arrays/arrow/array.py`
+
+Let me create the search/replace block to add the PyArrow optimization to the transpose method:
+
+pandas/core/frame.py
+[SEARCH]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            if isinstance(dtypes[0], BaseMaskedDtype):
+                # We have masked arrays with the same dtype. We can transpose faster.
+                from pandas.core.arrays.masked import transpose_homogenous_masked_arrays
+
+                if isinstance(self._mgr, ArrayManager):
+                    masked_arrays = self._mgr.arrays
+                else:
+                    masked_arrays = list(self._iter_column_arrays())
+                new_values = transpose_homogenous_masked_arrays(
+                    cast(list[BaseMaskedArray], masked_arrays)
+                )
+            else:
+                # We have other EAs with the same dtype. We preserve dtype in transpose.
+                dtyp = dtypes[0]
+                arr_typ = dtyp.construct_array_type()
+                values = self.values
+                new_values = [arr_typ._from_sequence(row, dtype=dtyp) for row in values]
+
+            result = type(self)._from_arrays(
+                new_values,
+                index=self.columns,
+                columns=self.index,
+                verify_integrity=False,
+            )
+[/SEARCH]
+[REPLACE]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            if isinstance(dtypes[0], BaseMaskedDtype):
+                # We have masked arrays with the same dtype. We can transpose faster.
+                from pandas.core.arrays.masked import transpose_homogenous_masked_arrays
+
+                if isinstance(self._mgr, ArrayManager):
+                    masked_arrays = self._mgr.arrays
+                else:
+                    masked_arrays = list(self._iter_column_arrays())
+                new_values = transpose_homogenous_masked_arrays(
+                    cast(list[BaseMaskedArray], masked_arrays)
+                )
+            elif isinstance(dtypes[0], ArrowDtype):
+                # We have PyArrow-backed arrays with the same dtype. We can transpose faster.
+                from pandas.core.arrays.arrow.array import transpose_homogeneous_pyarrow
+
+                if isinstance(self._mgr, ArrayManager):
+                    arrow_arrays = self._mgr.arrays
+                else:
+                    arrow_arrays = list(self._iter_column_arrays())
+                new_values = transpose_homogeneous_pyarrow(
+                    cast(list, arrow_arrays)
+                )
+            else:
+                # We have other EAs with the same dtype. We preserve dtype in transpose.
+                dtyp = dtypes[0]
+                arr_typ = dtyp.construct_array_type()
+                values = self.values
+                new_values = [arr_typ._from_sequence(row, dtype=dtyp) for row in values]
+
+            result = type(self)._from_arrays(
+                new_values,
+                index=self.columns,
+                columns=self.index,
+                verify_integrity=False,
+            )
+[/REPLACE]

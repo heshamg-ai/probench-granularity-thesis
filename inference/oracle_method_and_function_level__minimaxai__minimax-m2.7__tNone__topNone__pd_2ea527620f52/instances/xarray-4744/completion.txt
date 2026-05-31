@@ -1,0 +1,54 @@
+
+
+Let me first find the `__getitem__` method in the Dataset class to understand its current implementation.
+
+xarray/core/dataset.py
+[SEARCH]
+    def __getitem__(self, key: Any) -> "Dataset":
+        """x.__getitem__(key) <==> x[key]
+
+        Returns a DataArray if key is a coordinate dimension name,
+        or a Dataset if key is a non-coordinate data variable.
+        """
+        if key not in self._indexes and key not in self._coord_names:
+            if key in self._data_vars:
+                return self._construct_dataarray(key)
+            raise KeyError(key)
+
+        # a coordinate variable or index exists
+        try:
+            index = self._indexes[key]
+        except KeyError:
+            index = None
+        return self._construct_dataarray(key)
+[/SEARCH]
+[REPLACE]
+    def __getitem__(self, key: Any) -> "Dataset":
+        """x.__getitem__(key) <==> x[key]
+
+        Returns a DataArray if key is a coordinate dimension name,
+        or a Dataset if key is a non-coordinate data variable.
+        """
+        # Fast path: check cache first for repeated accesses
+        cache = self._cache
+        if key in cache:
+            return cache[key]
+
+        # Fast path: direct lookup in _data_vars (coordinates and data variables
+        # are mutually exclusive, so we avoid the expensive KeyError exception)
+        data_vars = self._data_vars
+        if key in data_vars:
+            result = self._construct_dataarray(key)
+            # Cache the result for future accesses
+            cache[key] = result
+            return result
+
+        # Check if key is in indexes or coord_names
+        if key in self._indexes or key in self._coord_names:
+            result = self._construct_dataarray(key)
+            # Cache the result for future accesses
+            cache[key] = result
+            return result
+
+        raise KeyError(key)
+[/REPLACE]

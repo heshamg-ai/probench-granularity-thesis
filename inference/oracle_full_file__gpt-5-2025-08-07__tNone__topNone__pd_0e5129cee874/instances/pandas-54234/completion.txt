@@ -1,0 +1,171 @@
+pandas/core/groupby/groupby.py
+[SEARCH]
+        try:
+            if self.obj.ndim == 1:
+                result = self._op_via_apply(how, skipna=skipna)
+            else:
+
+                def func(df):
+                    method = getattr(df, how)
+                    return method(axis=axis, skipna=skipna, numeric_only=numeric_only)
+
+                func.__name__ = how
+                result = self._python_apply_general(
+                    func, self._obj_with_exclusions, not_indexed_same=True
+                )
+        except ValueError as err:
+            name = "argmax" if how == "idxmax" else "argmin"
+            if f"attempt to get {name} of an empty sequence" in str(err):
+                raise ValueError(
+                    f"Can't get {how} of an empty group due to unobserved categories. "
+                    "Specify observed=True in groupby instead."
+                ) from None
+            raise
+
+        result = result.astype(self.obj.index.dtype) if result.empty else result
+
+        if not skipna:
+            has_na_value = result.isnull().any(axis=None)
+            if has_na_value:
+                warnings.warn(
+                    f"The behavior of {type(self).__name__}.{how} with all-NA "
+                    "values, or any-NA and skipna=False, is deprecated. In a future "
+                    "version this will raise ValueError",
+                    FutureWarning,
+                    stacklevel=find_stack_level(),
+                )
+
+        return result
+[/SEARCH]
+[REPLACE]
+        # Fastpath for axis matching the grouper axis; otherwise fallback
+        if axis != self.axis:
+            def func(df):
+                method = getattr(df, how)
+                return method(axis=axis, skipna=skipna, numeric_only=numeric_only)
+
+            func.__name__ = how
+            result = self._python_apply_general(
+                func, self._obj_with_exclusions, not_indexed_same=True
+            )
+            result = result.astype(self.obj.index.dtype) if result.empty else result
+            if not skipna:
+                has_na_value = result.isnull().any(axis=None)
+                if has_na_value:
+                    warnings.warn(
+                        f"The behavior of {type(self).__name__}.{how} with all-NA "
+                        "values, or any-NA and skipna=False, is deprecated. In a future "
+                        "version this will raise ValueError",
+                        FutureWarning,
+                        stacklevel=find_stack_level(),
+                    )
+            return result
+
+        obj = self._obj_with_exclusions
+
+        # Fallback to apply path for non-numeric dtypes when numeric_only is False
+        if obj.ndim == 1:
+            if not (is_numeric_dtype(obj.dtype) or is_bool_dtype(obj.dtype)):
+                result = self._op_via_apply(how, skipna=skipna)
+                result = result.astype(self.obj.index.dtype) if result.empty else result
+                if not skipna:
+                    has_na_value = result.isnull().any(axis=None)
+                    if has_na_value:
+                        warnings.warn(
+                            f"The behavior of {type(self).__name__}.{how} with all-NA "
+                            "values, or any-NA and skipna=False, is deprecated. In a future "
+                            "version this will raise ValueError",
+                            FutureWarning,
+                            stacklevel=find_stack_level(),
+                        )
+                return result
+        else:
+            if numeric_only:
+                data = obj._get_numeric_data()
+            else:
+                data = obj
+                # if any non-numeric/non-bool columns exist, fallback to apply to preserve semantics
+                if any(not (is_numeric_dtype(dt) or is_bool_dtype(dt)) for dt in data.dtypes):
+                    def func(df):
+                        method = getattr(df, how)
+                        return method(axis=axis, skipna=skipna, numeric_only=numeric_only)
+                    func.__name__ = how
+                    result = self._python_apply_general(
+                        func, self._obj_with_exclusions, not_indexed_same=True
+                    )
+                    result = result.astype(self.obj.index.dtype) if result.empty else result
+                    if not skipna:
+                        has_na_value = result.isnull().any(axis=None)
+                        if has_na_value:
+                            warnings.warn(
+                                f"The behavior of {type(self).__name__}.{how} with all-NA "
+                                "values, or any-NA and skipna=False, is deprecated. In a future "
+                                "version this will raise ValueError",
+                                FutureWarning,
+                                stacklevel=find_stack_level(),
+                            )
+                    return result
+
+        splitter = self.grouper._get_splitter(obj if obj.ndim == 1 else data, axis=self.axis)
+        sdata = splitter._sorted_data
+        starts, ends = lib.generate_slices(splitter._slabels, splitter.ngroups)
+        sorted_index = (obj.index if obj.ndim == 1 else data.index).take(splitter._sort_idx)
+        na_label = (obj.index if obj.ndim == 1 else data.index)._na_value
+
+        if obj.ndim == 1:
+            arr = sdata.to_numpy(dtype=float, na_value=np.nan)
+            res_labels = np.empty(splitter.ngroups, dtype=object)
+            res_labels[:] = na_label
+            for k, (st, en) in enumerate(zip(starts, ends)):
+                sub = arr[st:en]
+                if not skipna and np.isnan(sub).any():
+                    continue
+                if skipna:
+                    if np.isnan(sub).all():
+                        continue
+                    pos_off = np.nanargmax(sub) if how == "idxmax" else np.nanargmin(sub)
+                else:
+                    pos_off = np.argmax(sub) if how == "idxmax" else np.argmin(sub)
+                pos = st + pos_off
+                res_labels[k] = sorted_index[pos]
+            result = self._obj_1d_constructor(res_labels, self.grouper.result_index)
+            result.name = obj.name
+        else:
+            # DataFrame case
+            sdata_df = data.take(splitter._sort_idx, axis=0)
+            ncols = sdata_df.shape[1]
+            ng = splitter.ngroups
+            out = np.empty((ng, ncols), dtype=object)
+            out[:, :] = na_label
+            for j, col in enumerate(sdata_df.columns):
+                col_vals = sdata_df.iloc[:, j].to_numpy(dtype=float, na_value=np.nan)
+                for k, (st, en) in enumerate(zip(starts, ends)):
+                    sub = col_vals[st:en]
+                    if not skipna and np.isnan(sub).any():
+                        continue
+                    if skipna:
+                        if np.isnan(sub).all():
+                            continue
+                        pos_off = np.nanargmax(sub) if how == "idxmax" else np.nanargmin(sub)
+                    else:
+                        pos_off = np.argmax(sub) if how == "idxmax" else np.argmin(sub)
+                    pos = st + pos_off
+                    out[k, j] = sorted_index[pos]
+            df_res = DataFrame(out, index=self.grouper.result_index, columns=sdata_df.columns)
+            result = self._wrap_aggregated_output(df_res)
+
+        result = result.astype(self.obj.index.dtype) if result.empty else result
+
+        if not skipna:
+            has_na_value = result.isnull().any(axis=None)
+            if has_na_value:
+                warnings.warn(
+                    f"The behavior of {type(self).__name__}.{how} with all-NA "
+                    "values, or any-NA and skipna=False, is deprecated. In a future "
+                    "version this will raise ValueError",
+                    FutureWarning,
+                    stacklevel=find_stack_level(),
+                )
+
+        return result
+[/REPLACE]

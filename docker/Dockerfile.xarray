@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2025, Siemens AG
+
+FROM python:3.11-slim
+
+# System deps
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential git pkg-config \
+        libhdf5-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --upgrade \
+      pip \
+      "numpy<2" \
+      "pandas<2.0.0" \
+      psutil==7.2.2 \
+      codecarbon==3.2.2 \
+      pytest-json-report==1.5.0 \
+      pytest-cov==7.0.0 \
+      coverage==7.13.4 \
+      PyYAML==6.0.3 \
+      scipy==1.17.1 \
+      cftime==1.6.5 \
+      netCDF4==1.7.4 \
+      dask==2026.1.2
+
+ARG REPO_URL
+ARG SHA
+ARG PR_NUMBER
+ARG VARIANT
+ENV LIB_NAME=xarray
+ENV REPO_DIR=/repos/${LIB_NAME}
+
+RUN git clone --filter=blob:none ${REPO_URL} ${REPO_DIR}
+
+WORKDIR ${REPO_DIR}
+
+RUN git fetch origin pull/${PR_NUMBER}/head:refs/remotes/origin/pr/${PR_NUMBER} && \
+    git checkout ${SHA}
+
+# Reinstall cleanly
+RUN python -m pip uninstall -y ${LIB_NAME} || true
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install -e .
+
+WORKDIR /app
+
+LABEL repo_url=${REPO_URL} \
+      library=${LIB_NAME} \
+      pr_number=${PR_NUMBER} \
+      variant=${VARIANT} \
+      sha=${SHA}
+
+CMD ["bash"]

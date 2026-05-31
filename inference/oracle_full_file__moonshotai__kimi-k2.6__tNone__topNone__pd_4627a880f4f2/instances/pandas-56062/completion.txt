@@ -1,0 +1,98 @@
+I'll analyze the pandas code to optimize `DataFrame.loc` and `Series.loc` for MultiIndex key lookups. The optimization is in `asarray_tuplesafe` which is used for converting keys to arrays. For MultiIndex lookups, we can avoid unnecessary array construction when dealing with list of tuples.
+
+Let me trace through the code path for `loc` with MultiIndex keys and find the optimization opportunity.
+
+The key insight is in `asarray_tuplesafe`: when we have a list of tuples for MultiIndex indexing, the current code does `np.asarray(values, dtype=dtype)` which can be slow for large lists. We can optimize by avoiding some overhead and also by using `construct_1d_object_array_from_listlike` more directly when we know we're dealing with tuples (typical for MultiIndex lookups).
+
+Looking more carefully at `asarray_tuplesafe`, when values is a list of tuples and dtype is not specified, `np.asarray(values)` creates a 2D array, then the code catches this with `result.ndim == 2` and reconverts. This double conversion is wasteful.
+
+However, there's another optimization: for `index_labels_to_array` and `maybe_make_list`, we can also improve. Let me focus on the most impactful change.
+
+The real optimization for MultiIndex `loc` accesses typically goes through `pandas/core/indexing.py` and `pandas/core/indexes/multi.py`. But looking at the provided file `pandas/core/common.py`, the function `asarray_tuplesafe` is critical.
+
+Let me check: when we do `df.loc[(a, b)]` or `df.loc[[(a1, b1), (a2, b2)]]`, the key goes through `asarray_tuplesafe` at some point.
+
+The optimization: when `values` is already a list of tuples (common for MultiIndex), we should directly construct a 1D object array rather than going through `np.asarray` and then fixing up.
+
+Actually, looking more carefully, the current code already has this logic but only for the `ValueError` case and `result.ndim == 2` case. We can pre-empt this for lists of tuples.
+
+Here's the optimization - check if values is a list of tuples upfront and avoid the `np.asarray` -> detect 2D -> reconstruct path:
+
+pandas/core/common.py
+[SEARCH]
+def asarray_tuplesafe(values: Iterable, dtype: NpDtype | None = None) -> ArrayLike:
+    if not (isinstance(values, (list, tuple)) or hasattr(values, "__array__")):
+        values = list(values)
+    elif isinstance(values, ABCIndex):
+        return values._values
+
+    if isinstance(values, list) and dtype in [np.object_, object]:
+        return construct_1d_object_array_from_listlike(values)
+
+    try:
+        with warnings.catch_warnings():
+            # Can remove warning filter once NumPy 1.24 is min version
+            if not np_version_gte1p24:
+                warnings.simplefilter("ignore", np.VisibleDeprecationWarning)
+            result = np.asarray(values, dtype=dtype)
+    except ValueError:
+        # Using try/except since it's more performant than checking is_list_like
+        # over each element
+        # error: Argument 1 to "construct_1d_object_array_from_listlike"
+        # has incompatible type "Iterable[Any]"; expected "Sized"
+        return construct_1d_object_array_from_listlike(values)  # type: ignore[arg-type]
+
+    if issubclass(result.dtype.type, str):
+        result = np.asarray(values, dtype=object)
+
+    if result.ndim == 2:
+        # Avoid building an array of arrays:
+        values = [tuple(x) for x in values]
+        result = construct_1d_object_array_from_listlike(values)
+
+    return result
+[/SEARCH]
+[REPLACE]
+def asarray_tuplesafe(values: Iterable, dtype: NpDtype | None = None) -> ArrayLike:
+    if not (isinstance(values, (list, tuple)) or hasattr(values, "__array__")):
+        values = list(values)
+    elif isinstance(values, ABCIndex):
+        return values._values
+
+    if isinstance(values, list) and dtype in [np.object_, object]:
+        return construct_1d_object_array_from_listlike(values)
+
+    # Fast path for list of tuples: avoid np.asarray creating 2D array
+    # and then reconstructing as 1D object array. This is common for
+    # MultiIndex key lookups.
+    if (
+        isinstance(values, list)
+        and len(values) > 0
+        and isinstance(values[0], tuple)
+        and dtype is None
+    ):
+        return construct_1d_object_array_from_listlike(values)
+
+    try:
+        with warnings.catch_warnings():
+            # Can remove warning filter once NumPy 1.24 is min version
+            if not np_version_gte1p24:
+                warnings.simplefilter("ignore", np.VisibleDeprecationWarning)
+            result = np.asarray(values, dtype=dtype)
+    except ValueError:
+        # Using try/except since it's more performant than checking is_list_like
+        # over each element
+        # error: Argument 1 to "construct_1d_object_array_from_listlike"
+        # has incompatible type "Iterable[Any]"; expected "Sized"
+        return construct_1d_object_array_from_listlike(values)  # type: ignore[arg-type]
+
+    if issubclass(result.dtype.type, str):
+        result = np.asarray(values, dtype=object)
+
+    if result.ndim == 2:
+        # Avoid building an array of arrays:
+        values = [tuple(x) for x in values]
+        result = construct_1d_object_array_from_listlike(values)
+
+    return result
+[/REPLACE]

@@ -1,0 +1,141 @@
+pandas/core/internals/blocks.py
+[SEARCH]
+        # Exclude anything that we know we won't contain
+        pairs = [
+            (x, y) for x, y in zip(src_list, dest_list) if self._can_hold_element(x)
+        ]
+        if not len(pairs):
+            # shortcut, nothing to replace
+            return [self] if inplace else [self.copy()]
+[/SEARCH]
+[REPLACE]
+        # Exclude anything that we know we won't contain
+        pairs = [
+            (x, y) for x, y in zip(src_list, dest_list) if self._can_hold_element(x)
+        ]
+        if not len(pairs):
+            # shortcut, nothing to replace
+            return [self] if inplace else [self.copy()]
+
+        # Optimize large dict path: if there are many pairs and src_list is
+        # large, we can pre-compute a lookup dictionary for the masks to
+        # avoid repeated scalar comparisons for each pair.
+        # This is only beneficial when the number of distinct src values is
+        # large relative to the size of the array.
+        _USE_LOOKUP_THRESHOLD = 20
+[/REPLACE]
+
+pandas/core/internals/blocks.py
+[SEARCH]
+        if is_string_dtype(values.dtype):
+            # Calculate the mask once, prior to the call of comp
+            # in order to avoid repeating the same computations
+            mask = ~isna(values)
+            masks = [
+                compare_or_regex_search(values, s[0], regex=regex, mask=mask)
+                for s in pairs
+            ]
+        else:
+            # GH#38086 faster if we know we dont need to check for regex
+            masks = [missing.mask_missing(values, s[0]) for s in pairs]
+[/SEARCH]
+[REPLACE]
+        if is_string_dtype(values.dtype):
+            # Calculate the mask once, prior to the call of comp
+            # in order to avoid repeating the same computations
+            mask = ~isna(values)
+            masks = [
+                compare_or_regex_search(values, s[0], regex=regex, mask=mask)
+                for s in pairs
+            ]
+        else:
+            # GH#38086 faster if we know we dont need to check for regex
+            if len(pairs) >= _USE_LOOKUP_THRESHOLD:
+                # For many pairs, build an inverse lookup from values to
+                # mask index, then assign masks in one pass over the array.
+                # This avoids O(n_pairs * n_values) mask_missing calls.
+                masks = _build_masks_via_lookup(values, pairs)
+            else:
+                masks = [missing.mask_missing(values, s[0]) for s in pairs]
+[/REPLACE]
+
+pandas/core/internals/blocks.py
+[SEARCH]
+        return rb
+[/SEARCH]
+[REPLACE]
+        return rb
+
+
+def _build_masks_via_lookup(
+    values: np.ndarray,
+    pairs: list[tuple[Any, Any]],
+) -> list[np.ndarray]:
+    """
+    Build boolean masks for Block.replace_list when there are many pairs.
+
+    Instead of calling mask_missing separately for each source value,
+    we build a dict mapping each unique source value -> mask index, then
+    scan the array once to fill all masks in parallel.
+    """
+    import numpy as np
+
+    n_pairs = len(pairs)
+    n = len(values)
+
+    # Build a dict: source value -> list of mask indices
+    # Use the same missing-equality logic that mask_missing uses:
+    # two NaN-like values compare equal, None == None, etc.
+    lookup: dict = {}
+    # Track which mask indices have the same source value
+    for idx, (src, _) in enumerate(pairs):
+        # Use the same keying as mask_missing would use for equality:
+        # For NaN we use a sentinel float('nan') which matches via isna()
+        # but for dict lookup we need a single key for all NaN-like values.
+        # mask_missing treats src as missing if missing.isna(src).
+        # Two missing values match each other. So we can use a sentinel.
+        try:
+            is_missing = missing.isna(src)
+        except TypeError:
+            is_missing = False
+        if is_missing:
+            key = _MISSING_SENTINEL
+        else:
+            key = src
+        lookup.setdefault(key, []).append(idx)
+
+    # Initialize empty boolean arrays for each mask
+    masks = [np.zeros(n, dtype=bool) for _ in range(n_pairs)]
+
+    # Single pass over the array to populate masks
+    # Use values directly; for missing entries, use the sentinel
+    val_arr = np.asarray(values)
+    missing_mask = missing.isna(val_arr)
+
+    # Handle missing values
+    if _MISSING_SENTINEL in lookup:
+        indices = lookup[_MISSING_SENTINEL]
+        for idx in indices:
+            masks[idx] = missing_mask.copy()
+
+    # Handle non-missing values: use a dict-like approach
+    # For small to moderate unique values, we iterate over the dict keys
+    # and compare. For very large unique values, this is still O(n_unique * n).
+    # But the threshold _USE_LOOKUP_THRESHOLD means we only enter here when
+    # n_pairs is large, and typically the number of unique non-missing keys
+    # is <= n_pairs.
+    for key, indices in lookup.items():
+        if key is _MISSING_SENTINEL:
+            continue
+        # Boolean compare for this key
+        match = (val_arr == key) & ~missing_mask
+        if match.any():
+            for idx in indices:
+                masks[idx] = match
+
+    return masks
+
+
+# Sentinel for missing values in the lookup dict
+_MISSING_SENTINEL = object()
+[/REPLACE]

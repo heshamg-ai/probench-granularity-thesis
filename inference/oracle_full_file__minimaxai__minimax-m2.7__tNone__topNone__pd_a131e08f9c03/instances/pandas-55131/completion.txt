@@ -1,0 +1,116 @@
+
+
+Looking at this optimization request, I need to analyze the `DataFrame.groupby.max` implementation for PyArrow-backed timestamp/duration dtypes.
+
+The key insight is that the current implementation in `ArrowExtensionArray._groupby_op` converts to a masked array (which doesn't support temporal types) before aggregation. We can optimize by using pyarrow's native `max`/`min` functions directly for temporal types.
+
+Let me create the optimization:
+[start of pandas/core/arrays/arrow/array.py]
+[SEARCH]
+    def _groupby_op(
+        self,
+        *,
+        how: str,
+        has_dropped_na: bool,
+        min_count: int,
+        ngroups: int,
+        ids: npt.NDArray[np.intp],
+        **kwargs,
+    ):
+        if isinstance(self.dtype, StringDtype):
+            return super()._groupby_op(
+                how=how,
+                has_dropped_na=has_dropped_na,
+                min_count=min_count,
+                ngroups=ngroups,
+                ids=ids,
+                **kwargs,
+            )
+
+        masked = self._to_masked()
+
+        result = masked._groupby_op(
+            how=how,
+            has_dropped_na=has_dropped_na,
+            min_count=min_count,
+            ngroups=ngroups,
+            ids=ids,
+            **kwargs,
+        )
+        if isinstance(result, np.ndarray):
+            return result
+        return type(self)._from_sequence(result, copy=False)
+[/SEARCH]
+[REPLACE]
+    def _groupby_op(
+        self,
+        *,
+        how: str,
+        has_dropped_na: bool,
+        min_count: int,
+        ngroups: int,
+        ids: npt.NDArray[np.intp],
+        **kwargs,
+    ):
+        if isinstance(self.dtype, StringDtype):
+            return super()._groupby_op(
+                how=how,
+                has_dropped_na=has_dropped_na,
+                min_count=min_count,
+                ngroups=ngroups,
+                ids=ids,
+                **kwargs,
+            )
+
+        pa_type = self._pa_array.type
+
+        # Fast path for temporal types using pyarrow's native max/min
+        # This avoids the overhead of converting to masked arrays
+        if how in ("max", "min") and pa.types.is_temporal(pa_type):
+            # Cast duration to int64 for proper comparison
+            if pa.types.is_duration(pa_type):
+                data = self._pa_array.cast(pa.int64())
+            else:
+                data = self._pa_array
+
+            result = np.empty(ngroups, dtype=object)
+            for i in range(ngroups):
+                mask = ids == i
+                if not mask.any():
+                    # Empty group
+                    result[i] = pa.scalar(None, type=data.type)
+                else:
+                    group_data = data.filter(mask)
+                    if how == "max":
+                        val = pc.max(group_data, skip_nulls=False)
+                        if pc.is_null(val).as_py():
+                            # All values in group are null, result is null
+                            val = None
+                        else:
+                            val = val.as_py()
+                    else:
+                        val = pc.min(group_data, skip_nulls=False)
+                        if pc.is_null(val).as_py():
+                            val = None
+                        else:
+                            val = val.as_py()
+                    result[i] = val
+
+            if isinstance(result, np.ndarray):
+                return result
+            return type(self)._from_sequence(result, copy=False)
+
+        masked = self._to_masked()
+
+        result = masked._groupby_op(
+            how=how,
+            has_dropped_na=has_dropped_na,
+            min_count=min_count,
+            ngroups=ngroups,
+            ids=ids,
+            **kwargs,
+        )
+        if isinstance(result, np.ndarray):
+            return result
+        return type(self)._from_sequence(result, copy=False)
+[/REPLACE]

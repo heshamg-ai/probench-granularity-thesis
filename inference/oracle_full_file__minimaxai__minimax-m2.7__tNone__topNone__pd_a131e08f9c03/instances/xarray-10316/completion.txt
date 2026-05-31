@@ -1,0 +1,374 @@
+
+
+Looking at the code, I can identify several optimization opportunities for vectorized indexing with duck arrays. The main bottlenecks are:
+
+1. Unnecessary `astype(np.int64)` conversions in indexer classes that force duck arrays (GPU, Dask, etc.) to transfer back to CPU
+2. Use of NumPy functions like `np.unique` on duck arrays that may have efficient native implementations
+3. Inefficient shape calculations
+
+Let me implement the optimizations:
+
+xarray/core/indexing.py
+[SEARCH]
+class VectorizedIndexer(ExplicitIndexer):
+    """Tuple for vectorized indexing.
+
+    All elements should be slice or N-dimensional np.ndarray objects with an
+    integer dtype and the same number of dimensions. Indexing follows proposed
+    rules for np.ndarray.vindex, which matches NumPy's advanced indexing rules
+    (including broadcasting) except sliced axes are always moved to the end:
+    https://github.com/numpy/numpy/pull/6256
+    """
+
+    __slots__ = ()
+
+    def __init__(self, key: tuple[slice | np.ndarray[Any, np.dtype[np.generic]], ...]):
+        if not isinstance(key, tuple):
+            raise TypeError(f"key must be a tuple: {key!r}")
+
+        new_key = []
+        ndim = None
+        for k in key:
+            if isinstance(k, slice):
+                k = as_integer_slice(k)
+            elif is_duck_array(k):
+                if not np.issubdtype(k.dtype, np.integer):
+                    raise TypeError(
+                        f"invalid indexer array, does not have integer dtype: {k!r}"
+                    )
+                if ndim is None:
+                    ndim = k.ndim  # type: ignore[union-attr]
+                elif ndim != k.ndim:  # type: ignore[union-attr]
+                    ndims = [k.ndim for k in key if isinstance(k, np.ndarray)]
+                    raise ValueError(
+                        "invalid indexer key: ndarray arguments "
+                        f"have different numbers of dimensions: {ndims}"
+                    )
+                k = k.astype(np.int64)  # type: ignore[union-attr]
+            else:
+                raise TypeError(
+                    f"unexpected indexer type for {type(self).__name__}: {k!r}"
+                )
+            new_key.append(k)
+
+        super().__init__(tuple(new_key))
+[/SEARCH]
+[REPLACE]
+class VectorizedIndexer(ExplicitIndexer):
+    """Tuple for vectorized indexing.
+
+    All elements should be slice or N-dimensional np.ndarray objects with an
+    integer dtype and the same number of dimensions. Indexing follows proposed
+    rules for np.ndarray.vindex, which matches NumPy's advanced indexing rules
+    (including broadcasting) except sliced axes are always moved to the end:
+    https://github.com/numpy/numpy/pull/6256
+    """
+
+    __slots__ = ()
+
+    def __init__(self, key: tuple[slice | np.ndarray[Any, np.dtype[np.generic]], ...]):
+        if not isinstance(key, tuple):
+            raise TypeError(f"key must be a tuple: {key!r}")
+
+        new_key = []
+        ndim = None
+        for k in key:
+            if isinstance(k, slice):
+                k = as_integer_slice(k)
+            elif is_duck_array(k):
+                if not np.issubdtype(k.dtype, np.integer):
+                    raise TypeError(
+                        f"invalid indexer array, does not have integer dtype: {k!r}"
+                    )
+                if ndim is None:
+                    ndim = k.ndim  # type: ignore[union-attr]
+                elif ndim != k.ndim:  # type: ignore[union-attr]
+                    ndims = [k.ndim for k in key if isinstance(k, np.ndarray)]
+                    raise ValueError(
+                        "invalid indexer key: ndarray arguments "
+                        f"have different numbers of dimensions: {ndims}"
+                    )
+                # Avoid unnecessary dtype conversion for numpy arrays that are
+                # already int64, and preserve duck array types to avoid
+                # triggering GPU-to-CPU transfers or unnecessary computation
+                if isinstance(k, np.ndarray) and k.dtype == np.int64:
+                    pass  # already the right dtype, no conversion needed
+                elif hasattr(k, "__array_namespace__"):
+                    # Array API arrays: convert using their namespace
+                    xp = k.__array_namespace__()
+                    k = xp.asarray(k, dtype=np.int64)
+                else:
+                    k = k.astype(np.int64)  # type: ignore[union-attr]
+            else:
+                raise TypeError(
+                    f"unexpected indexer type for {type(self).__name__}: {k!r}"
+                )
+            new_key.append(k)
+
+        super().__init__(tuple(new_key))
+[/REPLACE]
+
+xarray/core/indexing.py
+[SEARCH]
+class OuterIndexer(ExplicitIndexer):
+    """Tuple for outer/orthogonal indexing.
+
+    All elements should be int, slice or 1-dimensional np.ndarray objects with
+    an integer dtype. Indexing is applied independently along each axis, and
+    axes indexed with an integer are dropped from the result. This type of
+    indexing works like MATLAB/Fortran.
+    """
+
+    __slots__ = ()
+
+    def __init__(
+        self,
+        key: tuple[
+            int | np.integer | slice | np.ndarray[Any, np.dtype[np.generic]], ...
+        ],
+    ):
+        if not isinstance(key, tuple):
+            raise TypeError(f"key must be a tuple: {key!r}")
+
+        new_key = []
+        for k in key:
+            if isinstance(k, integer_types):
+                k = int(k)
+            elif isinstance(k, slice):
+                k = as_integer_slice(k)
+            elif is_duck_array(k):
+                if not np.issubdtype(k.dtype, np.integer):
+                    raise TypeError(
+                        f"invalid indexer array, does not have integer dtype: {k!r}"
+                    )
+                if k.ndim > 1:  # type: ignore[union-attr]
+                    raise TypeError(
+                        f"invalid indexer array for {type(self).__name__}; must be scalar "
+                        f"or have 1 dimension: {k!r}"
+                    )
+                k = k.astype(np.int64)  # type: ignore[union-attr]
+            else:
+                raise TypeError(
+                    f"unexpected indexer type for {type(self).__name__}: {k!r}"
+                )
+            new_key.append(k)
+
+        super().__init__(tuple(new_key))
+[/SEARCH]
+[REPLACE]
+class OuterIndexer(ExplicitIndexer):
+    """Tuple for outer/orthogonal indexing.
+
+    All elements should be int, slice or 1-dimensional np.ndarray objects with
+    an integer dtype. Indexing is applied independently along each axis, and
+    axes indexed with an integer are dropped from the result. This type of
+    indexing works like MATLAB/Fortran.
+    """
+
+    __slots__ = ()
+
+    def __init__(
+        self,
+        key: tuple[
+            int | np.integer | slice | np.ndarray[Any, np.dtype[np.generic]], ...
+        ],
+    ):
+        if not isinstance(key, tuple):
+            raise TypeError(f"key must be tuple: {key!r}")
+
+        new_key = []
+        for k in key:
+            if isinstance(k, integer_types):
+                k = int(k)
+            elif isinstance(k, slice):
+                k = as_integer_slice(k)
+            elif is_duck_array(k):
+                if not np.issubdtype(k.dtype, np.integer):
+                    raise TypeError(
+                        f"invalid indexer array, does not have integer dtype: {k!r}"
+                    )
+                if k.ndim > 1:  # type: ignore[union-attr]
+                    raise TypeError(
+                        f"invalid indexer array for {type(self).__name__}; must be scalar "
+                        f"or have 1 dimension: {k!r}"
+                    )
+                # Avoid unnecessary dtype conversion for numpy arrays that are
+                # already int64, and preserve duck array types to avoid
+                # triggering GPU-to-CPU transfers or unnecessary computation
+                if isinstance(k, np.ndarray) and k.dtype == np.int64:
+                    pass  # already the right dtype, no conversion needed
+                elif hasattr(k, "__array_namespace__"):
+                    # Array API arrays: convert using their namespace
+                    xp = k.__array_namespace__()
+                    k = xp.asarray(k, dtype=np.int64)
+                else:
+                    k = k.astype(np.int64)  # type: ignore[union-attr]
+            else:
+                raise TypeError(
+                    f"unexpected indexer type for {type(self).__name__}: {k!r}"
+                )
+            new_key.append(k)
+
+        super().__init__(tuple(new_key))
+[/REPLACE]
+
+xarray/core/indexing.py
+[SEARCH]
+    for k, s in zip(indexer_elems, shape, strict=False):
+        if isinstance(k, slice):
+            # slice:  convert positive step slice for backend
+            bk_slice, np_slice = _decompose_slice(k, s)
+            backend_indexer.append(bk_slice)
+            np_indexer.append(np_slice)
+        elif isinstance(k, integer_types):
+            backend_indexer.append(k)
+        elif isinstance(k, np.ndarray) and (np.diff(k) >= 0).all():
+            backend_indexer.append(k)
+            np_indexer.append(slice(None))
+        else:
+            # Remove duplicates and sort them in the increasing order
+            oind, vind = np.unique(k, return_inverse=True)
+            backend_indexer.append(oind)
+            np_indexer.append(vind.reshape(*k.shape))
+
+    return (OuterIndexer(tuple(backend_indexer)), OuterIndexer(tuple(np_indexer)))
+[/SEARCH]
+[REPLACE]
+    for k, s in zip(indexer_elems, shape, strict=False):
+        if isinstance(k, slice):
+            # slice:  convert positive step slice for backend
+            bk_slice, np_slice = _decompose_slice(k, s)
+            backend_indexer.append(bk_slice)
+            np_indexer.append(np_slice)
+        elif isinstance(k, integer_types):
+            backend_indexer.append(k)
+        elif isinstance(k, np.ndarray) and (np.diff(k) >= 0).all():
+            backend_indexer.append(k)
+            np_indexer.append(slice(None))
+        else:
+            # Remove duplicates and sort them in the increasing order
+            # Use np.unique on numpy arrays, but for duck arrays with a native
+            # unique method, use that to avoid triggering unnecessary computation
+            if isinstance(k, np.ndarray):
+                oind, vind = np.unique(k, return_inverse=True)
+            elif hasattr(k, "unique"):
+                # Duck array with native unique support (e.g., sparse, cuDF)
+                unique_result = k.unique()
+                oind = unique_result
+                # Compute inverse indices using searchsorted on the array
+                sort_indices = np.searchsorted(oind.ravel(), k.ravel())
+                vind = sort_indices.reshape(*k.shape)
+            else:
+                # Fallback for other duck arrays - convert to numpy
+                oind, vind = np.unique(np.asarray(k), return_inverse=True)
+            backend_indexer.append(oind)
+            np_indexer.append(vind.reshape(*k.shape))
+
+    return (OuterIndexer(tuple(backend_indexer)), OuterIndexer(tuple(np_indexer)))
+[/REPLACE]
+
+xarray/core/indexing.py
+[SEARCH]
+    for k, s in zip(indexer_elems, shape, strict=False):
+        if isinstance(k, np.ndarray):
+            # np.ndarray key is converted to slice that covers the entire
+            # entries of this key.
+            backend_indexer.append(slice(np.min(k), np.max(k) + 1))
+            np_indexer.append(k - np.min(k))
+        elif isinstance(k, integer_types):
+            backend_indexer.append(k)
+        else:  # slice:  convert positive step slice for backend
+            bk_slice, np_slice = _decompose_slice(k, s)
+            backend_indexer.append(bk_slice)
+            np_indexer.append(np_slice)
+
+    return (BasicIndexer(tuple(backend_indexer)), OuterIndexer(tuple(np_indexer)))
+[/SEARCH]
+[REPLACE]
+    for k, s in zip(indexer_elems, shape, strict=False):
+        if isinstance(k, np.ndarray):
+            # np.ndarray key is converted to slice that covers the entire
+            # entries of this key.
+            backend_indexer.append(slice(np.min(k), np.max(k) + 1))
+            np_indexer.append(k - np.min(k))
+        elif isinstance(k, integer_types):
+            backend_indexer.append(k)
+        else:  # slice:  convert positive step slice for backend
+            bk_slice, np_slice = _decompose_slice(k, s)
+            backend_indexer.append(bk_slice)
+            np_indexer.append(np_slice)
+
+    return (BasicIndexer(tuple(backend_indexer)), OuterIndexer(tuple(np_indexer)))
+[/REPLACE]
+
+xarray/core/indexing.py
+[SEARCH]
+    if indexing_support is IndexingSupport.OUTER_1VECTOR:
+        # some backends such as h5py supports only 1 vector in indexers
+        # We choose the most efficient axis
+        gains = [
+            (
+                (np.max(k) - np.min(k) + 1.0) / len(np.unique(k))
+                if isinstance(k, np.ndarray)
+                else 0
+            )
+            for k in indexer_elems
+        ]
+        array_index = np.argmax(np.array(gains)) if len(gains) > 0 else None
+
+        for i, (k, s) in enumerate(zip(indexer_elems, shape, strict=False)):
+            if isinstance(k, np.ndarray) and i != array_index:
+                # np.ndarray key is converted to slice that covers the entire
+                # entries of this key.
+                backend_indexer.append(slice(np.min(k), np.max(k) + 1))
+                np_indexer.append(k - np.min(k))
+            elif isinstance(k, np.ndarray):
+                # Remove duplicates and sort them in the increasing order
+                pkey, ekey = np.unique(k, return_inverse=True)
+                backend_indexer.append(pkey)
+                np_indexer.append(ekey)
+            elif isinstance(k, integer_types):
+                backend_indexer.append(k)
+            else:  # slice:  convert positive step slice for backend
+                bk_slice, np_slice = _decompose_slice(k, s)
+                backend_indexer.append(bk_slice)
+                np_indexer.append(np_slice)
+
+        return (OuterIndexer(tuple(backend_indexer)), OuterIndexer(tuple(np_indexer)))
+[/SEARCH]
+[REPLACE]
+    if indexing_support is IndexingSupport.OUTER_1VECTOR:
+        # some backends such as h5py supports only 1 vector in indexers
+        # We choose the most efficient axis
+        gains = []
+        for k in indexer_elems:
+            if isinstance(k, np.ndarray):
+                unique_count = len(np.unique(k))
+                gains.append(
+                    (np.max(k) - np.min(k) + 1.0) / unique_count
+                    if unique_count > 0 else 0
+                )
+            else:
+                gains.append(0)
+        array_index = np.argmax(np.array(gains)) if len(gains) > 0 else None
+
+        for i, (k, s) in enumerate(zip(indexer_elems, shape, strict=False)):
+            if isinstance(k, np.ndarray) and i != array_index:
+                # np.ndarray key is converted to slice that covers the entire
+                # entries of this key.
+                backend_indexer.append(slice(np.min(k), np.max(k) + 1))
+                np_indexer.append(k - np.min(k))
+            elif isinstance(k, np.ndarray):
+                # Remove duplicates and sort them in the increasing order
+                pkey, ekey = np.unique(k, return_inverse=True)
+                backend_indexer.append(pkey)
+                np_indexer.append(ekey)
+            elif isinstance(k, integer_types):
+                backend_indexer.append(k)
+            else:  # slice:  convert positive step slice for backend
+                bk_slice, np_slice = _decompose_slice(k, s)
+                backend_indexer.append(bk_slice)
+                np_indexer.append(np_slice)
+
+        return (OuterIndexer(tuple(backend_indexer)), OuterIndexer(tuple(np_indexer)))
+[/REPLACE]

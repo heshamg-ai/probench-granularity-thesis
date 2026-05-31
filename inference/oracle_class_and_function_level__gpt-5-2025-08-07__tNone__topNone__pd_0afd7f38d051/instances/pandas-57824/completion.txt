@@ -1,0 +1,23 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+
+    # --------------------------------------------------------------------
+[/SEARCH]
+[REPLACE]
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+
+    def round(self, decimals: int = 0) -> Self | Index:
+        if decimals >= 0:
+            # Rounding non-negative decimals on integers is a no-op; preserve RangeIndex
+            return self._view()
+        # Delegate to base implementation, then try to preserve RangeIndex if possible
+        result = super().round(decimals)
+        if result.dtype.kind == "i":
+            return self._shallow_copy(result._values, name=result.name)
+        return result
+
+    # --------------------------------------------------------------------
+[/REPLACE]

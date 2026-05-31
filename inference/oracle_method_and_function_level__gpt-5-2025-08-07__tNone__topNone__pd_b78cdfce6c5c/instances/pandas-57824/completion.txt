@@ -1,0 +1,53 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    _values: np.ndarray
+[/SEARCH]
+[REPLACE]
+    _values: np.ndarray
+
+    def round(self, decimals: int = 0):
+        """
+        Round each value in the Index to the given number of decimals.
+
+        Preserves RangeIndex when the rounded result remains an arithmetic
+        progression; otherwise falls back to a regular Index.
+        """
+        if decimals >= 0:
+            # Rounding non-negative decimals leaves integer values unchanged.
+            return self
+
+        # Negative decimals: round to multiples of 10**k
+        k = -decimals
+        factor = 10 ** k
+
+        step = self.step
+        n = len(self)
+
+        # Fast paths where rounded sequence remains a RangeIndex with same step
+        if step % factor == 0:
+            resid = self.start % factor
+
+            if resid == 0:
+                # Already aligned to factor -> identity
+                return self
+
+            m = abs(step) // factor
+
+            # Tie case: residual exactly half the factor and factor even
+            if factor % 2 == 0 and resid == factor // 2:
+                if m % 2 == 0:
+                    # Parity of the tie destination is constant across steps -> linear
+                    start_r = int(round(self.start, decimals))
+                    stop_r = start_r + n * step
+                    return type(self)(start_r, stop_r, step, name=self.name)
+                # Else, ties flip parity across steps -> not a RangeIndex
+            else:
+                # Consistent rounding (always up or down) -> arithmetic progression
+                start_r = int(round(self.start, decimals))
+                stop_r = start_r + n * step
+                return type(self)(start_r, stop_r, step, name=self.name)
+
+        # Fallback: materialize values and round
+        result = np.round(self._values, decimals)
+        return Index(result, dtype=self.dtype, name=self.name)
+[/REPLACE]

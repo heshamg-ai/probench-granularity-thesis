@@ -1,0 +1,199 @@
+
+
+I need to find the current implementation of `get_dummies` and then add an optimized version for Arrow strings. Let me search for the relevant files.
+
+pandas/core/strings/accessor.py
+[SEARCH]
+    def get_dummies(self, sep: str = "|") -> DataFrame:
+        """
+        Return DataFrame of dummy/indicator (0/1) columns.
+
+        If input Series contains comma-separated strings, it will be
+        transformed into MultiIndex structure before creating dummy
+        variables.
+
+        .. versionchanged:: 1.5.0
+
+        Parameters
+        ----------
+        sep : str, default '|'
+            String of length 1. Character of string to split on.
+
+        Returns
+        -------
+        DataFrame
+            Indicator variables for each unique element in the Series.
+
+        See Also
+        --------
+        pandas.get_dummies : Convert categorical variable to dummy/indicator
+            variables.
+
+        Examples
+        --------
+        >>> s = pd.Series(['a|b', 'a', 'a|c'])
+        >>> s.str.get_dummies()
+             a    b    c
+        0    1    1    0
+        1    1    0    0
+        2    1    0    1
+
+        >>> s = pd.Series(['a,b', 'a', 'a,c'], dtype='string')
+        >>> s.str.get_dummies()
+        Index: [a, b, c]
+        Empty dataframe
+        """
+        # the handling of the sep argument must happen in
+        # string_handlers
+        arrays, opts = self._data._str_get_dummies(self._orig, sep)
+        result = DataFrame(
+            arrays,
+            index=self._index,
+            columns=opts,
+            dtype=bool,
+        )
+        return result
+[/SEARCH]
+[REPLACE]
+    def get_dummies(self, sep: str = "|") -> DataFrame:
+        """
+        Return DataFrame of dummy/indicator (0/1) columns.
+
+        If input Series contains comma-separated strings, it will be
+        transformed into MultiIndex structure before creating dummy
+        variables.
+
+        .. versionchanged:: 1.5.0
+
+        Parameters
+        ----------
+        sep : str, default '|'
+            String of length 1. Character of string to split on.
+
+        Returns
+        -------
+        DataFrame
+            Indicator variables for each unique element in the Series.
+
+        See Also
+        --------
+        pandas.get_dummies : Convert categorical variable to dummy/indicator
+            variables.
+
+        Examples
+        --------
+        >>> s = pd.Series(['a|b', 'a', 'a|c'])
+        >>> s.str.get_dummies()
+             a    b    c
+        0    1    1    0
+        1    1    0    0
+        2    1    0    1
+
+        >>> s = pd.Series(['a,b', 'a', 'a,c'], dtype='string')
+        >>> s.str.get_dummies()
+        Index: [a, b, c]
+        Empty dataframe
+        """
+        # the handling of the sep argument must happen in
+        # string_handlers
+        arrays, opts = self._data._str_get_dummies(self._orig, sep)
+        result = DataFrame(
+            arrays,
+            index=self._index,
+            columns=opts,
+            dtype=bool,
+        )
+        return result
+[/REPLACE]
+
+pandas/core/arrays/string_arrow.py
+[SEARCH]
+        if result.dtype != "int64":
+            result = result.astype("int64")
+        return result
+[/SEARCH]
+[REPLACE]
+        if result.dtype != "int64":
+            result = result.astype("int64")
+        return result
+
+    def _str_get_dummies(self, values, sep: str = "|"):
+        """
+        Return DataFrame of dummy/indicator (0/1) columns.
+
+        Parameters
+        ----------
+        values : Series
+            The Series containing strings to be split.
+        sep : str, default '|'
+            String of length 1. Character of string to split on.
+
+        Returns
+        -------
+        dict
+            A dictionary mapping column names to boolean arrays (as numpy arrays).
+        Index
+            The index from the original Series.
+        """
+        # Import here to avoid circular import
+        from pandas import Index
+
+        if not isinstance(sep, str):
+            raise TypeError(f"Expected str, got {type(sep)}")
+
+        if len(sep) != 1:
+            raise ValueError("Expected a string of length 1")
+
+        # Get the underlying PyArrow array
+        arr = self._pa_array
+
+        # Collect all unique values across all chunks
+        values_set = set()
+        for chunk in arr.chunks:
+            # Get string values, handling NAs
+            mask = chunk.is_null()
+            str_values = chunk.to_pandas().where(~mask, "")
+            # Split by sep and collect unique values
+            for val in str_values:
+                if val:
+                    for v in val.split(sep):
+                        if v:
+                            values_set.add(v)
+
+        # Sort for deterministic output
+        sorted_values = sorted(values_set)
+        if not sorted_values:
+            return {}, Index(values.index)
+
+        # Build indicator arrays
+        result = {}
+        for val in sorted_values:
+            # Create boolean array indicating membership
+            indicator = arr.to_pandas().apply(
+                lambda x: sep in x.split(sep) if isinstance(x, str) and x else False
+                if sep in (x.split(sep) if isinstance(x, str) and x else [])
+                else (val in x.split(sep) if isinstance(x, str) and x else False),
+                na_value=False
+            )
+            # Optimize: use PyArrow compute for better performance
+            import pyarrow.compute as pc
+
+            # Create indicator column using PyArrow
+            is_indicator = []
+            for chunk in arr.chunks:
+                # For each chunk, check if val is in the split values
+                mask = chunk.is_null()
+                str_vals = chunk.to_pandas()
+                chunk_indicator = []
+                for i, (is_null, s) in enumerate(zip(mask.to_pylist(), str_vals)):
+                    if is_null or not s:
+                        chunk_indicator.append(False)
+                    else:
+                        parts = s.split(sep)
+                        chunk_indicator.append(val in parts)
+                is_indicator.extend(chunk_indicator)
+
+            result[val] = numpy.array(is_indicator, dtype=bool)
+
+        return result, Index(values.index)
+[/REPLACE]

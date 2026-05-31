@@ -1,0 +1,58 @@
+{
+  "id": 55,
+  "scenario_id": "pandas-56508",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 56508,
+  "baseline_sha": "1387c4fa09ca7bb13a7f1e13ecd171aebe8fef46",
+  "reference_sha": "8044c67e70b0b41d579e4312d33b6f9b5974237f",
+  "task": "Optimize pandas.util.hash_array for nullable extension dtypes",
+  "entry_point": "pandas.util.hash_array",
+  "whats_new": "The hash values of nullable extension dtypes changed to improve the performance of the hashing operation",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-56508:baseline",
+      "digest": "sha256:39dbd77d7e1c7ff4492d128d40093c64ec0195173e13bbccef0dfb1e760fe1c4"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-56508:reference",
+      "digest": "sha256:cea91aaca893f0f930445ae38c0c9103a83f3904a6854aad8fb78e890ab16bd2"
+    }
+  },
+  "params": [
+    {
+      "name": "Array Size",
+      "short_indicator": "N",
+      "explanation": "Size of the array",
+      "values": [
+        "10000",
+        "100000"
+      ]
+    },
+    {
+      "name": "NA Percentage",
+      "short_indicator": "NAP",
+      "explanation": "Percentage of NA/masked values",
+      "values": [
+        "0.1",
+        "0.5",
+        "0.9"
+      ]
+    },
+    {
+      "name": "Value Type",
+      "short_indicator": "VT",
+      "explanation": "Type of values in array (must be masked array types: Int64, Float64, boolean)",
+      "values": [
+        "int",
+        "float",
+        "boolean"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/extension/test_masked.py::TestMaskedArrays::test_hash_pandas_object",
+    "pandas/tests/extension/test_masked.py::TestMaskedArrays::test_hash_pandas_object_works"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.util.hash_array for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize pandas.util.hash_array for nullable extension dtypes\nOptimization function: pandas.util.hash_array\n\n\n[start of pandas/core/arrays/base.py]\n### Relevant context\n#### Class `pandas.core.arrays.base.ExtensionArray`\n**Class Signature**\n```python\nclass ExtensionArray:\n```\n**Class Attributes**\n```python\n    _typ = \"extension\"\n    __pandas_priority__ = 1000\n    _extension_array_shared_docs[\n        \"repeat\"\n    ] = \"\"\"\n        Repeat elements of a %(klass)s.\n\n        Returns a new %(klass)s where each element of the current %(klass)s\n        is repeated consecutively a given number of times.\n\n        Parameters\n        ----------\n        repeats : int or array of ints\n            The number of repetitions for each element. This should be a\n            non-negative integer. Repeating 0 times will return an empty\n            %(klass)s.\n        axis : None\n            Must be ``None``. Has no effect but is accepted for compatibility\n            with numpy.\n\n        Returns\n        -------\n        %(klass)s\n            Newly created %(klass)s with repeated elements.\n\n        See Also\n        --------\n        Series.repeat : Equivalent function for Series.\n        Index.repeat : Equivalent function for Index.\n        numpy.repeat : Similar method for :class:`numpy.ndarray`.\n        ExtensionArray.take : Take arbitrary positions.\n\n        Examples\n        --------\n        >>> cat = pd.Categorical(['a', 'b', 'c'])\n        >>> cat\n        ['a', 'b', 'c']\n        Categories (3, object): ['a', 'b', 'c']\n        >>> cat.repeat(2)\n        ['a', 'a', 'b', 'b', 'c', 'c']\n        Categories (3, object): ['a', 'b', 'c']\n        >>> cat.repeat([1, 2, 3])\n        ['a', 'b', 'b', 'c', 'c', 'c']\n        Categories (3, object): ['a', 'b', 'c']\n        \"\"\"\n    __hash__: ClassVar[None]  # type: ignore[assignment]\n```\n##### Method `pandas.core.arrays.base.ExtensionArray._hash_pandas_object`\n```python\ndef _hash_pandas_object(\n        self, *, encoding: str, hash_key: str, categorize: bool\n    ) -> npt.NDArray[np.uint64]:\n        \"\"\"\n        Hook for hash_pandas_object.\n\n        Default is to use the values returned by _values_for_factorize.\n\n        Parameters\n        ----------\n        encoding : str\n            Encoding for data & key when strings.\n        hash_key : str\n            Hash_key for string key to encode.\n        categorize : bool\n            Whether to first categorize object arrays before hashing. This is more\n            efficient when the array contains duplicate values.\n\n        Returns\n        -------\n        np.ndarray[uint64]\n\n        Examples\n        --------\n        >>> pd.array([1, 2])._hash_pandas_object(encoding='utf-8',\n        ...                                      hash_key=\"1000000000000000\",\n        ...                                      categorize=False\n        ...                                      )\n        array([11381023671546835630,  4641644667904626417], dtype=uint64)\n        \"\"\"\n        from pandas.core.util.hashing import hash_array\n\n        values, _ = self._values_for_factorize()\n        return hash_array(\n            values, encoding=encoding, hash_key=hash_key, categorize=categorize\n        )\n```\n[end of pandas/core/arrays/base.py]\n\n\n[start of pandas/core/arrays/masked.py]\n### Relevant context\n#### Class `pandas.core.arrays.masked.BaseMaskedArray`\n**Class Signature**\n```python\nclass BaseMaskedArray(OpsMixin, ExtensionArray):\n```\n**Class Attributes**\n```python\n    _internal_fill_value: Scalar\n    _data: np.ndarray\n    _mask: npt.NDArray[np.bool_]\n    _truthy_value = Scalar  # bool(_truthy_value) = True\n    _falsey_value = Scalar  # bool(_falsey_value) = False\n    __array_priority__ = 1000  # higher than ndarray so ops dispatch to us\n    _HANDLED_TYPES: tuple[type, ...]\n    _logical_method = _arith_method\n```\n**Class __init__ method**\n```python\n    def __init__(\n        self, values: np.ndarray, mask: npt.NDArray[np.bool_], copy: bool = False\n    ) -> None:\n        # values is supposed to already be validated in the subclass\n        if not (isinstance(mask, np.ndarray) and mask.dtype == np.bool_):\n            raise TypeError(\n                \"mask should be boolean numpy array. Use \"\n                \"the 'pd.array' function instead\"\n            )\n        if values.shape != mask.shape:\n            raise ValueError(\"values.shape must match mask.shape\")\n\n        if copy:\n            values = values.copy()\n            mask = mask.copy()\n\n        self._data = values\n        self._mask = mask\n```\n**Added methods (baseline missing):**\n- `pandas.core.arrays.masked.BaseMaskedArray._hash_pandas_object`\n[end of pandas/core/arrays/masked.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

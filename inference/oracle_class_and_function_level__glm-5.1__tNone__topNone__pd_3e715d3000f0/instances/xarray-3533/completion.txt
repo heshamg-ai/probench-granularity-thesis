@@ -1,0 +1,74 @@
+xarray/core/dataarray.py
+[SEARCH]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/SEARCH]
+[REPLACE]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+
+        # Fast path for simple integer indexing on small arrays without drop,
+        # avoiding the overhead of creating a temporary Dataset.
+        if not drop and len(indexers) <= self.ndim:
+            # Check if all indexers are simple integers
+            _all_ints = True
+            for v in indexers.values():
+                if not isinstance(v, int):
+                    _all_ints = False
+                    break
+
+            if _all_ints:
+                # Index the variable directly
+                variable = self._variable.isel(indexers)
+
+                # Index the coordinates
+                coords = {}
+                for name, coord in self._coords.items():
+                    coord_indexers = {
+                        k: v for k, v in indexers.items() if k in coord.dims
+                    }
+                    if coord_indexers:
+                        coords[name] = coord.isel(indexers=coord_indexers)
+                    else:
+                        coords[name] = coord
+
+                # Handle indexes: drop indexes for dimensions that were
+                # eliminated, keep (but re-index) those that remain.
+                indexes = (
+                    {k: v for k, v in self._indexes.items() if k in coords}
+                    if self._indexes is not None
+                    else None
+                )
+                return self._replace(variable, coords, indexes=indexes)
+
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/REPLACE]

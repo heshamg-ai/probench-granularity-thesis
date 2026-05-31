@@ -1,0 +1,114 @@
+
+
+Looking at the `quantile` method, I can identify several optimization opportunities:
+
+1. **Avoid unnecessary memory allocation** - `result_mask` is created for all blocks even when not needed (only needed for BaseMaskedArray)
+2. **Reduce function call overhead** - Inline small functions and avoid repeated type checks
+3. **Optimize array operations** - Avoid unnecessary copies and allocations
+4. **Chunk processing for large data** - Process in batches to reduce peak memory
+
+Let me implement these optimizations:
+
+pandas/core/groupby/groupby.py
+[SEARCH]
+        def pre_processor(vals: ArrayLike) -> tuple[np.ndarray, DtypeObj | None]:
+            if is_object_dtype(vals.dtype):
+                raise TypeError(
+                    "'quantile' cannot be performed against 'object' dtypes!"
+                )
+
+            inference: DtypeObj | None = None
+            if isinstance(vals, BaseMaskedArray) and is_numeric_dtype(vals.dtype):
+                out = vals.to_numpy(dtype=float, na_value=np.nan)
+                inference = vals.dtype
+            elif is_integer_dtype(vals.dtype):
+                if isinstance(vals, ExtensionArray):
+                    out = vals.to_numpy(dtype=float, na_value=np.nan)
+                else:
+                    out = vals
+                inference = np.dtype(np.int64)
+            elif is_bool_dtype(vals.dtype) and isinstance(vals, ExtensionArray):
+                out = vals.to_numpy(dtype=float, na_value=np.nan)
+            elif is_bool_dtype(vals.dtype):
+                # GH#51424 deprecate to match Series/DataFrame behavior
+                warnings.warn(
+                    f"Allowing bool dtype in {type(self).__name__}.quantile is "
+                    "deprecated and will raise in a future version, matching "
+                    "the Series/DataFrame behavior. Cast to uint8 dtype before "
+                    "calling quantile instead.",
+                    FutureWarning,
+                    stacklevel=find_stack_level(),
+                )
+                out = np.asarray(vals)
+            elif needs_i8_conversion(vals.dtype):
+                inference = vals.dtype
+                # In this case we need to delay the casting until after the
+                #  np.lexsort below.
+                # error: Incompatible return value type (got
+                # "Tuple[Union[ExtensionArray, ndarray[Any, Any]], Union[Any,
+                # ExtensionDtype]]", expected "Tuple[ndarray[Any, Any],
+                # Optional[Union[dtype[Any], ExtensionDtype]]]")
+                return vals, inference  # type: ignore[return-value]
+            elif isinstance(vals, ExtensionArray) and is_float_dtype(vals.dtype):
+                inference = np.dtype(np.float64)
+                out = vals.to_numpy(dtype=float, na_value=np.nan)
+            else:
+                out = np.asarray(vals)
+
+            return out, inference
+[/SEARCH]
+[REPLACE]
+        def pre_processor(vals: ArrayLike) -> tuple[np.ndarray, DtypeObj | None]:
+            if is_object_dtype(vals.dtype):
+                raise TypeError(
+                    "'quantile' cannot be performed against 'object' dtypes!"
+                )
+
+            inference: DtypeObj | None = None
+            dtype = vals.dtype
+
+            # Fast path for common numeric types
+            if not isinstance(vals, ExtensionArray):
+                if is_numeric_dtype(dtype):
+                    if is_integer_dtype(dtype):
+                        inference = np.dtype(np.int64)
+                    # For float/int, return as-is without conversion
+                    return np.asarray(vals), inference
+                elif needs_i8_conversion(dtype):
+                    inference = dtype
+                    return vals, inference  # type: ignore[return-value]
+
+            # ExtensionArray handling
+            if isinstance(vals, BaseMaskedArray) and is_numeric_dtype(dtype):
+                out = vals.to_numpy(dtype=float, na_value=np.nan)
+                inference = dtype
+            elif is_integer_dtype(dtype):
+                if isinstance(vals, ExtensionArray):
+                    out = vals.to_numpy(dtype=float, na_value=np.nan)
+                else:
+                    out = vals
+                inference = np.dtype(np.int64)
+            elif is_bool_dtype(dtype) and isinstance(vals, ExtensionArray):
+                out = vals.to_numpy(dtype=float, na_value=np.nan)
+            elif is_bool_dtype(dtype):
+                # GH#51424 deprecate to match Series/DataFrame behavior
+                warnings.warn(
+                    f"Allowing bool dtype in {type(self).__name__}.quantile is "
+                    "deprecated and will raise in a future version, matching "
+                    "the Series/DataFrame behavior. Cast to uint8 dtype before "
+                    "calling quantile instead.",
+                    FutureWarning,
+                    stacklevel=find_stack_level(),
+                )
+                out = np.asarray(vals)
+            elif needs_i8_conversion(dtype):
+                inference = dtype
+                return vals, inference  # type: ignore[return-value]
+            elif isinstance(vals, ExtensionArray) and is_float_dtype(dtype):
+                inference = np.dtype(np.float64)
+                out = vals.to_numpy(dtype=float, na_value=np.nan)
+            else:
+                out = np.asarray(vals)
+
+            return out, inference
+[/REPLACE]

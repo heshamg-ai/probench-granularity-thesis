@@ -1,0 +1,29 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        if limit is not None:
+            return super().fillna(value=value, method=method, limit=limit)
+
+        if method is not None:
+            fallback_performancewarning()
+            return super().fillna(value=value, method=method, limit=limit)
+[/SEARCH]
+[REPLACE]
+        # Fast-path for forward/backward fill using pyarrow kernels when no limit
+        if method in ("pad", "backfill") and limit is None:
+            try:
+                if method == "pad":
+                    return type(self)(pc.fill_null_forward(self._pa_array))
+                else:
+                    return type(self)(pc.fill_null_backward(self._pa_array))
+            except pa.ArrowNotImplementedError:
+                # fall back to pandas implementation with performance warning
+                fallback_performancewarning()
+                return super().fillna(value=value, method=method, limit=limit)
+
+        if limit is not None:
+            return super().fillna(value=value, method=method, limit=limit)
+
+        if method is not None:
+            fallback_performancewarning()
+            return super().fillna(value=value, method=method, limit=limit)
+[/REPLACE]

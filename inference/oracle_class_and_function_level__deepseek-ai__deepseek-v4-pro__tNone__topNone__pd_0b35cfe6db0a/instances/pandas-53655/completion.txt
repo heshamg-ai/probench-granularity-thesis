@@ -1,0 +1,47 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+        result_data = []
+        for lst in split.to_pylist():
+            if lst is None:
+                result_data.append([False] * len(uniques_sorted))
+            else:
+                res = pc.is_in(uniques_sorted, pa.array(set(lst)))
+                result_data.append(res.to_pylist())
+        result = type(self)(pa.array(result_data))
+        return result, uniques_sorted.to_pylist()
+[/SEARCH]
+[REPLACE]
+    def _str_get_dummies(self, sep: str = "|"):
+        split = pc.split_pattern(self._pa_array, sep).combine_chunks()
+        uniques = split.flatten().unique()
+        uniques_sorted = uniques.take(pa.compute.array_sort_indices(uniques))
+
+        # Build a boolean column per unique token in a single vectorized pass
+        n_rows = len(split)
+        n_cols = len(uniques_sorted)
+        if n_rows == 0 or n_cols == 0:
+            result = type(self)(pa.array([], type=pa.list_(pa.bool_())))
+            return result, uniques_sorted.to_pylist()
+
+        # Extract offsets and values from the list array to build a flat
+        # indicator for each (row, token) pair.
+        offsets = split.offsets.to_numpy()
+        values = split.values
+        flat_indices = np.arange(n_rows).repeat(np.diff(offsets))
+        flat_tokens = values.to_pylist()
+
+        # Map each token to its column index
+        token_to_col = {token: i for i, token in enumerate(uniques_sorted.to_pylist())}
+        col_indices = np.array([token_to_col[tok] for tok in flat_tokens], dtype=np.intp)
+
+        # Allocate result matrix and set True where a token appears
+        result_data = np.zeros((n_rows, n_cols), dtype=bool)
+        result_data[flat_indices, col_indices] = True
+
+        result = type(self)(pa.array(list(result_data), type=pa.list_(pa.bool_())))
+        return result, uniques_sorted.to_pylist()
+[/REPLACE]

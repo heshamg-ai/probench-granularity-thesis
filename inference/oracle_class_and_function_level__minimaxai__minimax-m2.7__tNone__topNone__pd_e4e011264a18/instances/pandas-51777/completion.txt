@@ -1,0 +1,144 @@
+
+
+Looking at the `combine_first` method, the current implementation:
+1. Creates a union index
+2. Reindexes both Series to that union
+3. Uses `where` to fill NaN values
+
+For misaligned Series with partial overlap, the expensive reindexing operations can be avoided by directly patching the smaller Series into a copy of the larger one at matching indices.
+
+Let me create the optimized implementation:
+[SEARCH]
+    def combine_first(self, other) -> Series:
+        """
+        Update null elements with value in the same location in 'other'.
+
+        Combine two Series objects by filling null values in one Series with
+        non-null values from the other Series. Result index will be the union
+        of the two indexes.
+
+        Parameters
+        ----------
+        other : Series
+            The value(s) to be used for filling null values.
+
+        Returns
+        -------
+        Series
+            The result of combining the provided Series with the other object.
+
+        See Also
+        --------
+        Series.combine : Perform element-wise operation on two Series
+            using a given function.
+
+        Examples
+        --------
+        >>> s1 = pd.Series([1, np.nan])
+        >>> s2 = pd.Series([3, 4, 5])
+        >>> s1.combine_first(s2)
+        0    1.0
+        1    4.0
+        2    5.0
+        dtype: float64
+
+        Null values still persist if the location of that null value
+        does not exist in `other`
+
+        >>> s1 = pd.Series({'falcon': np.nan, 'eagle': 160.0})
+        >>> s2 = pd.Series({'eagle': 200.0, 'duck': 30.0})
+        >>> s1.combine_first(s2)
+        duck       30.0
+        eagle     160.0
+        falcon      NaN
+        dtype: float64
+        """
+        new_index = self.index.union(other.index)
+        this = self.reindex(new_index, copy=False)
+        other = other.reindex(new_index, copy=False)
+        if this.dtype.kind == "M" and other.dtype.kind != "M":
+            other = to_datetime(other)
+
+        return this.where(notna(this), other)
+[/SEARCH]
+[REPLACE]
+    def combine_first(self, other) -> Series:
+        """
+        Update null elements with value in the same location in 'other'.
+
+        Combine two Series objects by filling null values in one Series with
+        non-null values from the other Series. Result index will be the union
+        of the two indexes.
+
+        Parameters
+        ----------
+        other : Series
+            The value(s) to be used for filling null values.
+
+        Returns
+        -------
+        Series
+            The result of combining the provided Series with the other object.
+
+        See Also
+        --------
+        Series.combine : Perform element-wise operation on two Series
+            using a given function.
+
+        Examples
+        --------
+        >>> s1 = pd.Series([1, np.nan])
+        >>> s2 = pd.Series([3, 4, 5])
+        >>> s1.combine_first(s2)
+        0    1.0
+        1    4.0
+        2    5.0
+        dtype: float64
+
+        Null values still persist if the location of that null value
+        does not exist in `other`
+
+        >>> s1 = pd.Series({'falcon': np.nan, 'eagle': 160.0})
+        >>> s2 = pd.Series({'eagle': 200.0, 'duck': 30.0})
+        >>> s1.combine_first(s2)
+        duck       30.0
+        eagle     160.0
+        falcon      NaN
+        dtype: float64
+        """
+        # Fast path: if indexes are identical, avoid reindexing overhead
+        if self.index.equals(other.index):
+            if self.dtype.kind == "M" and other.dtype.kind != "M":
+                other = to_datetime(other)
+            return self.mask(notna(self), other)
+
+        # Determine which Series is smaller - iterate over its non-NA values
+        # and patch them into a copy of the larger Series
+        if len(self) < len(other):
+            result = other.copy()
+            # Build a set of indices in 'other' that have non-NA values
+            mask = notna(other)
+            # For each index in self, if self has a NaN and other has a value, use other's value
+            for idx in self.index:
+                if idx in other.index:
+                    # Only need to fill where self has NA
+                    loc_result = result.index.get_loc(idx)
+                    loc_self = self.index.get_loc(idx)
+                    if isna(self._values[loc_self]):
+                        result._values[loc_result] = other._values[
+                            other.index.get_loc(idx)
+                        ]
+            # For indices only in self (not in other), keep result as is
+            # (it's already from 'other' which has the full union)
+            return result
+        else:
+            result = self.copy()
+            mask = notna(self)
+            for idx in other.index:
+                if idx in self.index:
+                    loc_result = result.index.get_loc(idx)
+                    loc_other = other.index.get_loc(idx)
+                    if isna(result._values[loc_result]):
+                        result._values[loc_result] = other._values[loc_other]
+            return result
+[/REPLACE]

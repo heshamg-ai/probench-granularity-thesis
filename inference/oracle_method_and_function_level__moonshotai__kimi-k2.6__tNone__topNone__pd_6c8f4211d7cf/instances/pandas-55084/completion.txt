@@ -1,0 +1,223 @@
+[SEARCH]
+    if len(indexes) == 0:
+        raise AssertionError("Must have at least 1 Index to union")
+    if len(indexes) == 1:
+        result = indexes[0]
+        if isinstance(result, (list, tuple)):
+            result = Index(sorted(result))
+        return result
+
+    indexes, kind = _sanitize_and_check(indexes)
+
+    def _unique_indices(inds, dtype) -> Index:
+        """
+        Concatenate indices and remove duplicates.
+
+        Parameters
+        ----------
+        inds : list of Index or list objects
+        dtype : dtype to set for the resulting Index
+
+        Returns
+        -------
+        Index
+        """
+        if all(isinstance(i, Index) for i in inds):
+            result = inds[0].append(inds[1:]).unique()
+            if sort:
+                result = result.sort_values()
+            return result
+
+        def conv(i):
+            if isinstance(i, Index):
+                return i
+            return Index(i).tolist()
+
+        return Index(
+            lib.fast_unique_multiple_list([conv(i) for i in inds]),
+            dtype=dtype,
+        )
+
+    if kind == "special":
+        result = indexes[0]
+        for other in indexes[1:]:
+            result = result.union(other, sort=None if sort else False)
+        return result
+
+    elif kind == "array":
+        dtype = _find_common_index_dtype(indexes)
+        if all(isinstance(ind, Index) for ind in indexes):
+            if any(isinstance(ind, DatetimeIndex) for ind in indexes):
+                dti_tzs = [x.tz for x in indexes if isinstance(x, DatetimeIndex) and x.tz is not None]
+                if len(set(dti_tzs)) not in [0, 1]:
+                    # TODO: this behavior is not tested (so may not be desired),
+                    # but is kept in order to keep behavior the same when
+                    # deprecating union_many
+                    sort = True
+        result = indexes[0]
+        for other in indexes[1:]:
+            if not result.equals(other):
+                result = result.union(other, sort=None if sort else False)
+            else:
+                result = result
+        return result
+
+
+def _find_common_index_dtype(indexes):
+    """
+    Finds a common type for the indexes to pass to the resulting index.
+
+    Parameters
+    ----------
+    indexes : list of Index or list objects
+
+    Returns
+    -------
+    The common type or None if no indexes were given
+    """
+    dtypes = {idx.dtype for idx in indexes if isinstance(idx, Index)}
+    if dtypes:
+        dtype = find_common_type(list(dtypes))
+    else:
+        dtype = None
+
+    return dtype
+
+
+def _get_combined_index(
+    indexes,
+    intersect: bool = False,
+    sort: bool = False,
+):
+    # TODO: handle index names!
+    indexes = [ind for ind in indexes if ind is not None]
+    if len(indexes) == 0:
+        return Index([], dtype=object)
+    if len(indexes) == 1:
+        return indexes[0]
+    if intersect:
+        index = indexes[0]
+        for other in indexes[1:]:
+            if not index.equals(other):
+                index = index.intersection(other)
+        return index
+    left_union = _union_indexes(indexes, sort=sort)
+    return left_union
+
+
+def get_unanimous_names(*indexes: Index) -> tuple:
+    """
+    Return the unanimous names, or default ones if no unanimous names exist.
+
+    Parameters
+    ----------
+    indexes : list of Index objects, individual indices, or other list-likes
+
+    Returns
+    -------
+    tuple
+        A tuple of index names
+    """
+    name_tuples = {tuple(i.names) for i in indexes if isinstance(i, Index)}
+    if len(name_tuples) != 1:
+        return ()
+    (result,) = name_tuples
+    return result
+[/SEARCH]
+[REPLACE]
+    if len(indexes) == 0:
+        raise AssertionError("Must have at least 1 Index to union")
+    if len(indexes) == 1:
+        result = indexes[0]
+        if isinstance(result, (list, tuple)):
+            result = Index(sorted(result))
+        return result
+
+    indexes, kind = _sanitize_and_check(indexes)
+
+    if kind == "special":
+        result = indexes[0]
+        for other in indexes[1:]:
+            result = result.union(other, sort=None if sort else False)
+        return result
+
+    elif kind == "array":
+        dtype = _find_common_index_dtype(indexes)
+        if all(isinstance(ind, Index) for ind in indexes):
+            if any(isinstance(ind, DatetimeIndex) for ind in indexes):
+                dti_tzs = [x.tz for x in indexes if isinstance(x, DatetimeIndex) and x.tz is not None]
+                if len(set(dti_tzs)) not in [0, 1]:
+                    # TODO: this behavior is not tested (so may not be desired),
+                    # but is kept in order to keep behavior the same when
+                    # deprecating union_many
+                    sort = True
+        result = indexes[0]
+        for other in indexes[1:]:
+            if not result.equals(other):
+                result = result.union(other, sort=None if sort else False)
+            else:
+                result = result
+        return result
+
+
+def _find_common_index_dtype(indexes):
+    """
+    Finds a common type for the indexes to pass to the resulting index.
+
+    Parameters
+    ----------
+    indexes : list of Index or list objects
+
+    Returns
+    -------
+    The common type or None if no indexes were given
+    """
+    dtypes = {idx.dtype for idx in indexes if isinstance(idx, Index)}
+    if dtypes:
+        dtype = find_common_type(list(dtypes))
+    else:
+        dtype = None
+
+    return dtype
+
+
+def _get_combined_index(
+    indexes,
+    intersect: bool = False,
+    sort: bool = False,
+):
+    # TODO: handle index names!
+    indexes = [ind for ind in indexes if ind is not None]
+    if len(indexes) == 0:
+        return Index([], dtype=object)
+    if len(indexes) == 1:
+        return indexes[0]
+    if intersect:
+        index = indexes[0]
+        for other in indexes[1:]:
+            if not index.equals(other):
+                index = index.intersection(other)
+        return index
+    left_union = _union_indexes(indexes, sort=sort)
+    return left_union
+
+
+def get_unanimous_names(*indexes: Index) -> tuple:
+    """
+    Return the unanimous names, or default ones if no unanimous names exist.
+
+    Parameters
+    ----------
+    indexes : list of Index objects, individual indices, or other list-likes
+
+    Returns
+    -------
+    tuple
+        A tuple of index names
+    """
+    name_tuples = {tuple(i.names) for i in indexes if isinstance(i, Index)}
+    if len(name_tuples) != 1:
+        return ()
+    (result,) = name_tuples
+    return result
+[/REPLACE]

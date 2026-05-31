@@ -1,0 +1,113 @@
+xarray/core/accessor_dt.py
+[SEARCH]
+def _access_through_cftimeindex(values, name):
+    """Coerce an array of datetime-like values to a CFTimeIndex
+    and access requested datetime component
+    """
+    from xarray.coding.cftimeindex import CFTimeIndex
+
+    values_as_cftimeindex = CFTimeIndex(values.ravel())
+    if name == "season":
+        months = values_as_cftimeindex.month
+        field_values = _season_from_months(months)
+    elif name == "date":
+        raise AttributeError(
+            "'CFTimeIndex' object has no attribute `date`. Consider using the floor method instead, for instance: `.time.dt.floor('D')`."
+        )
+    else:
+        field_values = getattr(values_as_cftimeindex, name)
+    return field_values.reshape(values.shape)
+[/SEARCH]
+[REPLACE]
+def _access_through_cftimeindex(values, name):
+    """Coerce an array of datetime-like values to a CFTimeIndex
+    and access requested datetime component
+    """
+    from xarray.coding.cftimeindex import CFTimeIndex
+
+    values_as_cftimeindex = CFTimeIndex(values.ravel())
+    if name == "season":
+        months = values_as_cftimeindex.month
+        field_values = _season_from_months(months)
+    elif name == "date":
+        raise AttributeError(
+            "'CFTimeIndex' object has no attribute `date`. Consider using the floor method instead, for instance: `.time.dt.floor('D')`."
+        )
+    else:
+        field_values = getattr(values_as_cftimeindex, name)
+    return field_values.reshape(values.shape)
+
+
+def _round_field(values, name, freq):
+    """Round timestamps to specified frequency via CFTimeIndex or pandas Series."""
+    if is_np_datetime_like(values.dtype):
+        return _round_through_series(values, name, freq)
+    else:
+        return _round_through_cftimeindex(values, name, freq)
+[/REPLACE]
+
+xarray/core/accessor_dt.py
+[SEARCH]
+def _get_date_field(values, name, dtype):
+[/SEARCH]
+[REPLACE]
+def _round_through_series(values, name, freq):
+    """Round np.datetime64 values using pandas Series."""
+    import pandas as pd
+
+    series = pd.Series(values.ravel())
+    rounded = getattr(series.dt, name)(freq)
+    return rounded.values.reshape(values.shape)
+
+
+def _round_through_cftimeindex(values, name, freq):
+    """Round cftime values using CFTimeIndex."""
+    from xarray.coding.cftimeindex import CFTimeIndex
+
+    values_as_cftimeindex = CFTimeIndex(values.ravel())
+    rounded = getattr(values_as_cftimeindex, name)(freq)
+    return rounded.values.reshape(values.shape)
+
+
+def _get_date_field(values, name, dtype):
+[/REPLACE]
+
+xarray/core/accessor_dt.py
+[SEARCH]
+    return self._tslib_round_accessor("floor", freq)
+[/SEARCH]
+[REPLACE]
+    return self._tslib_round_accessor("floor", freq)
+
+    def ceil(self, freq: str) -> T_DataArray:
+        """
+        Round timestamps upward to specified frequency resolution.
+
+        Parameters
+        ----------
+        freq : str
+            a freq string indicating the rounding resolution e.g. "D" for daily resolution
+
+        Returns
+        -------
+        ceil-ed timestamps : same type as values
+            Array-like of datetime fields accessed for each element in values
+        """
+        return self._tslib_round_accessor("ceil", freq)
+
+    def round(self, freq: str) -> T_DataArray:
+        """
+        Round timestamps to specified frequency resolution.
+
+        Parameters
+        ----------
+        freq : str
+            a freq string indicating the rounding resolution e.g. "D" for daily resolution
+
+        Returns
+        -------
+        rounded timestamps : same type as values
+            Array-like of datetime fields accessed for each element in values
+        """
+        return self._tslib_round_accessor("round", freq)
+[/REPLACE]

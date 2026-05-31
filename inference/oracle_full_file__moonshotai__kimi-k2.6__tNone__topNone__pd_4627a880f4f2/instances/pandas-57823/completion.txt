@@ -1,0 +1,85 @@
+ pandas/core/indexes/range.py
+[SEARCH]
+    def all(self, *args, **kwargs) -> bool:
+        return 0 not in self._range
+
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+[/SEARCH]
+[REPLACE]
+    def all(self, *args, **kwargs) -> bool:
+        return 0 not in self._range
+
+    def any(self, *args, **kwargs) -> bool:
+        return any(self._range)
+
+    def argmin(self, axis=None, skipna: bool = True, *args, **kwargs) -> int:
+        """
+        Return int position of the smallest value in the Series.
+
+        If the minimum is achieved in multiple locations,
+        the first row position is returned.
+
+        Parameters
+        ----------
+        axis : {None}
+            Dummy argument for consistency with Series.
+        skipna : bool, default True
+            Whether to skip NA/null values.
+
+        Returns
+        -------
+        int
+            Row position of the minimum value.
+
+        See Also
+        --------
+        Series.argmax : Return position of the maximum value.
+        Series.idxmin : Return index label of the minimum value.
+        Series.idxmax : Return index label of the maximum value.
+        numpy.ndarray.argmin : Equivalent method for numpy arrays.
+        """
+        nv.validate_argmin_with_skipna(skipna, args, kwargs)
+        if not len(self._range):
+            raise ValueError(
+                "attempt to get argmin of an empty sequence"
+            )
+        if self._range.step > 0:
+            return 0
+        return len(self._range) - 1
+
+    def argmax(self, axis=None, skipna: bool = True, *args, **kwargs) -> int:
+        """
+        Return int position of the largest value in the Series.
+
+        If the maximum is achieved in multiple locations,
+        the first row position is returned.
+
+        Parameters
+        ----------
+        axis : {None}
+            Dummy argument for consistency with Series.
+        skipna : bool, default True
+            Whether to skip NA/null values.
+
+        Returns
+        -------
+        int
+            Row position of the maximum value.
+
+        See Also
+        --------
+        Series.argmin : Return position of the minimum value.
+        Series.idxmin : Return index label of the minimum value.
+        Series.idxmax : Return index label of the maximum value.
+        numpy.ndarray.argmax : Equivalent method for numpy arrays.
+        """
+        nv.validate_argmax_with_skipna(skipna, args, kwargs)
+        if not len(self._range):
+            raise ValueError(
+                "attempt to get argmax of an empty sequence"
+            )
+        if self._range.step > 0:
+            return len(self._range) - 1
+        return 0
+[/REPLACE]

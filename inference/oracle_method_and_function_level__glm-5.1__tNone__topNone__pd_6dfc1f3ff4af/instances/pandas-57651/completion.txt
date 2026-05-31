@@ -1,0 +1,152 @@
+pandas/core/indexes/range.py
+[SEARCH]
+    _typ = "rangeindex"
+    _dtype_validation_metadata = (is_signed_integer_dtype, "signed integer")
+    _range: range
+    _values: np.ndarray
+[/SEARCH]
+[REPLACE]
+    _typ = "rangeindex"
+    _dtype_validation_metadata = (is_signed_integer_dtype, "signed integer")
+    _range: range
+    _values: np.ndarray
+
+    def _join_monotonic(
+        self, other: Index, how: JoinHow = "left"
+    ) -> tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        from pandas.core.arrays import ArrowExtensionArray
+
+        if isinstance(other, RangeIndex):
+            s_start, s_stop, s_step = self.start, self.stop, self.step
+            o_start, o_stop, o_step = other.start, other.stop, other.step
+
+            # Compute intersection of two ranges
+            new_start = max(s_start, o_start)
+            new_stop = min(s_stop, o_stop)
+            if new_start >= new_stop:
+                intersect_range = range(0, 0)
+            else:
+                new_step = math.lcm(s_step, o_step)
+                # Find first value in intersection >= new_start that is aligned
+                offset = new_start % new_step
+                aligned_offset = s_start % new_step
+                delta = (aligned_offset - offset) % new_step
+                aligned_start = new_start + delta
+                if aligned_start >= new_stop:
+                    intersect_range = range(0, 0)
+                else:
+                    intersect_range = range(aligned_start, new_stop, new_step)
+
+            if how == "inner":
+                if len(intersect_range) == 0:
+                    empty_index = self[:0]
+                    empty_idx = np.array([], dtype=np.intp)
+                    return empty_index, empty_idx, empty_idx
+
+                join_index = RangeIndex(intersect_range.start, intersect_range.stop, intersect_range.step, name=self.name)
+                lidx = (np.arange(len(intersect_range)) * intersect_range.step + intersect_range.start - s_start) // s_step
+                ridx = (np.arange(len(intersect_range)) * intersect_range.step + intersect_range.start - o_start) // o_step
+                return join_index, lidx, ridx
+
+            elif how == "left":
+                if len(intersect_range) == 0:
+                    lidx = np.arange(len(self), dtype=np.intp)
+                    ridx = np.full(len(self), -1, dtype=np.intp)
+                    return self, lidx, ridx
+
+                join_index = self
+                lidx = None
+                # ridx: map each element in self to its position in other
+                # Use pure math if other.step == 1, otherwise use numpy engine
+                if o_step == 1:
+                    ridx = s_start - o_start + np.arange(len(self), dtype=np.intp) * s_step
+                    np.clip(ridx, -1, len(other) - 1, out=ridx)
+                    mask = (ridx < 0) | (ridx >= len(other))
+                    # Also check alignment for step != 1
+                    if s_step % o_step != 0:
+                        aligned_in_self = (np.arange(len(self)) * s_step + s_start - intersect_range.start) % new_step == 0
+                        mask |= ~aligned_in_self
+                    ridx[mask] = -1
+                else:
+                    ridx = other._engine.get_indexer(self._values)
+                return join_index, lidx, ridx
+
+            elif how == "right":
+                if len(intersect_range) == 0:
+                    lidx = np.full(len(other), -1, dtype=np.intp)
+                    ridx = np.arange(len(other), dtype=np.intp)
+                    return other, lidx, ridx
+
+                join_index = other
+                ridx = None
+                # lidx: map each element in other to its position in self
+                if s_step == 1:
+                    lidx = o_start - s_start + np.arange(len(other), dtype=np.intp) * o_step
+                    np.clip(lidx, -1, len(self) - 1, out=lidx)
+                    mask = (lidx < 0) | (lidx >= len(self))
+                    if o_step % s_step != 0:
+                        aligned_in_other = (np.arange(len(other)) * o_step + o_start - intersect_range.start) % new_step == 0
+                        mask |= ~aligned_in_other
+                    lidx[mask] = -1
+                else:
+                    lidx = self._engine.get_indexer(other._values)
+                return join_index, lidx, ridx
+
+            elif how == "outer":
+                s_range = range(s_start, s_stop, s_step)
+                o_range = range(o_start, o_stop, o_step)
+
+                # Build outer join by merging the two sorted, unique ranges
+                res_list = []
+                lidx_list = []
+                ridx_list = []
+                i, j = 0, 0
+                s_len, o_len = len(s_range), len(o_range)
+
+                while i < s_len and j < o_len:
+                    s_val = s_range[i]
+                    o_val = o_range[j]
+                    if s_val < o_val:
+                        res_list.append(s_val)
+                        lidx_list.append(i)
+                        ridx_list.append(-1)
+                        i += 1
+                    elif s_val > o_val:
+                        res_list.append(o_val)
+                        lidx_list.append(-1)
+                        ridx_list.append(j)
+                        j += 1
+                    else:
+                        res_list.append(s_val)
+                        lidx_list.append(i)
+                        ridx_list.append(j)
+                        i += 1
+                        j += 1
+
+                while i < s_len:
+                    res_list.append(s_range[i])
+                    lidx_list.append(i)
+                    ridx_list.append(-1)
+                    i += 1
+
+                while j < o_len:
+                    res_list.append(o_range[j])
+                    lidx_list.append(-1)
+                    ridx_list.append(j)
+                    j += 1
+
+                # Construct the final RangeIndex directly if step is 1
+                if res_list and (new_step == 1 or len(res_list) <= 1 or
+                        (res_list[1] - res_list[0] == 1 and res_list[-1] - res_list[0] == len(res_list) - 1)):
+                    join_index = RangeIndex(res_list[0] if res_list else 0, res_list[-1] + 1 if res_list else 0, 1, name=self.name)
+                else:
+                    arr = np.array(res_list, dtype=np.int64) if res_list else np.array([], dtype=np.int64)
+                    join_index = Index(arr, name=self.name, dtype=self.dtype)
+
+                lidx = np.array(lidx_list, dtype=np.intp) if lidx_list else np.array([], dtype=np.intp)
+                ridx = np.array(ridx_list, dtype=np.intp) if ridx_list else np.array([], dtype=np.intp)
+                return join_index, lidx, ridx
+
+        # Fall back to the base class implementation for non-RangeIndex other
+        return super()._join_monotonic(other, how=how)
+[/REPLACE]

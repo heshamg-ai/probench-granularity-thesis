@@ -1,0 +1,114 @@
+sklearn/mixture/_gaussian_mixture.py
+[SEARCH]
+    nk = resp.sum(axis=0) + 10 * np.finfo(resp.dtype).eps
+[/SEARCH]
+[REPLACE]
+    nk = resp.sum(axis=0) + 10 * np.finfo(resp.dtype).eps
+    if nk.dtype == np.float32:
+        nk = nk.astype(np.float64, copy=False)
+[/REPLACE]
+
+sklearn/mixture/_gaussian_mixture.py
+[SEARCH]
+    nk = resp.sum(axis=0) + 10 * np.finfo(resp.dtype).eps
+    means = np.dot(resp.T, X) / nk[:, np.newaxis]
+    covariances = {
+        "full": _estimate_gaussian_covariances_full,
+        "tied": _estimate_gaussian_covariances_tied,
+        "diag": _estimate_gaussian_covariances_diag,
+        "spherical": _estimate_gaussian_covariances_spherical,
+    }[covariance_type](resp, X, nk, means, reg_covar)
+    return nk, means, covariances
+[/SEARCH]
+[REPLACE]
+    means = np.dot(resp.T, X) / nk[:, np.newaxis]
+    covariances = {
+        "full": _estimate_gaussian_covariances_full,
+        "tied": _estimate_gaussian_covariances_tied,
+        "diag": _estimate_gaussian_covariances_diag,
+        "spherical": _estimate_gaussian_covariances_spherical,
+    }[covariance_type](resp, X, nk, means, reg_covar)
+    return nk, means, covariances
+[/REPLACE]
+
+sklearn/mixture/_gaussian_mixture.py
+[SEARCH]
+    if covariance_type == "full":
+        log_prob = np.empty((n_samples, n_components))
+        for k, (mu, prec_chol) in enumerate(zip(means, precisions_chol)):
+            y = np.dot(X, prec_chol) - np.dot(mu, prec_chol)
+            log_prob[:, k] = np.sum(np.square(y), axis=1)
+
+    elif covariance_type == "tied":
+        log_prob = np.empty((n_samples, n_components))
+        for k, mu in enumerate(means):
+            y = np.dot(X, precisions_chol) - np.dot(mu, precisions_chol)
+            log_prob[:, k] = np.sum(np.square(y), axis=1)
+
+    elif covariance_type == "diag":
+        precisions = precisions_chol**2
+        log_prob = (
+            np.sum((means**2 * precisions), 1)
+            - 2.0 * np.dot(X, (means * precisions).T)
+            + np.dot(X**2, precisions.T)
+        )
+
+    elif covariance_type == "spherical":
+        precisions = precisions_chol**2
+        log_prob = (
+            np.sum(means**2, 1) * precisions
+            - 2 * np.dot(X, means.T * precisions)
+            + np.outer(row_norms(X, squared=True), precisions)
+        )
+    # Since we are using the precision of the Cholesky decomposition,
+    # `- 0.5 * log_det_precision` becomes `+ log_det_precision_chol`
+    return -0.5 * (n_features * np.log(2 * np.pi) + log_prob) + log_det
+[/SEARCH]
+[REPLACE]
+    # Use float64 for the log-probability computation to preserve precision
+    # even when X and model parameters are float32.
+    X64 = X.astype(np.float64, copy=False)
+    means64 = means.astype(np.float64, copy=False)
+    precisions_chol64 = precisions_chol.astype(np.float64, copy=False)
+    if covariance_type == "full":
+        log_prob = np.empty((n_samples, n_components), dtype=np.float64)
+        for k, (mu, prec_chol) in enumerate(zip(means64, precisions_chol64)):
+            y = np.dot(X64, prec_chol) - np.dot(mu, prec_chol)
+            log_prob[:, k] = np.sum(np.square(y), axis=1)
+
+    elif covariance_type == "tied":
+        log_prob = np.empty((n_samples, n_components), dtype=np.float64)
+        for k, mu in enumerate(means64):
+            y = np.dot(X64, precisions_chol64) - np.dot(mu, precisions_chol64)
+            log_prob[:, k] = np.sum(np.square(y), axis=1)
+
+    elif covariance_type == "diag":
+        precisions64 = precisions_chol64**2
+        log_prob = (
+            np.sum((means64**2 * precisions64), 1, dtype=np.float64)
+            - 2.0 * np.dot(X64, (means64 * precisions64).T)
+            + np.dot(X64**2, precisions64.T)
+        )
+
+    elif covariance_type == "spherical":
+        precisions64 = precisions_chol64**2
+        log_prob = (
+            np.sum(means64**2, 1, dtype=np.float64) * precisions64
+            - 2 * np.dot(X64, means64.T * precisions64)
+            + np.outer(row_norms(X64, squared=True), precisions64)
+        )
+    # Since we are using the precision of the Cholesky decomposition,
+    # `- 0.5 * log_det_precision` becomes `+ log_det_precision_chol`
+    log_det64 = log_det.astype(np.float64, copy=False)
+    return (-0.5 * (n_features * np.log(2 * np.pi) + log_prob) + log_det64).astype(
+        X.dtype, copy=False
+    )
+[/REPLACE]
+
+sklearn/mixture/_base.py
+[SEARCH]
+        X = validate_data(self, X, dtype=[np.float64, np.float32], ensure_min_samples=2)
+[/SEARCH]
+[REPLACE]
+        X = validate_data(self, X, dtype=[np.float64, np.float32], ensure_min_samples=2, copy=False)
+[/REPLACE]

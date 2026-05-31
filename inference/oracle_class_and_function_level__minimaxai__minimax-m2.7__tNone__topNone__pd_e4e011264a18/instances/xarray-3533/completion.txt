@@ -1,0 +1,125 @@
+
+
+Looking at the code, I can see that `DataArray.isel` currently converts to a temporary Dataset, calls `Dataset.isel`, and then converts back. For simple integer indexing on small arrays, this is inefficient. Let me implement an optimization.
+
+First, let me check the relevant helper functions:
+xarray/core/indexing.py
+[SEARCH]
+def is_fancy_indexer(indexer, size):
+    """Check if an indexer is a fancy indexer.
+
+    A fancy indexer is any non-slice, non-integer indexer (e.g., array, list, etc.)
+    """
+    if isinstance(indexer, BASIC_INDEXING_TYPES):
+        return False
+    return True
+[/SEARCH]
+[REPLACE]
+def is_fancy_indexer(indexer, size):
+    """Check if an indexer is a fancy indexer.
+
+    A fancy indexer is any non-slice, non-integer indexer (e.g., array, list, etc.)
+    """
+    if isinstance(indexer, BASIC_INDEXING_TYPES):
+        return False
+    return True
+
+
+def is_simple_indexer(indexer, size):
+    """Check if an indexer is a simple integer indexer (not fancy or slice).
+
+    A simple indexer is a single integer used to index into a specific dimension.
+    Returns True for integer types, False for slices, arrays, etc.
+    """
+    return isinstance(indexer, integer_types) and indexer != slice(None)
+[/REPLACE]
+
+xarray/core/dataarray.py
+[SEARCH]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/SEARCH]
+[REPLACE]
+    def isel(
+        self,
+        indexers: Mapping[Hashable, Any] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "DataArray":
+        """Return a new DataArray whose data is given by integer indexing
+        along the specified dimension(s).
+
+        See Also
+        --------
+        Dataset.isel
+        DataArray.sel
+        """
+        indexers = either_dict_or_kwargs(indexers, indexers_kwargs, "isel")
+        # Fast path for simple integer indexers on all dimensions (no fancy indexing)
+        # This avoids the overhead of converting to/from Dataset for simple cases
+        if drop:
+            # Cannot use fast path when drop=True as semantics differ
+            ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+            return self._from_temp_dataset(ds)
+
+        # Check if all indexers are simple integers (fast path possible)
+        all_simple_int = True
+        for k, v in indexers.items():
+            if isinstance(v, integer_types):
+                # Integer indexer - this is simple
+                pass
+            elif isinstance(v, slice):
+                # Slice is simple but we need to check if it's not a full slice
+                if v != slice(None) and v.start is not None or v.stop is not None or v.step is not None:
+                    all_simple_int = False
+                    break
+            else:
+                # Fancy indexing or array - cannot use fast path
+                all_simple_int = False
+                break
+
+        if all_simple_int and indexers:
+            # Fast path: direct indexing on Variable without Dataset conversion
+            from .variable import Variable
+
+            # Build key tuple for Variable indexing
+            key = tuple(indexers.get(dim, slice(None)) for dim in self.dims)
+
+            # Apply indexing to the variable
+            new_var = self.variable.isel(indexers=indexers)
+
+            # Build new coordinates
+            coords = {}
+            for name, coord in self._coords.items():
+                # Only keep coords that have all their dimensions in the new variable
+                if set(coord.dims) <= set(new_var.dims):
+                    coord_indexers = {k: v for k, v in indexers.items() if k in coord.dims}
+                    if coord_indexers:
+                        coords[name] = coord.isel(indexers=coord_indexers).variable
+                    else:
+                        coords[name] = coord.variable
+
+            # Build indexes
+            indexes = propagate_indexes(self._indexes, exclude=[])
+
+            return self._replace(variable=new_var, coords=coords, indexes=indexes)
+
+        # Fall back to Dataset-based implementation for complex cases
+        ds = self._to_temp_dataset().isel(drop=drop, indexers=indexers)
+        return self._from_temp_dataset(ds)
+[/REPLACE]

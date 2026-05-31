@@ -1,0 +1,106 @@
+{
+  "id": 36,
+  "scenario_id": "pandas-53955",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 53955,
+  "baseline_sha": "457690995ccbfc5b8eee80a0818d62070d078bcf",
+  "reference_sha": "a444242cec71e8e217baf2f94ca04331ba8435ce",
+  "task": "Optimize MultiIndex.intersection for set operations and indexing",
+  "entry_point": "pandas.MultiIndex.intersection",
+  "whats_new": "Performance improvement in various MultiIndex set and indexing operations",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-53955:baseline",
+      "digest": "sha256:78ef8624cc15deada4221c74db68665fb902e022d79c773320642a05f80cd0ce"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-53955:reference",
+      "digest": "sha256:bcf613f266dc4d27fa67977b8464c51156baa8ddf45e2abcaee1f4fe700cedb3"
+    }
+  },
+  "params": [
+    {
+      "name": "Index Size",
+      "short_indicator": "N",
+      "explanation": "Size of each MultiIndex",
+      "values": [
+        "10000",
+        "100000",
+        "1000000"
+      ]
+    },
+    {
+      "name": "Monotonicity",
+      "short_indicator": "M",
+      "explanation": "Whether MultiIndex is monotonic or non_monotonic",
+      "values": [
+        "monotonic",
+        "non_monotonic"
+      ]
+    },
+    {
+      "name": "Data Type",
+      "short_indicator": "DT",
+      "explanation": "Data type of MultiIndex levels",
+      "values": [
+        "int",
+        "string",
+        "datetime"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/indexes/multi/test_setops.py::test_set_ops_error_cases",
+    "pandas/tests/indexes/multi/test_setops.py::test_intersection_base",
+    "pandas/tests/indexes/multi/test_setops.py::test_union_base",
+    "pandas/tests/indexes/multi/test_setops.py::test_difference_base",
+    "pandas/tests/indexes/multi/test_setops.py::test_symmetric_difference",
+    "pandas/tests/indexes/multi/test_setops.py::test_multiindex_symmetric_difference",
+    "pandas/tests/indexes/multi/test_setops.py::test_difference",
+    "pandas/tests/indexes/multi/test_setops.py::test_difference_sort_special",
+    "pandas/tests/indexes/multi/test_setops.py::test_difference_sort_special_true",
+    "pandas/tests/indexes/multi/test_setops.py::test_difference_sort_incomparable",
+    "pandas/tests/indexes/multi/test_setops.py::test_difference_sort_incomparable_true",
+    "pandas/tests/indexes/multi/test_setops.py::test_union",
+    "pandas/tests/indexes/multi/test_setops.py::test_union_with_regular_index",
+    "pandas/tests/indexes/multi/test_setops.py::test_intersection",
+    "pandas/tests/indexes/multi/test_setops.py::test_setop_with_categorical",
+    "pandas/tests/indexes/multi/test_setops.py::test_intersection_non_object",
+    "pandas/tests/indexes/multi/test_setops.py::test_intersect_equal_sort",
+    "pandas/tests/indexes/multi/test_setops.py::test_intersect_equal_sort_true",
+    "pandas/tests/indexes/multi/test_setops.py::test_union_sort_other_empty",
+    "pandas/tests/indexes/multi/test_setops.py::test_union_sort_other_empty_sort",
+    "pandas/tests/indexes/multi/test_setops.py::test_union_sort_other_incomparable",
+    "pandas/tests/indexes/multi/test_setops.py::test_union_sort_other_incomparable_sort",
+    "pandas/tests/indexes/multi/test_setops.py::test_union_non_object_dtype_raises",
+    "pandas/tests/indexes/multi/test_setops.py::test_union_empty_self_different_names",
+    "pandas/tests/indexes/multi/test_setops.py::test_union_multiindex_empty_rangeindex",
+    "pandas/tests/indexes/multi/test_setops.py::test_setops_sort_validation",
+    "pandas/tests/indexes/multi/test_setops.py::test_difference_keep_ea_dtypes",
+    "pandas/tests/indexes/multi/test_setops.py::test_symmetric_difference_keeping_ea_dtype",
+    "pandas/tests/indexes/multi/test_setops.py::test_intersect_with_duplicates",
+    "pandas/tests/indexes/multi/test_setops.py::test_intersection_equal_different_names",
+    "pandas/tests/indexes/multi/test_setops.py::test_intersection_different_names",
+    "pandas/tests/indexes/multi/test_setops.py::test_intersection_with_missing_values_on_both_sides",
+    "pandas/tests/indexes/multi/test_setops.py::test_union_with_missing_values_on_both_sides",
+    "pandas/tests/indexes/multi/test_setops.py::test_union_nan_got_duplicated",
+    "pandas/tests/indexes/multi/test_setops.py::test_union_keep_ea_dtype",
+    "pandas/tests/indexes/multi/test_setops.py::test_union_with_duplicates_keep_ea_dtype",
+    "pandas/tests/indexes/multi/test_setops.py::test_union_duplicates",
+    "pandas/tests/indexes/multi/test_setops.py::test_union_keep_dtype_precision",
+    "pandas/tests/indexes/multi/test_setops.py::test_union_keep_ea_dtype_with_na",
+    "pandas/tests/indexes/multi/test_setops.py::test_intersection_lexsort_depth",
+    "pandas/tests/indexes/multi/test_setops.py::test_intersection_with_non_lex_sorted_categories",
+    "pandas/tests/indexes/multi/test_setops.py::test_intersection_keep_ea_dtypes",
+    "pandas/tests/indexes/multi/test_setops.py::test_union_with_na_when_constructing_dataframe",
+    "pandas/tests/indexes/multi/test_isin.py::test_isin_nan",
+    "pandas/tests/indexes/multi/test_isin.py::test_isin_missing",
+    "pandas/tests/indexes/multi/test_isin.py::test_isin",
+    "pandas/tests/indexes/multi/test_isin.py::test_isin_multi_index_with_missing_value",
+    "pandas/tests/indexes/multi/test_isin.py::test_isin_empty",
+    "pandas/tests/indexes/multi/test_isin.py::test_isin_generator",
+    "pandas/tests/indexes/multi/test_indexing.py::test_get_indexer_for_multiindex_with_nans"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.MultiIndex.intersection for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n- Only change what directly improves the optimization target.\n\nOPTIMIZATION REQUEST:\nOptimize MultiIndex.intersection for set operations and indexing\nOptimization function: pandas.MultiIndex.intersection\n\n\n[start of pandas/core/indexes/multi.py]\n### Relevant context\n#### Class `pandas.core.indexes.multi.MultiIndex`\n**Class Signature**\n```python\nclass MultiIndex(Index):\n```\n**Class Attributes**\n```python\n    _hidden_attrs = Index._hidden_attrs | frozenset()\n    _typ = \"multiindex\"\n    _names: list[Hashable | None] = []\n    _levels = FrozenList()\n    _codes = FrozenList()\n    _comparables = [\"names\"]\n    sortorder: int | None\n    names = property(\n        fset=_set_names,\n        fget=_get_names,\n        doc=\"\"\"\n        Names of levels in MultiIndex.\n\n        Examples\n        --------\n        >>> mi = pd.MultiIndex.from_arrays(\n        ... [[1, 2], [3, 4], [5, 6]], names=['x', 'y', 'z'])\n        >>> mi\n        MultiIndex([(1, 3, 5),\n                    (2, 4, 6)],\n                   names=['x', 'y', 'z'])\n        >>> mi.names\n        FrozenList(['x', 'y', 'z'])\n        \"\"\",\n    )\n    _duplicated = duplicated  # type: ignore[misc]\n    rename = Index.set_names  # type: ignore[assignment]\n    __add__ = make_invalid_op(\"__add__\")\n    __radd__ = make_invalid_op(\"__radd__\")\n    __iadd__ = make_invalid_op(\"__iadd__\")\n    __sub__ = make_invalid_op(\"__sub__\")\n    __rsub__ = make_invalid_op(\"__rsub__\")\n    __isub__ = make_invalid_op(\"__isub__\")\n    __pow__ = make_invalid_op(\"__pow__\")\n    __rpow__ = make_invalid_op(\"__rpow__\")\n    __mul__ = make_invalid_op(\"__mul__\")\n    __rmul__ = make_invalid_op(\"__rmul__\")\n    __floordiv__ = make_invalid_op(\"__floordiv__\")\n    __rfloordiv__ = make_invalid_op(\"__rfloordiv__\")\n    __truediv__ = make_invalid_op(\"__truediv__\")\n    __rtruediv__ = make_invalid_op(\"__rtruediv__\")\n    __mod__ = make_invalid_op(\"__mod__\")\n    __rmod__ = make_invalid_op(\"__rmod__\")\n    __divmod__ = make_invalid_op(\"__divmod__\")\n    __rdivmod__ = make_invalid_op(\"__rdivmod__\")\n    __neg__ = make_invalid_op(\"__neg__\")\n    __pos__ = make_invalid_op(\"__pos__\")\n    __abs__ = make_invalid_op(\"__abs__\")\n    __invert__ = make_invalid_op(\"__invert__\")\n```\n**Added methods (baseline missing):**\n- `pandas.core.indexes.multi.MultiIndex._recode_for_new_levels`\n[end of pandas/core/indexes/multi.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

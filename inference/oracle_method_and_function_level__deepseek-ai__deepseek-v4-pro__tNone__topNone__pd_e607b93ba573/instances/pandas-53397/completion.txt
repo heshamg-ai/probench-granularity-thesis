@@ -1,0 +1,122 @@
+pandas/core/indexes/range.py
+[SEARCH]
+### Relevant context
+#### Class `pandas.core.indexes.range.RangeIndex`
+**Class Signature**
+```python
+class RangeIndex(Index):
+```
+**Class Attributes**
+```python
+    _typ = "rangeindex"
+    _dtype_validation_metadata = (is_signed_integer_dtype, "signed integer")
+    _range: range
+    _values: np.ndarray
+```
+**Added methods (baseline missing):**
+- `pandas.core.indexes.range.RangeIndex.take`
+[/SEARCH]
+[REPLACE]
+[/REPLACE]
+
+pandas/core/indexes/range.py
+[SEARCH]
+    def take(
+        self,
+        indices,
+        axis: Axis = 0,
+        allow_fill: bool = True,
+        fill_value=None,
+        **kwargs,
+    ):
+[/SEARCH]
+[REPLACE]
+    def take(
+        self,
+        indices,
+        axis: Axis = 0,
+        allow_fill: bool = True,
+        fill_value=None,
+        **kwargs,
+    ) -> Index:
+        if kwargs:
+            nv.validate_take((), kwargs)
+        if is_scalar(indices):
+            raise TypeError("Expected indices to be array-like")
+        indices = ensure_platform_int(indices)
+
+        maybe_slice = not allow_fill or self._na_value is fill_value
+        if maybe_slice:
+            try:
+                taken = _range_take(self._range, indices)
+                if taken is not None:
+                    return taken
+            except Exception:
+                pass
+
+        taken = self._values.take(indices)
+        return self._constructor._simple_new(taken, name=self.name)
+[/REPLACE]
+
+pandas/core/indexes/range.py
+[SEARCH]
+from pandas.core.dtypes.common import (
+    ensure_platform_int,
+    is_integer,
+    is_scalar,
+    is_signed_integer_dtype,
+)
+[/SEARCH]
+[REPLACE]
+from pandas.core.dtypes.common import (
+    ensure_platform_int,
+    is_integer,
+    is_scalar,
+    is_signed_integer_dtype,
+)
+
+import numpy as np
+[/REPLACE]
+
+pandas/core/indexes/range.py
+[SEARCH]
+RangeIndex._add_numeric_methods_disabled()
+RangeIndex._add_logical_methods_disabled()
+[/SEARCH]
+[REPLACE]
+RangeIndex._add_numeric_methods_disabled()
+RangeIndex._add_logical_methods_disabled()
+
+
+def _range_take(rng: range, indices: np.ndarray):
+    """
+    Take elements from a range using integer indices.
+
+    Returns an Index (RangeIndex if possible, else Int64Index) or None
+    if the fast path cannot be applied.
+    """
+    if indices.size == 0:
+        return RangeIndex._simple_new(range(0), name=None)
+
+    if indices.min() < -len(rng) or indices.max() >= len(rng):
+        return None
+
+    start, stop, step = rng.start, rng.stop, rng.step
+
+    if step == 1:
+        # monotonic increasing, no duplicates unless indices repeat
+        take_vals = indices.astype(np.intp, copy=False)
+        new_vals = start + take_vals
+        lo = new_vals.min()
+        hi = new_vals.max()
+        if hi - lo + 1 <= 2 * indices.size:
+            # dense enough: keep as RangeIndex
+            return RangeIndex(lo, hi + 1, name=None).take(
+                new_vals - lo, allow_fill=False
+            )
+        return RangeIndex._simple_new(new_vals, name=None)
+
+    # step != 1 -> need full materialization
+    vals = np.arange(start, stop, step)
+    return RangeIndex._simple_new(vals[indices], name=None)
+[/REPLACE]

@@ -1,0 +1,98 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    @doc(ExtensionArray.to_numpy)
+    def to_numpy(
+        self,
+        dtype: npt.DTypeLike | None = None,
+        copy: bool = False,
+        na_value: object = lib.no_default,
+    ) -> np.ndarray:
+        if dtype is None and self._hasna:
+            dtype = object
+        if na_value is lib.no_default:
+            na_value = self.dtype.na_value
+
+        pa_type = self._pa_array.type
+        if pa.types.is_temporal(pa_type) and not pa.types.is_date(pa_type):
+            # temporal types with units and/or timezones currently
+            #  require pandas/python scalars to pass all tests
+            # TODO: improve performance (this is slow)
+            result = np.array(list(self), dtype=dtype)
+        elif is_object_dtype(dtype) and self._hasna:
+            result = np.empty(len(self), dtype=object)
+            mask = ~self.isna()
+            result[mask] = np.asarray(self[mask]._pa_array)
+        elif pa.types.is_null(self._pa_array.type):
+            result = np.asarray(self._pa_array, dtype=dtype)
+            if not isna(na_value):
+                result[:] = na_value
+            return result
+        elif self._hasna:
+            data = self.copy()
+            data[self.isna()] = na_value
+            return np.asarray(data._pa_array, dtype=dtype)
+        else:
+            result = np.asarray(self._pa_array, dtype=dtype)
+            if copy:
+                result = result.copy()
+        if self._hasna:
+            result[self.isna()] = na_value
+        return result
+[/SEARCH]
+[REPLACE]
+    @doc(ExtensionArray.to_numpy)
+    def to_numpy(
+        self,
+        dtype: npt.DTypeLike | None = None,
+        copy: bool = False,
+        na_value: object = lib.no_default,
+    ) -> np.ndarray:
+        if dtype is None and self._hasna:
+            dtype = object
+        if na_value is lib.no_default:
+            na_value = self.dtype.na_value
+
+        pa_type = self._pa_array.type
+        if pa.types.is_temporal(pa_type) and not pa.types.is_date(pa_type):
+            # temporal types with units and/or timezones currently
+            #  require pandas/python scalars to pass all tests
+            # TODO: improve performance (this is slow)
+            result = np.array(list(self), dtype=dtype)
+        elif is_object_dtype(dtype) and self._hasna:
+            result = np.empty(len(self), dtype=object)
+            mask = ~self.isna()
+            result[mask] = np.asarray(self[mask]._pa_array)
+        elif pa.types.is_null(self._pa_array.type):
+            result = np.asarray(self._pa_array, dtype=dtype)
+            if not isna(na_value):
+                result[:] = na_value
+            return result
+        elif self._hasna:
+            # Fast path: converting to float dtype with na_value=np.nan
+            # NaN is the default for numpy float arrays, so we can skip
+            # replacing nulls and just convert the valid values directly.
+            np_dtype = np.dtype(dtype) if dtype is not None else None
+            if (
+                np_dtype is not None
+                and np.issubdtype(np_dtype, np.floating)
+                and lib.is_float(na_value)
+                and np.isnan(na_value)
+            ):
+                result = np.empty(len(self), dtype=np_dtype)
+                result[:] = np.nan
+                mask = self.isna()
+                valid = ~mask
+                if valid.any():
+                    result[valid] = np.asarray(self[valid]._pa_array, dtype=np_dtype)
+                return result
+            data = self.copy()
+            data[self.isna()] = na_value
+            return np.asarray(data._pa_array, dtype=dtype)
+        else:
+            result = np.asarray(self._pa_array, dtype=dtype)
+            if copy:
+                result = result.copy()
+        if self._hasna:
+            result[self.isna()] = na_value
+        return result
+[/REPLACE]

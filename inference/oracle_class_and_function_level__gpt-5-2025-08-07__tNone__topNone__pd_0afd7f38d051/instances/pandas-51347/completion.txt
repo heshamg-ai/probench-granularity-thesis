@@ -1,0 +1,26 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        if (
+            is_object_dtype(dtype)
+            or pa.types.is_timestamp(pa_type)
+            or pa.types.is_duration(pa_type)
+        ):
+            result = np.array(list(self), dtype=dtype)
+        else:
+[/SEARCH]
+[REPLACE]
+        if is_object_dtype(dtype):
+            # optimized path: build object array chunk-wise to avoid per-element Python iteration
+            n = len(self._data)
+            result = np.empty(n, dtype=object)
+            if n:
+                i = 0
+                for chunk in self._data.iterchunks():
+                    vals = chunk.to_pylist()
+                    size = len(vals)
+                    result[i : i + size] = vals
+                    i += size
+        elif pa.types.is_timestamp(pa_type) or pa.types.is_duration(pa_type):
+            result = np.array(list(self), dtype=dtype)
+        else:
+[/REPLACE]

@@ -1,0 +1,89 @@
+pandas/core/indexes/base.py
+[SEARCH]
+    @final
+    def _join_via_get_indexer(
+        self, other: Index, how: JoinHow, sort: bool
+    ) -> tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        # Fallback if we do not have any fastpaths available based on
+        #  uniqueness/monotonicity
+
+        # Note: at this point we have checked matching dtypes
+
+        if how == "left":
+            join_index = self.sort_values() if sort else self
+        elif how == "right":
+            join_index = other.sort_values() if sort else other
+        elif how == "inner":
+            join_index = self.intersection(other, sort=sort)
+        elif how == "outer":
+            try:
+                join_index = self.union(other, sort=sort)
+            except TypeError:
+                join_index = self.union(other)
+                try:
+                    join_index = _maybe_try_sort(join_index, sort)
+                except TypeError:
+                    pass
+
+        if join_index is self:
+            lindexer = None
+        else:
+            lindexer = self.get_indexer_for(join_index)
+        if join_index is other:
+            rindexer = None
+        else:
+            rindexer = other.get_indexer_for(join_index)
+        return join_index, lindexer, rindexer
+[/SEARCH]
+[REPLACE]
+    @final
+    def _join_via_get_indexer(
+        self, other: Index, how: JoinHow, sort: bool
+    ) -> tuple[Index, npt.NDArray[np.intp] | None, npt.NDArray[np.intp] | None]:
+        # Fallback if we do not have any fastpaths available based on
+        #  uniqueness/monotonicity
+
+        # Note: at this point we have checked matching dtypes
+
+        if sort and how in ("left", "right"):
+            if how == "left":
+                join_index, lindexer, rindexer = self._join_monotonic(
+                    other, how="left", sort=True
+                )
+                if lindexer is None:
+                    lindexer = np.arange(len(join_index), dtype=np.intp)
+                return join_index, lindexer, rindexer
+            else:
+                join_index, lindexer, rindexer = self._join_monotonic(
+                    other, how="right", sort=True
+                )
+                if rindexer is None:
+                    rindexer = np.arange(len(join_index), dtype=np.intp)
+                return join_index, lindexer, rindexer
+
+        if how == "left":
+            join_index = self
+        elif how == "right":
+            join_index = other
+        elif how == "inner":
+            join_index = self.intersection(other, sort=sort)
+        elif how == "outer":
+            try:
+                join_index = self.union(other, sort=sort)
+            except TypeError:
+                join_index = self.union(other)
+                try:
+                    join_index = _maybe_try_sort(join_index, sort)
+                except TypeError:
+                    pass
+
+        if join_index is self:
+            lindexer = None
+        else:
+            lindexer = self.get_indexer_for(join_index)
+        if join_index is other:
+            rindexer = None
+        else:
+            rindexer = other.get_indexer_for(join_index)
+        return join_index, lindexer, rindexer
+[/REPLACE]

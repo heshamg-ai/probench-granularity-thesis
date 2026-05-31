@@ -1,0 +1,34 @@
+pandas/core/arrays/categorical.py
+[SEARCH]
+        return self.dtype.categories
+[/SEARCH]
+[REPLACE]
+        cats = self.dtype.categories
+        # Fastpath: already a RangeIndex
+        try:
+            from pandas import RangeIndex
+        except Exception:  # pragma: no cover
+            RangeIndex = None
+        if RangeIndex is not None and isinstance(cats, RangeIndex):
+            return cats
+
+        # Preserve/return a RangeIndex when categories are an evenly spaced
+        # increasing integer sequence. This can improve speed/memory while
+        # maintaining identical semantics.
+        if is_integer_dtype(getattr(cats, "dtype", None)):
+            n = len(cats)
+            if n >= 2 and cats.is_monotonic_increasing:
+                # work with a NumPy view to keep this fast
+                arr = np.asarray(getattr(cats, "_values", cats.values))
+                diff = np.diff(arr)
+                step = diff[0]
+                if step != 0 and np.all(diff == step):
+                    # Construct an equivalent RangeIndex
+                    start = int(lib.item_from_zerodim(np.array(arr[0])))
+                    step_int = int(step)
+                    stop = start + step_int * n
+                    if RangeIndex is not None:
+                        return RangeIndex(start=start, stop=stop, step=step_int)
+
+        return cats
+[/REPLACE]

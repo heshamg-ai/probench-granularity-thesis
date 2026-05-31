@@ -1,0 +1,75 @@
+sklearn/linear_model/_quantile.py
+[SEARCH]
+        if sparse.issparse(X):
+            if self.solver not in ["highs-ds", "highs-ipm", "highs"]:
+                raise ValueError(
+                    f"Solver {self.solver} does not support sparse X. "
+                    "Use solver 'highs' for example."
+                )
+            # Note that highs methods do convert to csc.
+            # Therefore, we work with csc matrices as much as possible.
+            eye = sparse.eye(n_indices, dtype=X.dtype, format="csc")
+            if self.fit_intercept:
+                ones = sparse.csc_matrix(np.ones(shape=(n_indices, 1), dtype=X.dtype))
+                A_eq = sparse.hstack([ones, X, -ones, -X, eye, -eye], format="csc")
+            else:
+                A_eq = sparse.hstack([X, -X, eye, -eye], format="csc")
+        else:
+            eye = np.eye(n_indices)
+            if self.fit_intercept:
+                ones = np.ones((n_indices, 1))
+                A_eq = np.concatenate([ones, X, -ones, -X, eye, -eye], axis=1)
+            else:
+                A_eq = np.concatenate([X, -X, eye, -eye], axis=1)
+[/SEARCH]
+[REPLACE]
+        if sparse.issparse(X):
+            if self.solver not in ["highs-ds", "highs-ipm", "highs"]:
+                raise ValueError(
+                    f"Solver {self.solver} does not support sparse X. "
+                    "Use solver 'highs' for example."
+                )
+            # Note that highs methods do convert to csc.
+            # Therefore, we work with csc matrices as much as possible.
+            eye = sparse.eye(n_indices, dtype=X.dtype, format="csc")
+            if self.fit_intercept:
+                ones = sparse.csc_matrix(
+                    np.ones(shape=(n_indices, 1), dtype=X.dtype)
+                )
+                X_neg = X.copy()
+                X_neg.data = -X_neg.data
+                A_eq = sparse.hstack(
+                    [ones, X, -ones, X_neg, eye, -eye], format="csc"
+                )
+            else:
+                X_neg = X.copy()
+                X_neg.data = -X_neg.data
+                A_eq = sparse.hstack([X, X_neg, eye, -eye], format="csc")
+        else:
+            eye = np.eye(n_indices)
+            if self.fit_intercept:
+                ones = np.ones((n_indices, 1))
+                A_eq = np.empty(
+                    (n_indices, 2 * n_params + 2 * n_indices), dtype=X.dtype
+                )
+                A_eq[:, :n_params] = 1
+                A_eq[:, n_params : 2 * n_params] = -1
+                if self.fit_intercept:
+                    A_eq[:, 0] = 1
+                    A_eq[:, n_params] = -1
+                    A_eq[:, 1:n_params] = X
+                    A_eq[:, n_params + 1 : 2 * n_params] = -X
+                else:
+                    A_eq[:, :n_params] = X
+                    A_eq[:, n_params : 2 * n_params] = -X
+                A_eq[:, 2 * n_params : 2 * n_params + n_indices] = eye
+                A_eq[:, 2 * n_params + n_indices :] = -eye
+            else:
+                A_eq = np.empty(
+                    (n_indices, 2 * n_params + 2 * n_indices), dtype=X.dtype
+                )
+                A_eq[:, :n_params] = X
+                A_eq[:, n_params : 2 * n_params] = -X
+                A_eq[:, 2 * n_params : 2 * n_params + n_indices] = eye
+                A_eq[:, 2 * n_params + n_indices :] = -eye
+[/REPLACE]

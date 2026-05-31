@@ -1,0 +1,141 @@
+
+
+Looking at the code, I need to optimize `Index.is_unique` to avoid unnecessary computation after slicing. The key insight is that if an index is strictly monotonic (either increasing or decreasing), it is guaranteed to be unique. By checking monotonicity first, we can short-circuit the more expensive hash table uniqueness check.
+
+Let me implement the optimizations:
+
+1. For the base `Index` class in `pandas/core/indexes/base.py`
+2. For `IntervalIndex` in `pandas/core/indexes/interval.py`
+
+pandas/core/indexes/base.py
+[SEARCH]
+    @cache_readonly
+    def is_unique(self) -> bool:
+        """
+        Return if the index has unique values.
+
+        Returns
+        -------
+        bool
+
+        See Also
+        --------
+        Index.has_duplicates : Inverse method that checks if it has duplicate values.
+
+        Examples
+        --------
+        >>> idx = pd.Index([1, 5, 7, 7])
+        >>> idx.is_unique
+        False
+
+        >>> idx = pd.Index([1, 5, 7])
+        >>> idx.is_unique
+        True
+
+        >>> idx = pd.Index(["Watermelon", "Orange", "Apple",
+        ...                 "Watermelon"]).astype("category")
+        >>> idx.is_unique
+        False
+
+        >>> idx = pd.Index(["Orange", "Apple",
+        ...                 "Watermelon"]).astype("category")
+        >>> idx.is_unique
+        True
+        """
+        return self._engine.is_unique
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def is_unique(self) -> bool:
+        """
+        Return if the index has unique values.
+
+        Returns
+        -------
+        bool
+
+        See Also
+        --------
+        Index.has_duplicates : Inverse method that checks if it has duplicate values.
+
+        Examples
+        --------
+        >>> idx = pd.Index([1, 5, 7, 7])
+        >>> idx.is_unique
+        False
+
+        >>> idx = pd.Index([1, 5, 7])
+        >>> idx.is_unique
+        True
+
+        >>> idx = pd.Index(["Watermelon", "Orange", "Apple",
+        ...                 "Watermelon"]).astype("category")
+        >>> idx.is_unique
+        False
+
+        >>> idx = pd.Index(["Orange", "Apple",
+        ...                 "Watermelon"]).astype("category")
+        >>> idx.is_unique
+        True
+        """
+        # Fast path: strictly monotonic indexes are always unique
+        if self.is_monotonic_increasing or self.is_monotonic_decreasing:
+            return True
+        return self._engine.is_unique
+[/REPLACE]
+
+pandas/core/indexes/interval.py
+[SEARCH]
+    @cache_readonly
+    def is_unique(self) -> bool:
+        """
+        Return True if the IntervalIndex contains unique elements, else False.
+        """
+        left = self.left
+        right = self.right
+
+        if self.isna().sum() > 1:
+            return False
+
+        if left.is_unique or right.is_unique:
+            return True
+
+        seen_pairs = set()
+        check_idx = np.where(left.duplicated(keep=False))[0]
+        for idx in check_idx:
+            pair = (left[idx], right[idx])
+            if pair in seen_pairs:
+                return False
+            seen_pairs.add(pair)
+
+        return True
+[/SEARCH]
+[REPLACE]
+    @cache_readonly
+    def is_unique(self) -> bool:
+        """
+        Return True if the IntervalIndex contains unique elements, else False.
+        """
+        # Fast path: strictly monotonic intervals are always unique
+        if self.is_monotonic_increasing or self.is_monotonic_decreasing:
+            return True
+
+        left = self.left
+        right = self.right
+
+        if self.isna().sum() > 1:
+            return False
+
+        if left.is_unique or right.is_unique:
+            return True
+
+        seen_pairs = set()
+        check_idx = np.where(left.duplicated(keep=False))[0]
+        for idx in check_idx:
+            pair = (left[idx], right[idx])
+            if pair in seen_pairs:
+                return False
+            seen_pairs.add(pair)
+
+        return True
+[/REPLACE]

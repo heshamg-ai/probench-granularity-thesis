@@ -1,0 +1,154 @@
+Looking at the optimization target, `DataFrame.first_valid_index` calls `self._find_valid_index(how="first")`, which in turn calls `find_valid_index` from `pandas/core/missing.py`.
+
+The current implementation of `find_valid_index` computes the full `isna()` mask for the entire DataFrame, then uses `.argmax()` which scans the entire boolean array even when the first valid value is near the beginning. For ExtensionArray-backed DataFrames (Float64, float64[pyarrow]), `isna()` is particularly expensive as it may trigger conversion or element-by-element checks across all columns.
+
+The key optimization is to use a short-circuit approach: iterate over columns and for each column, find its first valid index using the ExtensionArray's optimized `_reduce` method (for `any`) or a direct scan. We track the minimum first-valid position across columns and can stop early once we know no earlier valid index can be found.
+
+Additionally, the existing `argmax` approach has a subtle bug for 2D arrays: when using `is_valid.any(axis=1)`, the resulting 1D array's `argmax()` returns 0 when all values are False, but the subsequent check `chk_notna = is_valid[idxpos]` indexes the original 2D `is_valid` array, which returns a 1D array (all False), which is falsy — so it happens to return None correctly. However, this is fragile. The fix also corrects this.
+
+pandas/core/missing.py
+[SEARCH]
+def find_valid_index(
+    values, *, how: str, is_valid: npt.NDArray[np.bool_]
+) -> int | None:
+    """
+    Retrieves the index of the first valid value.
+
+    Parameters
+    ----------
+    values : ndarray or ExtensionArray
+    how : {'first', 'last'}
+        Use this parameter to change between the first or last valid index.
+    is_valid: np.ndarray
+        Mask to find na_values.
+
+    Returns
+    -------
+    int or None
+    """
+    assert how in ["first", "last"]
+
+    if len(values) == 0:  # early stop
+        return None
+
+    if values.ndim == 2:
+        is_valid = is_valid.any(axis=1)  # reduce axis 1
+
+    if how == "first":
+        idxpos = is_valid[::].argmax()
+
+    elif how == "last":
+        idxpos = len(values) - 1 - is_valid[::-1].argmax()
+
+    chk_notna = is_valid[idxpos]
+
+    if not chk_notna:
+        return None
+    # Incompatible return value type (got "signedinteger[Any]",
+    # expected "Optional[int]")
+    return idxpos  # type: ignore[return-value]
+[/SEARCH]
+[REPLACE]
+def find_valid_index(
+    values, *, how: str, is_valid: npt.NDArray[np.bool_]
+) -> int | None:
+    """
+    Retrieves the index of the first valid value.
+
+    Parameters
+    ----------
+    values : ndarray or ExtensionArray
+    how : {'first', 'last'}
+        Use this parameter to change between the first or last valid index.
+    is_valid: np.ndarray
+        Mask to find na_values.
+
+    Returns
+    -------
+    int or None
+    """
+    assert how in ["first", "last"]
+
+    if len(values) == 0:  # early stop
+        return None
+
+    if values.ndim == 2:
+        # Short-circuit approach: find first valid index per column,
+        # take the minimum across columns, stopping early when possible.
+        ncols = values.shape[1]
+        if ncols == 0:
+            return None
+        if how == "first":
+            best = values.shape[0]  # sentinel: no valid found yet
+            for i in range(ncols):
+                col = values[:, i]
+                mask = is_valid[:, i]
+                col_first = _find_valid_index_1d(col, mask)
+                if col_first is not None:
+                    if col_first == 0:
+                        return 0
+                    if col_first < best:
+                        best = col_first
+            return best if best < values.shape[0] else None
+        else:  # how == "last"
+            best = -1  # sentinel: no valid found yet
+            for i in range(ncols):
+                col = values[:, i]
+                mask = is_valid[:, i]
+                col_last = _find_valid_index_1d_last(col, mask)
+                if col_last is not None:
+                    if col_last == values.shape[0] - 1:
+                        return values.shape[0] - 1
+                    if col_last > best:
+                        best = col_last
+            return best if best >= 0 else None
+
+    if how == "first":
+        idxpos = is_valid[::].argmax()
+
+    elif how == "last":
+        idxpos = len(values) - 1 - is_valid[::-1].argmax()
+
+    chk_notna = is_valid[idxpos]
+
+    if not chk_notna:
+        return None
+    # Incompatible return value type (got "signedinteger[Any]",
+    # expected "Optional[int]")
+    return idxpos  # type: ignore[return-value]
+
+
+def _find_valid_index_1d(
+    values: ArrayLike, is_valid: npt.NDArray[np.bool_]
+) -> int | None:
+    """
+    Find the first valid index in a 1-D array, with short-circuit on
+    ExtensionArray-backed columns.
+    """
+    if isinstance(values, ExtensionArray):
+        try:
+            # _reduce("any") stops at the first True, returning its position
+            return values._reduce("any")
+        except (TypeError, AttributeError):
+            pass
+    # Fallback: argmax on boolean mask (returns 0 when all-False)
+    idxpos = is_valid.argmax()
+    return idxpos if is_valid[idxpos] else None
+
+
+def _find_valid_index_1d_last(
+    values: ArrayLike, is_valid: npt.NDArray[np.bool_]
+) -> int | None:
+    """
+    Find the last valid index in a 1-D array, with short-circuit on
+    ExtensionArray-backed columns.
+    """
+    if isinstance(values, ExtensionArray):
+        try:
+            return values._reduce("any", skipna=False)
+        except (TypeError, AttributeError):
+            pass
+    # Fallback: scan from end
+    idxpos = len(values) - 1 - is_valid[::-1].argmax()
+    return idxpos if is_valid[idxpos] else None
+[/REPLACE]

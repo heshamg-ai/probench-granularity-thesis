@@ -1,0 +1,128 @@
+xarray/core/dataset.py
+[SEARCH]
+        has_chunked_array = bool(
+            any(is_chunked_array(v._data) for v in obj._variables.values())
+        )
+        if has_chunked_array:
+            # optimization: create dask coordinate arrays once per Dataset
+            # rather than once per Variable when dask.array.unify_chunks is called later
+            # GH4739
+            dask_indexers = {
+                k: (index.to_base_variable().chunk(), dest.to_base_variable().chunk())
+                for k, (index, dest) in validated_indexers.items()
+            }
+
+        variables: dict[Hashable, Variable] = {}
+        reindex_vars: list[Hashable] = []
+        for name, var in obj._variables.items():
+            if name in indexers:
+                continue
+
+            use_indexers = (
+                dask_indexers if is_duck_dask_array(var._data) else validated_indexers
+            )
+
+            dtype_kind = var.dtype.kind
+            if dtype_kind in "uifc":
+                # For normal number types do the interpolation:
+                var_indexers = {k: v for k, v in use_indexers.items() if k in var.dims}
+                variables[name] = missing.interp(var, var_indexers, method, **kwargs)
+            elif dtype_kind in "ObU" and (use_indexers.keys() & var.dims):
+                # For types that we do not understand do stepwise
+                # interpolation to avoid modifying the elements.
+                # reindex the variable instead because it supports
+                # booleans and objects and retains the dtype but inside
+                # this loop there might be some duplicate code that slows it
+                # down, therefore collect these signals and run it later:
+                reindex_vars.append(name)
+            elif all(d not in indexers for d in var.dims):
+                # For anything else we can only keep variables if they
+                # are not dependent on any coords that are being
+                # interpolated along:
+                variables[name] = var
+[/SEARCH]
+[REPLACE]
+        has_chunked_array = bool(
+            any(is_chunked_array(v._data) for v in obj._variables.values())
+        )
+        if has_chunked_array:
+            # optimization: create dask coordinate arrays once per Dataset
+            # rather than once per Variable when dask.array.unify_chunks is called later
+            # GH4739
+            dask_indexers = {
+                k: (index.to_base_variable().chunk(), dest.to_base_variable().chunk())
+                for k, (index, dest) in validated_indexers.items()
+            }
+
+        variables: dict[Hashable, Variable] = {}
+        reindex_vars: list[Hashable] = []
+
+        # Pre-filter variables to avoid computing dtype_kind for variables
+        # that will be skipped. Also avoids the `is_duck_dask_array` call
+        # for all variables when only dask arrays need dask_indexers.
+        for name, var in obj._variables.items():
+            if name in indexers:
+                continue
+
+            # A variable can only be interpolated if it shares at least one
+            # dimension with the indexers; otherwise it is kept as is.
+            shared_dims = var.dims
+            if not any(d in indexers for d in shared_dims):
+                variables[name] = var
+                continue
+
+            dtype_kind = var.dtype.kind
+            if dtype_kind in "uifc":
+                # For normal number types do the interpolation:
+                if is_duck_dask_array(var._data):
+                    var_indexers = {
+                        k: v
+                        for k, v in dask_indexers.items()
+                        if k in shared_dims
+                    }
+                else:
+                    var_indexers = {
+                        k: v
+                        for k, v in validated_indexers.items()
+                        if k in shared_dims
+                    }
+                variables[name] = missing.interp(var, var_indexers, method, **kwargs)
+            elif dtype_kind in "ObU":
+                # For types that we do not understand do stepwise
+                # interpolation to avoid modifying the elements.
+                # reindex the variable instead because it supports
+                # booleans and objects and retains the dtype but inside
+                # this loop there might be some duplicate code that slows it
+                # down, therefore collect these signals and run it later:
+                reindex_vars.append(name)
+            elif dtype_kind == "M":
+                # datetime64: treat as numeric for interpolation purposes
+                if is_duck_dask_array(var._data):
+                    var_indexers = {
+                        k: v
+                        for k, v in dask_indexers.items()
+                        if k in shared_dims
+                    }
+                else:
+                    var_indexers = {
+                        k: v
+                        for k, v in validated_indexers.items()
+                        if k in shared_dims
+                    }
+                variables[name] = missing.interp(var, var_indexers, method, **kwargs)
+            elif dtype_kind == "m":
+                # timedelta64: treat as numeric for interpolation purposes
+                if is_duck_dask_array(var._data):
+                    var_indexers = {
+                        k: v
+                        for k, v in dask_indexers.items()
+                        if k in shared_dims
+                    }
+                else:
+                    var_indexers = {
+                        k: v
+                        for k, v in validated_indexers.items()
+                        if k in shared_dims
+                    }
+                variables[name] = missing.interp(var, var_indexers, method, **kwargs)
+[/REPLACE]

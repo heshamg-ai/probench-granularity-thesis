@@ -1,0 +1,49 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        if not isinstance(self, ABCMultiIndex):
+            _as = nargsort(
+                items=self, ascending=ascending, na_position=na_position, key=key
+            )
+        else:
+            idx = cast(Index, ensure_key_mapped(self, key))
+            _as = idx.argsort(na_position=na_position)
+            if not ascending:
+                _as = _as[::-1]
+[/SEARCH]
+[REPLACE]
+        if not isinstance(self, ABCMultiIndex):
+            if key is None:
+                if ascending:
+                    if na_position == "last" and self.is_monotonic_increasing:
+                        _as = np.arange(len(self), dtype=np.intp)
+                    elif na_position == "first" and self.is_monotonic_increasing and not self.hasnans:
+                        _as = np.arange(len(self), dtype=np.intp)
+                    else:
+                        _as = nargsort(
+                            items=self, ascending=ascending, na_position=na_position, key=key
+                        )
+                else:
+                    if na_position == "last" and self.is_monotonic_decreasing:
+                        _as = np.arange(len(self), dtype=np.intp)
+                    elif na_position == "first" and self.is_monotonic_decreasing and not self.hasnans:
+                        _as = np.arange(len(self), dtype=np.intp)
+                    else:
+                        _as = nargsort(
+                            items=self, ascending=ascending, na_position=na_position, key=key
+                        )
+            else:
+                _as = nargsort(
+                    items=self, ascending=ascending, na_position=na_position, key=key
+                )
+        else:
+            if key is None and (
+                (ascending and self.is_monotonic_increasing)
+                or (not ascending and self.is_monotonic_decreasing)
+            ):
+                _as = np.arange(len(self), dtype=np.intp)
+            else:
+                idx = cast(Index, ensure_key_mapped(self, key)) if key is not None else self
+                _as = idx.argsort(na_position=na_position)
+                if not ascending:
+                    _as = _as[::-1]
+[/REPLACE]

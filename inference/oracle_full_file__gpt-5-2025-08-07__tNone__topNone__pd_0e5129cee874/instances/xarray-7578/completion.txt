@@ -1,0 +1,33 @@
+xarray/core/rolling.py
+[SEARCH]
+                wi = {d: window_dims[i] for i, d in enumerate(self.dim) if d in da.dims}
+                st = {d: strides[i] for i, d in enumerate(self.dim) if d in da.dims}
+
+                dataset[key] = self.rollings[key].construct(
+                    window_dim=wi,
+                    fill_value=fill_value,
+                    stride=st,
+                    keep_attrs=keep_attrs,
+                )
+[/SEARCH]
+[REPLACE]
+                wi = {d: window_dims[i] for i, d in enumerate(self.dim) if d in da.dims}
+
+                dataset[key] = self.rollings[key].construct(
+                    window_dim=wi,
+                    fill_value=fill_value,
+                    keep_attrs=keep_attrs,
+                )
+[/REPLACE]
+
+xarray/core/rolling.py
+[SEARCH]
+        return Dataset(dataset, coords=self.obj.coords, attrs=attrs).isel(
+            {d: slice(None, None, s) for d, s in zip(self.dim, strides)}
+        )
+[/SEARCH]
+[REPLACE]
+        ds = Dataset(dataset, coords=self.obj.coords, attrs=attrs)
+        indexers = {d: slice(None, None, s) for d, s in zip(self.dim, strides) if s != 1}
+        return ds.isel(indexers) if indexers else ds
+[/REPLACE]

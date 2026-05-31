@@ -1,0 +1,26 @@
+pandas/core/indexes/base.py
+[SEARCH]
+        # GH 35584. Sort missing values according to na_position kwarg
+        # ignore na_position for MultiIndex
+[/SEARCH]
+[REPLACE]
+        # Fastpath for already-sorted non-MultiIndex without NaNs (or trivial size)
+        if key is None and not isinstance(self, ABCMultiIndex):
+            n = len(self)
+            if n <= 1:
+                if return_indexer:
+                    return self._view(), np.arange(n, dtype=np.intp)
+                return self._view()
+            if not self.hasnans:
+                if ascending and self.is_monotonic_increasing:
+                    if return_indexer:
+                        return self._view(), np.arange(n, dtype=np.intp)
+                    return self._view()
+                if not ascending and self.is_monotonic_decreasing:
+                    if return_indexer:
+                        return self._view(), np.arange(n, dtype=np.intp)
+                    return self._view()
+
+        # GH 35584. Sort missing values according to na_position kwarg
+        # ignore na_position for MultiIndex
+[/REPLACE]

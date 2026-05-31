@@ -1,0 +1,133 @@
+ pandas/core/indexes/base.py
+[SEARCH]
+    @Appender(_index_shared_docs["take"] % _index_doc_kwargs)
+    def take(
+        self,
+        indices,
+        axis: Axis = 0,
+        allow_fill: bool = True,
+        fill_value=None,
+        **kwargs,
+    ) -> Self:
+        if kwargs:
+            nv.validate_take((), kwargs)
+        if is_scalar(indices):
+            raise TypeError("Expected indices to be array-like")
+        indices = ensure_platform_int(indices)
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+        # Note: we discard fill_value and use self._na_value, only relevant
+        # in the case where allow_fill is True and fill_value is not None
+        values = self._values
+        if isinstance(values, np.ndarray):
+            taken = algos.take(
+                values,
+                indices,
+                allow_fill=allow_fill,
+                fill_value=self._na_value,
+            )
+        else:
+            # algos.take passes 'axis' keyword which not all EAs accept
+            taken = values.take(
+                indices,
+                allow_fill=allow_fill,
+                fill_value=self._na_value,
+            )
+        return self._constructor._simple_new(taken, name=self.name)
+[/SEARCH]
+[REPLACE]
+    @Appender(_index_shared_docs["take"] % _index_doc_kwargs)
+    def take(
+        self,
+        indices,
+        axis: Axis = 0,
+        allow_fill: bool = True,
+        fill_value=None,
+        **kwargs,
+    ) -> Self:
+        if kwargs:
+            nv.validate_take((), kwargs)
+        if is_scalar(indices):
+            raise TypeError("Expected indices to be array-like")
+        indices = ensure_platform_int(indices)
+        allow_fill = self._maybe_disallow_fill(allow_fill, fill_value, indices)
+        # Note: we discard fill_value and use self._na_value, only relevant
+        # in the case where allow_fill is True and fill_value is not None
+        values = self._values
+        if isinstance(values, np.ndarray):
+            taken = algos.take(
+                values,
+                indices,
+                allow_fill=allow_fill,
+                fill_value=self._na_value,
+            )
+        else:
+            # algos.take passes 'axis' keyword which not all EAs accept
+            taken = values.take(
+                indices,
+                allow_fill=allow_fill,
+                fill_value=self._na_value,
+            )
+        return self._constructor._simple_new(taken, name=self.name)
+[/REPLACE]
+
+pandas/core/indexes/range.py
+[SEARCH]
+    @Appender(_index_shared_docs["take"] % _index_doc_kwargs)
+    def take(
+        self,
+        indices,
+        axis: Axis = 0,
+        allow_fill: bool = True,
+        fill_value=None,
+        **kwargs,
+    ) -> Index:
+        nv.validate_take((), kwargs)
+        if is_scalar(indices):
+            raise TypeError("Expected indices to be array-like")
+        indices = ensure_platform_int(indices)
+
+        # if allow_fill is False, get rid of the (-1)s,
+        # then check fill_value, convert to uint if no (-1)s, and
+        # re-call take() with allow_fill=True.
+        if not allow_fill:
+            return self.astype("int64").take(
+                indices,
+                allow_fill=False,
+                fill_value=fill_value,
+                **kwargs,
+            )
+
+        return self.astype("int64").take(
+            indices, allow_fill=allow_fill, fill_value=fill_value, **kwargs
+        )
+[/SEARCH]
+[REPLACE]
+    @Appender(_index_shared_docs["take"] % _index_doc_kwargs)
+    def take(
+        self,
+        indices,
+        axis: Axis = 0,
+        allow_fill: bool = True,
+        fill_value=None,
+        **kwargs,
+    ) -> Index:
+        nv.validate_take((), kwargs)
+        if is_scalar(indices):
+            raise TypeError("Expected indices to be array-like")
+        indices = ensure_platform_int(indices)
+
+        # if allow_fill is False, get rid of the (-1)s,
+        # then check fill_value, convert to uint if no (-1)s, and
+        # re-call take() with allow_fill=True.
+        if not allow_fill:
+            return self.astype("int64").take(
+                indices,
+                allow_fill=False,
+                fill_value=fill_value,
+                **kwargs,
+            )
+
+        return self.astype("int64").take(
+            indices, allow_fill=allow_fill, fill_value=fill_value, **kwargs
+        )
+[/REPLACE]

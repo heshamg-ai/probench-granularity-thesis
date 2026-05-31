@@ -1,0 +1,67 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+    @doc(ExtensionArray.to_numpy)
+    def to_numpy(
+        self,
+        dtype: npt.DTypeLike | None = None,
+        copy: bool = False,
+        na_value: object = lib.no_default,
+    ) -> np.ndarray:
+        if dtype is None and self._hasna:
+            dtype = object
+        if na_value is lib.no_default:
+            na_value = self.dtype.na_value
+
+        pa_type = self._data.type
+        if (
+            is_object_dtype(dtype)
+            or pa.types.is_timestamp(pa_type)
+            or pa.types.is_duration(pa_type)
+        ):
+            result = np.array(list(self), dtype=dtype)
+        else:
+            result = np.asarray(self._data, dtype=dtype)
+            if copy or self._hasna:
+                result = result.copy()
+        if self._hasna:
+            result[self.isna()] = na_value
+        return result
+[/SEARCH]
+[REPLACE]
+    @doc(ExtensionArray.to_numpy)
+    def to_numpy(
+        self,
+        dtype: npt.DTypeLike | None = None,
+        copy: bool = False,
+        na_value: object = lib.no_default,
+    ) -> np.ndarray:
+        if dtype is None and self._hasna:
+            dtype = object
+        if na_value is lib.no_default:
+            na_value = self.dtype.na_value
+
+        pa_type = self._data.type
+        if is_object_dtype(dtype):
+            result = self._data.to_pylist()
+            if na_value is not self.dtype.na_value:
+                mask = self._data.is_null().to_numpy()
+                if mask.any():
+                    for i in np.flatnonzero(mask):
+                        result[i] = na_value
+            result = np.array(result, dtype=dtype)
+        elif pa.types.is_timestamp(pa_type) or pa.types.is_duration(pa_type):
+            result = np.empty(len(self._data), dtype=object)
+            mask = self._data.is_null()
+            na_value_use = na_value
+            i = 0
+            for val in self._data:
+                result[i] = na_value_use if mask[i].as_py() else val.as_py()
+                i += 1
+        else:
+            result = np.asarray(self._data, dtype=dtype)
+            if copy or self._hasna:
+                result = result.copy()
+            if self._hasna:
+                result[self.isna()] = na_value
+        return result
+[/REPLACE]

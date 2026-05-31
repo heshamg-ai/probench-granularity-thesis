@@ -1,0 +1,10 @@
+pandas/core/strings/accessor.py
+[SEARCH]
+    return [names.get(1 + i, i) for i in range(regex.groups)]
+[/SEARCH]
+[REPLACE]
+    return [
+        names.get(1 + i, i) if names.get(1 + i, i) is not None else i
+        for i in range(regex.groups)
+    ]
+[/REPLACE]

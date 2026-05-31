@@ -1,0 +1,21 @@
+pandas/core/generic.py
+[SEARCH]
+        if items is not None:
+            name = self._get_axis_name(axis)
+            # error: Keywords must be strings
+            return self.reindex(  # type: ignore[misc]
+                **{name: [r for r in items if r in labels]}  # type: ignore[arg-type]
+            )
+[/SEARCH]
+[REPLACE]
+        if items is not None:
+            name = self._get_axis_name(axis)
+            # Optimization: use Index.intersection for large items lists
+            # with many non-existent labels, which is much faster than
+            # O(len(items)) containment checks via `r in labels`.
+            existing_items = Index(items).intersection(labels, sort=False)
+            # error: Keywords must be strings
+            return self.reindex(  # type: ignore[misc]
+                **{name: existing_items}  # type: ignore[arg-type]
+            )
+[/REPLACE]

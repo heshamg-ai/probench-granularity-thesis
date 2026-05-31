@@ -1,0 +1,92 @@
+pandas/core/reshape/merge.py
+[SEARCH]
+    # TODO: if either is a RangeIndex, we can likely factorize more efficiently?
+[/SEARCH]
+[REPLACE]
+    # TODO: if either is a RangeIndex, we can likely factorize more efficiently?
+    _dt64_opt = False
+    _lmask_nat = None
+    _rmask_nat = None
+[/REPLACE]
+
+pandas/core/reshape/merge.py
+[SEARCH]
+    elif (
+        isinstance(lk.dtype, CategoricalDtype)
+        and isinstance(rk.dtype, CategoricalDtype)
+        and lk.dtype == rk.dtype
+    ):
+[/SEARCH]
+[REPLACE]
+    elif is_datetime64_dtype(lk.dtype) and is_datetime64_dtype(rk.dtype):
+        # Ensure both are ns-resolution and use int64 ordinals with NA mask
+        lk = np.asarray(lk, dtype="datetime64[ns]").view("i8")
+        rk = np.asarray(rk, dtype="datetime64[ns]").view("i8")
+        _iNaT = np.int64(np.iinfo("i8").min)
+        _lmask_nat = lk == _iNaT
+        _rmask_nat = rk == _iNaT
+        _dt64_opt = True
+    elif is_timedelta64_dtype(lk.dtype) and is_timedelta64_dtype(rk.dtype):
+        # Use int64 ordinals for timedelta64 with NA mask
+        lk = np.asarray(lk, dtype="timedelta64[ns]").view("i8")
+        rk = np.asarray(rk, dtype="timedelta64[ns]").view("i8")
+        _iNaT = np.int64(np.iinfo("i8").min)
+        _lmask_nat = lk == _iNaT
+        _rmask_nat = rk == _iNaT
+        _dt64_opt = True
+    elif (
+        isinstance(lk.dtype, CategoricalDtype)
+        and isinstance(rk.dtype, CategoricalDtype)
+        and lk.dtype == rk.dtype
+    ):
+[/REPLACE]
+
+pandas/core/reshape/merge.py
+[SEARCH]
+    if isinstance(lk, BaseMaskedArray):
+        assert isinstance(rk, BaseMaskedArray)
+        llab = rizer.factorize(lk._data, mask=lk._mask)
+        rlab = rizer.factorize(rk._data, mask=rk._mask)
+    elif isinstance(lk, ArrowExtensionArray):
+        assert isinstance(rk, ArrowExtensionArray)
+        # we can only get here with numeric dtypes
+        # TODO: Remove when we have a Factorizer for Arrow
+        llab = rizer.factorize(
+            lk.to_numpy(na_value=1, dtype=lk.dtype.numpy_dtype), mask=lk.isna()
+        )
+        rlab = rizer.factorize(
+            rk.to_numpy(na_value=1, dtype=lk.dtype.numpy_dtype), mask=rk.isna()
+        )
+    else:
+        # Argument 1 to "factorize" of "ObjectFactorizer" has incompatible type
+        # "Union[ndarray[Any, dtype[signedinteger[_64Bit]]],
+        # ndarray[Any, dtype[object_]]]"; expected "ndarray[Any, dtype[object_]]"
+        llab = rizer.factorize(lk)  # type: ignore[arg-type]
+        rlab = rizer.factorize(rk)  # type: ignore[arg-type]
+[/SEARCH]
+[REPLACE]
+    if _dt64_opt:
+        # Use precomputed NA masks for datetime-like ordinals
+        llab = rizer.factorize(lk, mask=_lmask_nat)
+        rlab = rizer.factorize(rk, mask=_rmask_nat)
+    elif isinstance(lk, BaseMaskedArray):
+        assert isinstance(rk, BaseMaskedArray)
+        llab = rizer.factorize(lk._data, mask=lk._mask)
+        rlab = rizer.factorize(rk._data, mask=rk._mask)
+    elif isinstance(lk, ArrowExtensionArray):
+        assert isinstance(rk, ArrowExtensionArray)
+        # we can only get here with numeric dtypes
+        # TODO: Remove when we have a Factorizer for Arrow
+        llab = rizer.factorize(
+            lk.to_numpy(na_value=1, dtype=lk.dtype.numpy_dtype), mask=lk.isna()
+        )
+        rlab = rizer.factorize(
+            rk.to_numpy(na_value=1, dtype=lk.dtype.numpy_dtype), mask=rk.isna()
+        )
+    else:
+        # Argument 1 to "factorize" of "ObjectFactorizer" has incompatible type
+        # "Union[ndarray[Any, dtype[signedinteger[_64Bit]]],
+        # ndarray[Any, dtype[object_]]]"; expected "ndarray[Any, dtype[object_]]"
+        llab = rizer.factorize(lk)  # type: ignore[arg-type]
+        rlab = rizer.factorize(rk)  # type: ignore[arg-type]
+[/REPLACE]

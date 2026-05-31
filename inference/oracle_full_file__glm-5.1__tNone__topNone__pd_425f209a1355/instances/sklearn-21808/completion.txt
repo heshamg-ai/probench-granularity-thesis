@@ -1,0 +1,138 @@
+Looking at the code, I can identify several key optimizations for `_multinomial_loss_grad` which is the hot path when using the LBFGS solver for multiclass classification:
+
+1. **Avoid redundant `logsumexp` by inlining the loss computation**: `logsumexp` computes `exp(p)` internally, but then `p` is exponentiated again. We can compute `max_p = p.max(axis=1)` first, use it for both the stable log-sum-exp and the subtraction, saving a full pass over the data and redundant exponentiation.
+2. **Avoid redundant `sample_weight` broadcasting**: `_multinomial_loss` broadcasts `sample_weight` to 2D, and then `_multinomial_loss_grad` broadcasts it again. We can broadcast once and reuse.
+3. **Compute `diff = p - Y` before modifying `p` with sample weights**, then apply sample weights once to `diff` for the gradient, saving a multiply.
+4. **Use `squared_norm(w) = np.dot(w.ravel(), w.ravel())`** which avoids creating a temporary squared array.
+5. **Use `np.dot` for the gradient regular term** instead of `alpha * w` on the full array, since the last column (intercept) is overwritten anyway.
+6. **Allocate gradient with `n_features` columns** instead of `n_features + bool(fit_intercept)`, and only add the intercept column if needed, saving memory.
+
+Here are the changes:
+
+sklearn/linear_model/_logistic.py
+[SEARCH]
+def _multinomial_loss_grad(w, X, Y, alpha, sample_weight):
+    """Computes the multinomial loss, gradient and class probabilities.
+
+    Parameters
+    ----------
+    w : ndarray of shape (n_classes * n_features,) or
+        (n_classes * (n_features + 1),)
+        Coefficient vector.
+
+    X : {array-like, sparse matrix} of shape (n_samples, n_features)
+        Training data.
+
+    Y : ndarray of shape (n_samples, n_classes)
+        Transformed labels according to the output of LabelBinarizer.
+
+    alpha : float
+        Regularization parameter. alpha is equal to 1 / C.
+
+    sample_weight : array-like of shape (n_samples,)
+        Array of weights that are assigned to individual samples.
+
+    Returns
+    -------
+    loss : float
+        Multinomial loss.
+
+    grad : ndarray of shape (n_classes * n_features,) or \
+            (n_classes * (n_features + 1),)
+        Ravelled gradient of the multinomial loss.
+
+    p : ndarray of shape (n_samples, n_classes)
+        Estimated class probabilities
+
+    Reference
+    ---------
+    Bishop, C. M. (2006). Pattern recognition and machine learning.
+    Springer. (Chapter 4.3.4)
+    """
+    n_classes = Y.shape[1]
+    n_features = X.shape[1]
+    fit_intercept = w.size == n_classes * (n_features + 1)
+    grad = np.zeros((n_classes, n_features + bool(fit_intercept)), dtype=X.dtype)
+    loss, p, w = _multinomial_loss(w, X, Y, alpha, sample_weight)
+    sample_weight = sample_weight[:, np.newaxis]
+    diff = sample_weight * (p - Y)
+    grad[:, :n_features] = safe_sparse_dot(diff.T, X)
+    grad[:, :n_features] += alpha * w
+    if fit_intercept:
+        grad[:, -1] = diff.sum(axis=0)
+    return loss, grad.ravel(), p
+[/SEARCH]
+[REPLACE]
+def _multinomial_loss_grad(w, X, Y, alpha, sample_weight):
+    """Computes the multinomial loss, gradient and class probabilities.
+
+    Parameters
+    ----------
+    w : ndarray of shape (n_classes * n_features,) or
+        (n_classes * (n_features + 1),)
+        Coefficient vector.
+
+    X : {array-like, sparse matrix} of shape (n_samples, n_features)
+        Training data.
+
+    Y : ndarray of shape (n_samples, n_classes)
+        Transformed labels according to the output of LabelBinarizer.
+
+    alpha : float
+        Regularization parameter. alpha is equal to 1 / C.
+
+    sample_weight : array-like of shape (n_samples,)
+        Array of weights that are assigned to individual samples.
+
+    Returns
+    -------
+    loss : float
+        Multinomial loss.
+
+    grad : ndarray of shape (n_classes * n_features,) or \
+            (n_classes * (n_features + 1),)
+        Ravelled gradient of the multinomial loss.
+
+    p : ndarray of shape (n_samples, n_classes)
+        Estimated class probabilities
+
+    Reference
+    ---------
+    Bishop, C. M. (2006). Pattern recognition and machine learning.
+    Springer. (Chapter 4.3.4)
+    """
+    n_classes = Y.shape[1]
+    n_features = X.shape[1]
+    fit_intercept = w.size == n_classes * (n_features + 1)
+    w = w.reshape(n_classes, -1)
+    sample_weight = sample_weight[:, np.newaxis]
+    if fit_intercept:
+        intercept = w[:, -1]
+        w = w[:, :-1]
+    else:
+        intercept = 0
+    p = safe_sparse_dot(X, w.T)
+    p += intercept
+    # Compute logsumexp in a numerically stable way without
+    # calling logsumexp which internally computes exp(p) redundantly
+    p_max = p.max(axis=1)
+    p -= p_max[:, np.newaxis]
+    log_sum_exp_p = np.log(np.exp(p, out=p).sum(axis=1))
+    # Compute loss using the stable log-sum-exp
+    loss = -(sample_weight * Y * p).sum()
+    loss += sample_weight.sum() * p_max.sum()
+    loss += (log_sum_exp_p * sample_weight.squeeze()).sum()
+    loss += 0.5 * alpha * np.dot(w.ravel(), w.ravel())
+    # Get probabilities from the already computed exp(p)
+    diff = p - Y
+    diff *= sample_weight
+    if fit_intercept:
+        grad = np.empty((n_classes, n_features + 1), dtype=X.dtype)
+    else:
+        grad = np.empty((n_classes, n_features), dtype=X.dtype)
+    grad[:, :n_features] = safe_sparse_dot(diff.T, X)
+    grad[:, :n_features] += np.dot(alpha, w)
+    if fit_intercept:
+        grad[:, -1] = diff.sum(axis=0)
+    return loss, grad.ravel(), p
+[/REPLACE]

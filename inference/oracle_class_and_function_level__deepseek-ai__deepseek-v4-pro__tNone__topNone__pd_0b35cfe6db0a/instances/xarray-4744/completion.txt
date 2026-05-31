@@ -1,0 +1,31 @@
+xarray/core/dataset.py
+[SEARCH]
+    def __getitem__(self, key):
+        """Access variables or coordinates this dataset as a
+        :py:class:`~xarray.DataArray`.
+
+        Indexing with a list of names will return a new ``Dataset`` object.
+        """
+        if utils.is_dict_like(key):
+            return self.isel(**cast(Mapping, key))
+
+        if hashable(key):
+            return self._construct_dataarray(key)
+        else:
+            return self._copy_listed(np.asarray(key))
+[/SEARCH]
+[REPLACE]
+    def __getitem__(self, key):
+        """Access variables or coordinates this dataset as a
+        :py:class:`~xarray.DataArray`.
+
+        Indexing with a list of names will return a new ``Dataset`` object.
+        """
+        if utils.is_dict_like(key):
+            return self.isel(**cast(Mapping, key))
+
+        if hashable(key):
+            return self._construct_dataarray(key)
+        else:
+            return self._copy_listed(key if isinstance(key, list) else np.asarray(key))
+[/REPLACE]

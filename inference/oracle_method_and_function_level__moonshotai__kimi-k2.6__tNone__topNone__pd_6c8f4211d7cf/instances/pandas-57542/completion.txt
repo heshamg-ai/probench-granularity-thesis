@@ -1,0 +1,11 @@
+ pandas/core/strings/accessor.py
+[SEARCH]
+        result = DataFrame(result, columns=columns, index=self._obj.index)
+[/SEARCH]
+[REPLACE]
+        from pandas import RangeIndex
+
+        if columns == list(range(regex.groups)):
+            columns = RangeIndex(regex.groups)
+        result = DataFrame(result, columns=columns, index=self._obj.index)
+[/REPLACE]

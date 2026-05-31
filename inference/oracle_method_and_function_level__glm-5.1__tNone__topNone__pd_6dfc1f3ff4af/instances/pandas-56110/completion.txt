@@ -1,0 +1,43 @@
+pandas/core/arrays/string_arrow.py
+[SEARCH]
+    _str_na_value = libmissing.NA  # type: ignore[assignment]
+[/SEARCH]
+[REPLACE]
+    _str_na_value = libmissing.NA  # type: ignore[assignment]
+
+    def _str_get_dummies(self, sep: str = "|"):
+        import pyarrow.compute as pc
+
+        if len(self) == 0:
+            return np.array([], dtype=np.uint8), []
+
+        pa_array = self._pa_array
+        fill_value = self._str_na_value if pa_array.null_count > 0 else None
+        if fill_value is not None:
+            pa_array = pc.if_else(pc.is_null(pa_array), "", pa_array)
+
+        split_arr = pc.split(pa_array, sep)
+        exploded = pc.list_flatten(split_arr)
+        if exploded.null_count > 0:
+            exploded = pc.drop_null(exploded)
+
+        labels = pc.dictionary_encode(exploded)
+
+        uniques = pa.array(labels.dictionary.to_pylist(), type=pa.utf8())
+        n_cats = len(uniques)
+        if n_cats == 0:
+            return np.zeros(len(self), dtype=np.uint8), []
+
+        indices = pa.array(labels.indices, type=pa.uint32())
+        offsets = pc.value_lengths(split_arr)
+        if offsets.null_count > 0:
+            offsets = pc.if_else(pc.is_null(offsets), 0, offsets)
+
+        result = np.zeros((len(self), n_cats), dtype=np.uint8)
+        flat = result.ravel()
+        rows = np.repeat(np.arange(len(self), dtype=np.uint32), offsets)
+        mask = ~pc.is_null(indices).to_numpy()
+        flat[rows[mask] * n_cats + indices[mask].to_numpy()] = 1
+
+        return result, uniques.to_numpy(dtype=object)
+[/REPLACE]

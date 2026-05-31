@@ -1,0 +1,48 @@
+Looking at the optimization request, I need to optimize `DataFrame.join` for sorted joins where one side is unique. The key optimization target is the `_join_monotonic` method in `Index`, which already handles both-unique cases efficiently but falls back to `_left_indexer` when only one side is unique.
+
+For a **left join with many:1 (right unique)**:
+- The result index equals the left index
+- Right indexer maps left → right positions
+- Left indexer is just `np.arange(len(self))` (identity mapping)
+- We can use `_left_indexer_unique` which is O(n log m) instead of `_left_indexer` which is O(n+m) with more memory allocation
+
+For a **right join with 1:many (left unique)**:
+- Same optimization, just swapped
+
+This avoids allocating the join index array and the left indexer array in `_left_indexer`.
+
+pandas/core/indexes/base.py
+[SEARCH]
+            if how == "left":
+                join_array, lidx, ridx = self._left_indexer(other)
+            elif how == "right":
+                join_array, ridx, lidx = other._left_indexer(self)
+            elif how == "inner":
+                join_array, lidx, ridx = self._inner_indexer(other)
+            elif how == "outer":
+                join_array, lidx, ridx = self._outer_indexer(other)
+[/SEARCH]
+[REPLACE]
+            if how == "left":
+                if other.is_unique:
+                    # Optimization: left join many:1 (right unique)
+                    # The join index is self, and left indexer is identity
+                    join_index = self
+                    lidx = None
+                    ridx = self._left_indexer_unique(other)
+                else:
+                    join_array, lidx, ridx = self._left_indexer(other)
+            elif how == "right":
+                if self.is_unique:
+                    # Optimization: right join 1:many (left unique)
+                    # The join index is other, and right indexer is identity
+                    join_index = other
+                    ridx = None
+                    lidx = other._left_indexer_unique(self)
+                else:
+                    join_array, ridx, lidx = other._left_indexer(self)
+            elif how == "inner":
+                join_array, lidx, ridx = self._inner_indexer(other)
+            elif how == "outer":
+                join_array, lidx, ridx = self._outer_indexer(other)
+[/REPLACE]

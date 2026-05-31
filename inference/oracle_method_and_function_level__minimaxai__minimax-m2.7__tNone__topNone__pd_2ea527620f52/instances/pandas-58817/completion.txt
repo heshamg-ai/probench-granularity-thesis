@@ -1,0 +1,323 @@
+
+
+Looking at the problem, I need to find and optimize `DataFrame.unstack` when `future_stack=True` and the DataFrame doesn't have a MultiIndex. Let me search for the relevant code.
+
+pandas/core/reshape/reshape.py
+[SEARCH]
+def unstack(
+    obj, level: IndexLabel = -1, fill_value: Hashable = None, sortlevel: bool = True
+) -> DataFrame | Series:
+    """
+    Unstack, also known as pivot, the level of the requested index up to the
+    column axis.
+
+    This function is intented to work on a Series which has a MultiIndex.
+    One dimension of the result will be the unique index values of the level(s)
+    that are being unstacked. The other dimension will be the unique values of
+    the level below, in the case of a MultiIndex, or the column labels
+    of the resulting DataFrame if there is no MultiIndex. In all cases, the
+    name(s) of the new column index(es) will be taken from the level(s)
+    being unstacked and the name of the index will be taken from the name
+    of the index level(s) being popped.
+
+    Parameters
+    ----------
+    obj : DataFrame or Series
+        The object whose indices and data will be rehaped.
+    level : int, str, List[int] or List[str], default -1
+        The level(s) of the requested index to unpivot. The level(s) can be
+        extracted from the MultiIndex of the index, and then are be used as
+        name(s) for the new columns. In the case of a non-MultiIndex index,
+        level can be specified as a single int, str or List[int] or List[str].
+    fill_value : Hashable, default None
+        Value to use for missing values in the pivoted data. Defaults to
+        NaN, the default for pandas objects.
+    sortlevel : bool, default True
+        Sort the index of the resulting DataFrame in lexicographical order.
+        For MultiIndex, sort the new column index lexicographically.
+        The index may not be sorted in the original order. To avoid
+        sorting the new index, set to False.
+
+    Returns
+    -------
+    DataFrame or Series
+        The result of the unstack operation.
+
+    See Also
+    --------
+    DataFrame.pivot : Pivot a table based on column values.
+    DataFrame.stack : The inverse of unstack.
+    pivot_table : Create a spreadsheet-style pivot table as a DataFrame.
+
+    Notes
+    -----
+    - For MultiIndex with more than 2 levels, level determines the level
+      up to which the index will be unstacked in the column axis.
+    - For a MultiIndex with a single level, unstack still works.
+
+    Examples
+    --------
+    >>> index = pd.MultiIndex.from_tuples(
+    ...     [("one", "a"), ("one", "b"), ("two", "a"), ("two", "b")]
+    ... )
+    >>> s = pd.Series(np.arange(1.0, 5.0), index=index)
+    >>> s
+    one  a    1.0
+    one  b    2.0
+    two  a    3.0
+    two  b    4.0
+    dtype: float64
+
+    >>> s.unstack(level=-1)
+         a    b
+    one  1.0  2.0
+    two  3.0  4.0
+
+    >>> s.unstack(level=0)
+         one  two
+    a     1.0   3.0
+    b     2.0   4.0
+
+    >>> df = s.unstack(level=-1)
+    >>> df
+         a    b
+    one  1.0  2.0
+    two  3.0  3.0
+
+    >>> df.unstack()
+    one  a  Unnamed: 0          NaN
+              Unnamed: 1    0.000000
+              b    Unnamed: 0          NaN
+              Unnamed: 1    1.000000
+    two  a  Unnamed: 0          NaN
+              Unnamed: 1    2.000000
+              b    Unnamed: 0          NaN
+              Unnamed: 1    3.000000
+    dtype: float64
+
+    With a MultiIndex and a column that is not named, the resulting Series
+    retains the number of dimensions:
+
+    >>> df = pd.DataFrame({"X": [1, 2, 3, 4]}, index=index)
+    >>> df
+             X
+    one  a  1
+         b  2
+         two  a  3
+         b  4
+    >>> df.unstack(level="X")
+    one  a  X    1
+    b  2
+    two  a  X    3
+    b  4
+    Name: X, dtype: int64
+
+    Alternatively, you can use ``future_stack=True`` to get
+    the result in the new :class:`~pandas.MultiIndex` format:
+
+    >>> df.unstack(level="X", future_stack=True)
+    one  a  X    1
+    b  2
+    two  a  X    3
+    b  4
+    Name: X, dtype: int64
+    """
+    if not isinstance(obj, (DataFrame, Series)):
+        raise TypeError(
+            f"Cannot unstack '{type(obj).__name__}' type. Only "
+            "DataFrame and Series can be unstack."
+        )
+    if isinstance(obj, Series):
+        if obj.ndim == 2:
+            frame: DataFrame = obj.to_frame()
+        else:
+            frame = obj.to_frame("stack")
+    else:
+        frame = obj
+
+    if isinstance(frame._columns, MultiIndex) or (
+        frame._columns.nlevels > 1 or isinstance(frame.index, MultiIndex)
+    ):
+        return _unstack_multiindex(frame, obj.__class__, level, fill_value, sortlevel)
+
+    if not isinstance(level, list):
+        level = [level]
+
+    if isinstance(obj, Series):
+        ndim = obj.ndim
+    else:
+        ndim = frame.ndim
+
+    if ndim == 1 or (ndim == 2 and len(level) == 1 and frame.shape[1] == 1):
+        if not fill_value:
+            if isinstance(frame.index, MultiIndex):
+                result = stack_v3(frame, level)
+            else:
+                result = _stack_selected_columns(frame, level, dropna=True)
+        else:
+            result = _stack_selected_columns(frame, level, fill_value, dropna=True)
+        return result.unstack(fill_value=fill_value) if len(level) > 1 else result
+
+    return _unstack_frame(
+        obj, frame, level, fill_value, sortlevel, not arguse
+    )
+[/SEARCH]
+[REPLACE]
+def unstack(
+    obj, level: IndexLabel = -1, fill_value: Hashable = None, sortlevel: bool = True
+) -> DataFrame | Series:
+    """
+    Unstack, also known as pivot, the level of the requested index up to the
+    column axis.
+
+    This function is intented to work on a Series which has a MultiIndex.
+    One dimension of the result will be the unique index values of the level(s)
+    that are being unstacked. The other dimension will be the unique values of
+    the level below, in the case of a MultiIndex, or the column labels
+    of the resulting DataFrame if there is no MultiIndex. In all cases, the
+    name(s) of the new column index(es) will be taken from the level(s)
+    being unstacked and the name(s) of the index will be taken from the name
+    of the index level(s) being popped.
+
+    Parameters
+    ----------
+    obj : DataFrame or Series
+        The object whose indices and data will be rehaped.
+    level : int, str, List[int] or List[str], default -1
+        The level(s) of the requested index to unpivot. The level(s) can be
+        extracted from the MultiIndex of the index, and then are be used as
+        name(s) for the new columns. In the case of a non-MultiIndex index,
+        level can be specified as a single int, str or List[int] or List[str].
+    fill_value : Hashable, default None
+        Value to use for missing values in the pivoted data. Defaults to
+        NaN, the default for pandas objects.
+    sortlevel : bool, default True
+        Sort the index of the resulting DataFrame in lexicographical order.
+        For MultiIndex, sort the new column index lexicographically.
+        The index may not be sorted in the original order. To avoid
+        sorting the new index, set to False.
+
+    Returns
+    -------
+    DataFrame or Series
+        The result of the unstack operation.
+
+    See Also
+    --------
+    DataFrame.pivot : Pivot a table based on column values.
+    DataFrame.stack : The inverse of unstack.
+    pivot_table : Create a spreadsheet-style pivot table as a DataFrame.
+
+    Notes
+    -----
+    - For MultiIndex with more than 2 levels, level determines the level
+      up to which the index will be unstacked in the column axis.
+    - For a MultiIndex with a single level, unstack still works.
+
+    Examples
+    --------
+    >>> index = pd.MultiIndex.from_tuples(
+    ...     [("one", "a"), ("one", "b"), ("two", "a"), ("two", "b")]
+    ... )
+    >>> s = pd.Series(np.arange(1.0, 5.0), index=index)
+    >>> s
+    one  a    1.0
+    one  b    2.0
+    two  a    3.0
+    two  b    4.0
+    dtype: float64
+
+    >>> s.unstack(level=-1)
+         a    b
+    one  1.0  2.0
+    two  3.0  4.0
+
+    >>> s.unstack(level=0)
+         one  two
+    a     1.0   3.0
+    b     2.0   4.0
+
+    >>> df = s.unstack(level=-1)
+    >>> df
+         a    b
+    one  1.0  2.0
+    two  3.0  3.0
+
+    >>> df.unstack()
+    one  a  Unnamed: 0          NaN
+              Unnamed: 1    0.000000
+              b    Unnamed: 0          NaN
+              Unnamed: 1    1.000000
+    two  a  Unnamed: 0          NaN
+              Unnamed: 1    2.000000
+              b    Unnamed: 0          NaN
+              Unnamed: 1    3.000000
+    dtype: float64
+
+    With a MultiIndex and a column that is not named, the resulting Series
+    retains the number of dimensions:
+
+    >>> df = pd.DataFrame({"X": [1, 2, 3, 4]}, index=index)
+    >>> df
+             X
+    one  a  1
+         b  2
+         two  a  3
+         b  4
+    >>> df.unstack(level="X")
+    one  a  X    1
+    b  2
+    two  a  X    3
+    b  4
+    Name: X, dtype: int64
+
+    Alternatively, you can use ``future_stack=True`` to get
+    the result in the new :class:`~pandas.MultiIndex` format:
+
+    >>> df.unstack(level="X", future_stack=True)
+    one  a  X    1
+    b  2
+    two  a  X    3
+    b  4
+    Name: X, dtype: int64
+    """
+    if not isinstance(obj, (DataFrame, Series)):
+        raise TypeError(
+            f"Cannot unstack '{type(obj).__name__}' type. Only "
+            "DataFrame and Series can be unstack."
+        )
+    if isinstance(obj, Series):
+        if obj.ndim == 2:
+            frame: DataFrame = obj.to_frame()
+        else:
+            frame = obj.to_frame("stack")
+    else:
+        frame = obj
+
+    if isinstance(frame._columns, MultiIndex) or (
+        frame._columns.nlevels > 1 or isinstance(frame.index, MultiIndex)
+    ):
+        return _unstack_multiindex(frame, obj.__class__, level, fill_value, sortlevel)
+
+    if not isinstance(level, list):
+        level = [level]
+
+    if isinstance(obj, Series):
+        ndim = obj.ndim
+    else:
+        ndim = frame.ndim
+
+    if ndim == 1 or (ndim == 2 and len(level) == 1 and frame.shape[1] == 1):
+        if not fill_value:
+            if isinstance(frame.index, MultiIndex):
+                result = stack_v3(frame, level)
+            else:
+                result = _stack_selected_columns(frame, level, dropna=True)
+        else:
+            result = _stack_selected_columns(frame, level, fill_value, dropna=True)
+        return result.unstack(fill_value=fill_value) if len(level) > 1 else result
+
+    return _unstack_frame(
+        obj, frame, level, fill_value, sortlevel, not arguse
+    )
+[/REPLACE]

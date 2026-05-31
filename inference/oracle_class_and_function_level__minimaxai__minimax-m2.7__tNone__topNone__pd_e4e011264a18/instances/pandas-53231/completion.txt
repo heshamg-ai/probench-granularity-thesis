@@ -1,0 +1,83 @@
+
+
+pandas/core/reshape/merge.py
+[SEARCH]
+    elif isinstance(lk, ExtensionArray) and lk.dtype == rk.dtype:
+        if not isinstance(lk, BaseMaskedArray) and not (
+            # exclude arrow dtypes that would get cast to object
+            isinstance(lk.dtype, ArrowDtype)
+            and is_numeric_dtype(lk.dtype.numpy_dtype)
+        ):
+            lk, _ = lk._values_for_factorize()
+
+            # error: Item "ndarray" of "Union[Any, ndarray]" has no attribute
+            # "_values_for_factorize"
+            rk, _ = rk._values_for_factorize()  # type: ignore[union-attr]
+
+    klass, lk, rk = _convert_arrays_and_get_rizer_klass(lk, rk)
+
+    rizer = klass(max(len(lk), len(rk)))
+
+    if isinstance(lk, BaseMaskedArray):
+        assert isinstance(rk, BaseMaskedArray)
+        llab = rizer.factorize(lk._data, mask=lk._mask)
+        rlab = rizer.factorize(rk._data, mask=rk._mask)
+    elif isinstance(lk, ArrowExtensionArray):
+        assert isinstance(rk, ArrowExtensionArray)
+        # we can only get here with numeric dtypes
+        # TODO: Remove when we have a Factorizer for Arrow
+        llab = rizer.factorize(
+            lk.to_numpy(na_value=1, dtype=lk.dtype.numpy_dtype), mask=lk.isna()
+        )
+        rlab = rizer.factorize(
+            rk.to_numpy(na_value=1, dtype=lk.dtype.numpy_dtype), mask=rk.isna()
+        )
+    else:
+        # Argument 1 to "factorize" of "ObjectFactorizer" has incompatible type
+        # "Union[ndarray[Any, dtype[signedinteger[_64Bit]]],
+        # ndarray[Any, dtype[object_]]]"; expected "ndarray[Any, dtype[object_]]"
+        llab = rizer.factorize(lk)  # type: ignore[arg-type]
+        rlab = rizer.factorize(rk)  # type: ignore[arg-type]
+[/SEARCH]
+[REPLACE]
+    elif isinstance(lk, ExtensionArray) and lk.dtype == rk.dtype:
+        if not isinstance(lk, BaseMaskedArray) and not (
+            # exclude arrow dtypes that would get cast to object
+            isinstance(lk.dtype, ArrowDtype)
+            and is_numeric_dtype(lk.dtype.numpy_dtype)
+        ):
+            lk, _ = lk._values_for_factorize()
+
+            # error: Item "ndarray" of "Union[Any, ndarray]" has no attribute
+            # "_values_for_factorize"
+            rk, _ = rk._values_for_factorize()  # type: ignore[union-attr]
+
+    klass, lk, rk = _convert_arrays_and_get_rizer_klass(lk, rk)
+
+    rizer = klass(max(len(lk), len(rk)))
+
+    if isinstance(lk, BaseMaskedArray):
+        assert isinstance(rk, BaseMaskedArray)
+        llab = rizer.factorize(lk._data, mask=lk._mask)
+        rlab = rizer.factorize(rk._data, mask=rk._mask)
+    elif isinstance(lk, ArrowExtensionArray):
+        assert isinstance(rk, ArrowExtensionArray)
+        # we can only get here with numeric dtypes
+        # TODO: Remove when we have a Factorizer for Arrow
+        llab = rizer.factorize(
+            lk.to_numpy(na_value=1, dtype=lk.dtype.numpy_dtype), mask=lk.isna()
+        )
+        rlab = rizer.factorize(
+            rk.to_numpy(na_value=1, dtype=lk.dtype.numpy_dtype), mask=rk.isna()
+        )
+    elif is_datetime64tz_dtype(lk.dtype) or is_datetime64tz_dtype(rk.dtype):
+        # These were DatetimeTZ arrays that have been extracted to int64
+        llab = rizer.factorize(lk)  # type: ignore[arg-type]
+        rlab = rizer.factorize(rk)  # type: ignore[arg-type]
+    else:
+        # Argument 1 to "factorize" of "ObjectFactorizer" has incompatible type
+        # "Union[ndarray[Any, dtype[signedinteger[_64Bit]]],
+        # ndarray[Any, dtype[object_]]]"; expected "ndarray[Any, dtype[object_]]"
+        llab = rizer.factorize(lk)  # type: ignore[arg-type]
+        rlab = rizer.factorize(rk)  # type: ignore[arg-type]
+[/REPLACE]

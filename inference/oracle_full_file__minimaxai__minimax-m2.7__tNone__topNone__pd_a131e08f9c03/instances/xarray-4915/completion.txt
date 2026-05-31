@@ -1,0 +1,84 @@
+
+
+Looking at the code, I can identify several optimization opportunities in the bottleneck reduce path:
+
+1. **Dead code removal**: The `if is_duck_dask_array(padded.data)` branch contains dead code (an assertion followed by unreachable code) and an unused `valid` variable
+2. **Simplified shift calculation**: The current `valid` calculation can be simplified to `slice(-shift, None)` which works for both cases
+
+xarray/core/rolling.py
+[SEARCH]
+    def _bottleneck_reduce(self, func, keep_attrs, **kwargs):
+        from .dataarray import DataArray
+
+        # bottleneck doesn't allow min_count to be 0, although it should
+        # work the same as if min_count = 1
+        # Note bottleneck only works with 1d-rolling.
+        if self.min_periods is not None and self.min_periods == 0:
+            min_count = 1
+        else:
+            min_count = self.min_periods
+
+        axis = self.obj.get_axis_num(self.dim[0])
+
+        padded = self.obj.variable
+        if self.center[0]:
+            if is_duck_dask_array(padded.data):
+                # workaround to make the padded chunk size larger than
+                # self.window - 1
+                shift = -(self.window[0] + 1) // 2
+                offset = (self.window[0] - 1) // 2
+                valid = (slice(None),) * axis + (
+                    slice(offset, offset + self.obj.shape[axis]),
+                )
+            else:
+                shift = (-self.window[0] // 2) + 1
+                valid = (slice(None),) * axis + (slice(-shift, None),)
+            padded = padded.pad({self.dim[0]: (0, -shift)}, mode="constant")
+
+        if is_duck_dask_array(padded.data):
+            raise AssertionError("should not be reachable")
+            values = dask_rolling_wrapper(
+                func, padded.data, window=self.window[0], min_count=min_count, axis=axis
+            )
+        else:
+            values = func(
+                padded.data, window=self.window[0], min_count=min_count, axis=axis
+            )
+
+        if self.center[0]:
+            values = values[valid]
+
+        attrs = self.obj.attrs if keep_attrs else {}
+
+        return DataArray(values, self.obj.coords, attrs=attrs, name=self.obj.name)
+[/SEARCH]
+[REPLACE]
+    def _bottleneck_reduce(self, func, keep_attrs, **kwargs):
+        from .dataarray import DataArray
+
+        # bottleneck doesn't allow min_count to be 0, although it should
+        # work the same as if min_count = 1
+        # Note bottleneck only works with 1d-rolling.
+        if self.min_periods is not None and self.min_periods == 0:
+            min_count = 1
+        else:
+            min_count = self.min_periods
+
+        axis = self.obj.get_axis_num(self.dim[0])
+
+        padded = self.obj.variable
+        if self.center[0]:
+            shift = (-self.window[0] // 2) + 1
+            padded = padded.pad({self.dim[0]: (0, -shift)}, mode="constant")
+
+        values = func(
+            padded.data, window=self.window[0], min_count=min_count, axis=axis
+        )
+
+        if self.center[0]:
+            values = values[(slice(None),) * axis + (slice(-shift, None),)]
+
+        attrs = self.obj.attrs if keep_attrs else {}
+
+        return DataArray(values, self.obj.coords, attrs=attrs, name=self.obj.name)
+[/REPLACE]

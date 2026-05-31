@@ -1,0 +1,65 @@
+pandas/core/sorting.py
+[SEARCH]
+    if level is not None:
+        _, indexer = target.sortlevel(
+            level,
+            ascending=ascending,
+            sort_remaining=sort_remaining,
+            na_position=na_position,
+        )
+    elif isinstance(target, ABCMultiIndex):
+        codes = [lev.codes for lev in target._get_codes_for_sorting()]
+        indexer = lexsort_indexer(
+            codes, orders=ascending, na_position=na_position, codes_given=True
+        )
+    else:
+        # Check monotonic-ness before sort an index (GH 11080)
+        if (ascending and target.is_monotonic_increasing) or (
+            not ascending and target.is_monotonic_decreasing
+        ):
+            return None
+
+        # ascending can only be a Sequence for MultiIndex
+        indexer = nargsort(
+            target,
+            kind=kind,
+            ascending=cast(bool, ascending),
+            na_position=na_position,
+        )
+[/SEARCH]
+[REPLACE]
+    if level is not None:
+        _, indexer = target.sortlevel(
+            level,
+            ascending=ascending,
+            sort_remaining=sort_remaining,
+            na_position=na_position,
+        )
+    elif isinstance(target, ABCMultiIndex):
+        if isinstance(ascending, bool):
+            ascending = [ascending] * target.nlevels
+        if target.is_monotonic_increasing:
+            if ascending == [True] * target.nlevels:
+                return None
+        elif target.is_monotonic_decreasing:
+            if ascending == [False] * target.nlevels:
+                return None
+        codes = [lev.codes for lev in target._get_codes_for_sorting()]
+        indexer = lexsort_indexer(
+            codes, orders=ascending, na_position=na_position, codes_given=True
+        )
+    else:
+        # Check monotonic-ness before sort an index (GH 11080)
+        if (ascending and target.is_monotonic_increasing) or (
+            not ascending and target.is_monotonic_decreasing
+        ):
+            return None
+
+        # ascending can only be a Sequence for MultiIndex
+        indexer = nargsort(
+            target,
+            kind=kind,
+            ascending=cast(bool, ascending),
+            na_position=na_position,
+        )
+[/REPLACE]

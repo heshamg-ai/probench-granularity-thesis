@@ -1,0 +1,173 @@
+
+
+
+pandas/core/util/hashing.py
+[SEARCH]
+def hash_array(
+    values: ArrayLike,
+    encoding: str = "utf-8",
+    hash_key: str = _default_hash_key,
+    categorize: bool = True,
+) -> npt.NDArray[np.uint64]:
+    """
+    Return a uint64 numpy array from a numpy array or Python sequence.
+
+    It contains a hash of each value.
+
+    Parameters
+    ----------
+    values : ndarray
+        Values to hash. Can be a list or numpy array
+    encoding : str, default "utf-8"
+        Encoding for data & key when strings.
+    hash_key : str, default _default_hash_key
+        Hash key for string key to encode.
+    categorize : bool, default True
+        Whether to first categorize object arrays before hashing. This is more
+        efficient when the array contains duplicate values.
+
+    Returns
+    -------
+    numpy.ndarray[uint64]
+
+    Examples
+    --------
+    >>> from pandas.core.util.hashing import hash_array
+    >>> hash_array(['a', 'b', 'c', 'd'], encoding='utf-8')  # doctest: +SKIP
+    array([16231620895940710282, 18357932404882129499, 17305710128044619917,
+           13086294352710188306], dtype=uint64)
+
+    The hash values are stable on different machines with same machine arch.
+    >>> hash_array(['a', 'b', 'c', 'd'], encoding='utf-8')  # doctest: +SKIP
+    array([16231620895940710282, 18357932404882129419, 17305710128044619917,
+           13086294352710188306], dtype=uint64)
+    """
+    if not isinstance(values, np.ndarray):
+        converted = pandas_api.sanitize_to_nanoseconds(values)
+        if not isinstance(converted, np.ndarray):
+            raise TypeError(
+                f"Unexpected type {type(converted)}. "
+                "Expected numpy array or value array."
+            )
+        values = converted
+
+    elif values.dtype != np.dtype("M8[ns]"):
+        values = values.astype("M8[ns]", copy=False)
+
+    if needs_label_encoding(values.dtype):
+        return _hash_nanout_copy(values, hash_key, encoding)
+
+    elif values.dtype == np.dtype("O"):
+        if categorize:
+            return _hash_list_like_obj_ Categorize(values, hash_key, encoding)
+        else:
+            return _hash_list_like_obj_ nocategorize(values, hash_key, encoding)
+
+    # TODO: GH#29338 enable nullable dtypes
+    elif is_extension_array_dtype(values.dtype):
+        # GH#47153 hash_array of ExtensionArrays is slow
+        # Maybe convert to numpy first
+        values = np.asarray(values)
+        # fall back to numpy implementation
+        return hash_array(values, encoding=encoding, hash_key=hash_key, categorize=categorize)
+
+    # Datetime, Timedelta, Time
+    elif values.dtype.kind == "m":
+        return _hash_nanout_copy(values, hash_key, encoding)
+
+    # Period
+    elif values.dtype == "period[D]":
+        return _hash_period(values, hash_key)
+
+    # Misc cases
+    return _hash_nanout_copy(values, hash_key, encoding)
+[/SEARCH]
+[REPLACE]
+def hash_array(
+    values: ArrayLike,
+    encoding: str = "utf-8",
+    hash_key: str = _default_hash_key,
+    categorize: bool = True,
+) -> npt.NDArray[np.uint64]:
+    """
+    Return a uint64 numpy array from a numpy array or Python sequence.
+
+    It contains a hash of each value.
+
+    Parameters
+    ----------
+    values : ndarray
+        Values to hash. Can be a list or numpy array
+    encoding : str, default "utf-8"
+        Encoding for data & key when strings.
+    hash_key : str, default _default_hash_key
+        Hash key for string key to encode.
+    categorize : bool, default True
+        Whether to first categorize object arrays before hashing. This is more
+        efficient when the array contains duplicate values.
+
+    Returns
+    -------
+    numpy.ndarray[uint64]
+
+    Examples
+    --------
+    >>> from pandas.core.util.hashing import hash_array
+    >>> hash_array(['a', 'b', 'c', 'd'], encoding='utf-8')  # doctest: +SKIP
+    array([16231620895940710282, 18357932404882129499, 17305710128044619917,
+           13086294352710188306], dtype=uint64)
+
+    The hash values are stable on different machines with same machine arch.
+    >>> hash_array(['a', 'b', 'c', 'd'], encoding='utf-8')  # doctest: +SKIP
+    array([16231620895940710282, 18357932404882129419, 17305710128044619917,
+           13086294352710188306], dtype=uint64)
+    """
+    if not isinstance(values, np.ndarray):
+        converted = pandas_api.sanitize_to_nanoseconds(values)
+        if not isinstance(converted, np.ndarray):
+            raise TypeError(
+                f"Unexpected type {type(converted)}. "
+                "Expected numpy array or value array."
+            )
+        values = converted
+
+    elif values.dtype != np.dtype("M8[ns]"):
+        values = values.astype("M8[ns]", copy=False)
+
+    if needs_label_encoding(values.dtype):
+        return _hash_nanout_copy(values, hash_key, encoding)
+
+    elif values.dtype == np.dtype("O"):
+        if categorize:
+            return _hash_list_like_obj_ Categorize(values, hash_key, encoding)
+        else:
+            return _hash_list_like_obj_ nocategorize(values, hash_key, encoding)
+
+    # GH#47153 hash_array of ExtensionArrays is slow
+    # Check for nullable extension dtypes and use optimized path
+    elif is_extension_array_dtype(values.dtype):
+        # BaseMaskedArray has _data and _mask attributes we can use directly
+        if isinstance(values, BaseMaskedArray):
+            return _hash_masked_array(values, hash_key, encoding)
+        # Try to get the underlying numpy array and mask if available
+        try:
+            _values, _mask = values._values_for_hash()
+            if _values is not None and _mask is not None:
+                return _hash_masked_array_from_parts(_values, _mask, hash_key, encoding)
+        except AttributeError:
+            pass
+        # Fall back: convert to numpy and recurse
+        values = np.asarray(values)
+        return hash_array(values, encoding=encoding, hash_key=hash_key, categorize=categorize)
+
+    # Datetime, Timedelta, Time
+    elif values.dtype.kind == "m":
+        return _hash_nanout_copy(values, hash_key, encoding)
+
+    # Period
+    elif values.dtype == "period[D]":
+        return _hash_period(values, hash_key)
+
+    # Misc cases
+    return _hash_nanout_copy(values, hash_key, encoding)
+[/REPLACE]

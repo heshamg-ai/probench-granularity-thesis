@@ -1,0 +1,21 @@
+pandas/core/internals/managers.py
+[SEARCH]
+        for blk in self.blocks:
+            # Such assignment may incorrectly coerce NaT to None
+            # result[blk.mgr_locs] = blk._slice((slice(None), loc))
+            for i, rl in enumerate(blk.mgr_locs):
+                result[rl] = blk.iget((i, loc))
+[/SEARCH]
+[REPLACE]
+        for blk in self.blocks:
+            # Such assignment may incorrectly coerce NaT to None
+            # result[blk.mgr_locs] = blk._slice((slice(None), loc))
+            if blk.values.ndim == 2:
+                blk_vals = blk.values
+                # Replaces slow blk.iget((i, loc)) by direct ndarray row access
+                for i, rl in enumerate(blk.mgr_locs):
+                    result[rl] = blk_vals[i, loc]
+            else:
+                for i, rl in enumerate(blk.mgr_locs):
+                    result[rl] = blk.iget((i, loc))
+[/REPLACE]

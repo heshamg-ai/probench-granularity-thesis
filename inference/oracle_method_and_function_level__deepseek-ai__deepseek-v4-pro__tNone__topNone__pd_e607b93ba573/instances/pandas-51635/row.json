@@ -1,0 +1,51 @@
+{
+  "id": 7,
+  "scenario_id": "pandas-51635",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 51635,
+  "baseline_sha": "be209b70cd3e951c35402421e81db9ae108a92b5",
+  "reference_sha": "15d696ffc4d90ece536d52382ffdf4e0663ede39",
+  "task": "Optimize ArrowExtensionArray.fillna execution when Arrow-backed arrays contain no nulls",
+  "entry_point": "pandas.arrays.ArrowExtensionArray.fillna",
+  "whats_new": "Performance improvement in ~arrays.ArrowExtensionArray.fillna when array does not contain nulls",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-51635:baseline",
+      "digest": "sha256:ba434a9946092d2c167e8f0c74931a5f231a09db43b6f0ab2de4992738f60c5e"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-51635:reference",
+      "digest": "sha256:d02ba2ddb135d873c46ac3767fa11fec39a7c5cf58468c43f4d7a84a1b885899"
+    }
+  },
+  "params": [
+    {
+      "name": "Array Size",
+      "short_indicator": "N",
+      "explanation": "Size of the array",
+      "values": [
+        "100000",
+        "1000000",
+        "10000000"
+      ]
+    },
+    {
+      "name": "Arrow Type",
+      "short_indicator": "AT",
+      "explanation": "Arrow data type",
+      "values": [
+        "int64",
+        "float64",
+        "string"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/arrays/string_/test_string.py::test_fillna_args",
+    "pandas/tests/copy_view/test_interp_fillna.py::test_fillna_ea_noop_shares_memory",
+    "pandas/tests/copy_view/test_interp_fillna.py::test_fillna_inplace_ea_noop_shares_memory",
+    "pandas/tests/extension/test_string.py::TestMissing::test_fillna_no_op_returns_copy"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.arrays.ArrowExtensionArray.fillna for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n\nOPTIMIZATION REQUEST:\nOptimize ArrowExtensionArray.fillna execution when Arrow-backed arrays contain no nulls\nOptimization function: pandas.arrays.ArrowExtensionArray.fillna\n\n\n[start of pandas/core/arrays/arrow/array.py]\n### Relevant context\n#### Class `pandas.core.arrays.arrow.array.ArrowExtensionArray`\n**Class Signature**\n```python\nclass ArrowExtensionArray(OpsMixin, ExtensionArraySupportsAnyAll, BaseStringArrayMethods):\n```\n**Class Attributes**\n```python\n    _data: pa.ChunkedArray\n    _dtype: ArrowDtype\n    _dt_dayofweek = _dt_day_of_week\n    _dt_weekday = _dt_day_of_week\n    _dt_dayofyear = _dt_day_of_year\n```\n**Class __init__ method**\n```python\n    def __init__(self, values: pa.Array | pa.ChunkedArray) -> None:\n        if pa_version_under7p0:\n            msg = \"pyarrow>=7.0.0 is required for PyArrow backed ArrowExtensionArray.\"\n            raise ImportError(msg)\n        if isinstance(values, pa.Array):\n            self._pa_array = pa.chunked_array([values])\n        elif isinstance(values, pa.ChunkedArray):\n            self._pa_array = values\n        else:\n            raise ValueError(\n                f\"Unsupported type '{type(values)}' for ArrowExtensionArray\"\n            )\n        self._dtype = ArrowDtype(self._pa_array.type)\n```\n##### Method `pandas.core.arrays.arrow.array.ArrowExtensionArray.fillna`\n```python\n@doc(ExtensionArray.fillna)\n    def fillna(\n        self,\n        value: object | ArrayLike | None = None,\n        method: FillnaOptions | None = None,\n        limit: int | None = None,\n    ) -> Self:\n        value, method = validate_fillna_kwargs(value, method)\n\n        if limit is not None:\n            return super().fillna(value=value, method=method, limit=limit)\n\n        if method is not None:\n            fallback_performancewarning()\n            return super().fillna(value=value, method=method, limit=limit)\n\n        if is_array_like(value):\n            value = cast(ArrayLike, value)\n            if len(value) != len(self):\n                raise ValueError(\n                    f\"Length of 'value' does not match. Got ({len(value)}) \"\n                    f\" expected {len(self)}\"\n                )\n\n        def convert_fill_value(value, pa_type, dtype):\n            if value is None:\n                return value\n            if isinstance(value, (pa.Scalar, pa.Array, pa.ChunkedArray)):\n                return value\n            if is_array_like(value):\n                pa_box = pa.array\n            else:\n                pa_box = pa.scalar\n            try:\n                value = pa_box(value, type=pa_type, from_pandas=True)\n            except pa.ArrowTypeError as err:\n                msg = f\"Invalid value '{str(value)}' for dtype {dtype}\"\n                raise TypeError(msg) from err\n            return value\n\n        fill_value = convert_fill_value(value, self._pa_array.type, self.dtype)\n\n        try:\n            if method is None:\n                return type(self)(pc.fill_null(self._pa_array, fill_value=fill_value))\n            elif method == \"pad\":\n                return type(self)(pc.fill_null_forward(self._pa_array))\n            elif method == \"backfill\":\n                return type(self)(pc.fill_null_backward(self._pa_array))\n        except pa.ArrowNotImplementedError:\n            # ArrowNotImplementedError: Function 'coalesce' has no kernel\n            #   matching input types (duration[ns], duration[ns])\n            # TODO: remove try/except wrapper if/when pyarrow implements\n            #   a kernel for duration types.\n            pass\n\n        return super().fillna(value=value, method=method, limit=limit)\n```\n[end of pandas/core/arrays/arrow/array.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

@@ -1,0 +1,46 @@
+xarray/core/groupby.py
+[SEARCH]
+def _unique_and_monotonic(group):
+    if isinstance(group, _DummyGroup):
+        return True
+    # TODO: does this still need the special case for pandas? pandas groups
+    # created from groupby are already unique and monotonic
+    # We need the conversion to np.ndarray to ensure that group.is_unique
+    # is a boolean, not an array.
+    group_as_index = group.to_index()
+    return bool(
+        isinstance(group_as_index, pd.RangeIndex)
+        or (
+            group_as_index.is_unique
+            and (group_as_index.is_monotonic_increasing or group_as_index.is_monotonic_decreasing)
+        )
+    )
+[/SEARCH]
+[REPLACE]
+def _unique_and_monotonic(group):
+    if isinstance(group, _DummyGroup):
+        return True
+    # TODO: does this still need the special case for pandas? pandas groups
+    # created from groupby are already unique and monotonic
+    if group.ndim == 1 and group.dtype.kind in ("O", "U"):
+        array = group.values
+        if len(array) == 0:
+            return True
+        if array[0] != array[-1]:
+            return False
+        is_mono = array[0] < array[-1]
+        if is_mono:
+            return bool((array[:-1] <= array[1:]).all() and (array[:-1] != array[1:]).all())
+        else:
+            return bool((array[:-1] >= array[1:]).all() and (array[:-1] != array[1:]).all())
+    # We need the conversion to np.ndarray to ensure that group.is_unique
+    # is a boolean, not an array.
+    group_as_index = group.to_index()
+    return bool(
+        isinstance(group_as_index, pd.RangeIndex)
+        or (
+            group_as_index.is_unique
+            and (group_as_index.is_monotonic_increasing or group_as_index.is_monotonic_decreasing)
+        )
+    )
+[/REPLACE]

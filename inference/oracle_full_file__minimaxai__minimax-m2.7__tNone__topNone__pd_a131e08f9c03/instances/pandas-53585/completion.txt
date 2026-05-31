@@ -1,0 +1,40 @@
+
+
+Looking at the code, the main performance bottleneck in `_wrap_result` for PyArrow-backed strings with `expand=True` is the `result.tolist()` call which materializes all data to Python objects. I need to optimize the transposition of list-of-lists into columns.
+
+Let me first examine the exact code section that needs optimization:
+
+```python
+                result = {
+                    label: ArrowExtensionArray(pa.array(res))
+                    for label, res in zip(labels, (zip(*result.tolist())))
+                }
+```
+
+This calls `tolist()` on the entire result, which is slow. Instead, we can use PyArrow's native operations to extract columns directly.
+
+pandas/core/strings/accessor.py
+[SEARCH]
+                result = {
+                    label: ArrowExtensionArray(pa.array(res))
+                    for label, res in zip(labels, (zip(*result.tolist())))
+                }
+[/SEARCH]
+[REPLACE]
+                # Optimization: avoid slow tolist() by using PyArrow's take for each column
+                # Transpose list-of-lists to list-of-columns using PyArrow take operation
+                pa_arr = result._pa_array
+                nrows = pa_arr.length()
+
+                # Get the indices for each column position
+                # Use PyArrow's internal structure to extract columns efficiently
+                result = {}
+                for i in range(max_len):
+                    # Create mask for valid elements at position i in each list
+                    # All lists have length >= max_len at this point (padded above)
+                    indices_array = pa.array(
+                        [i] * nrows, type=pa.int64()
+                    )
+                    col_values = pa.compute.list_element(pa_arr, i)
+                    result[labels[i]] = ArrowExtensionArray(col_values)
+[/REPLACE]

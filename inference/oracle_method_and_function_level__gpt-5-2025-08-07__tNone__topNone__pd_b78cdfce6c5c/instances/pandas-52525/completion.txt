@@ -1,0 +1,27 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        elif self._hasna:
+            data = self.copy()
+            data[self.isna()] = na_value
+            return np.asarray(data._pa_array, dtype=dtype)
+[/SEARCH]
+[REPLACE]
+        elif (
+            self._hasna
+            and dtype is not None
+            and np.dtype(dtype).kind == "f"
+            and (na_value is np.nan or (isinstance(na_value, float) and np.isnan(na_value)))
+        ):
+            # Fast-path: convert to float dtype and fill NaNs without materializing an Arrow copy
+            result = np.asarray(self._pa_array, dtype=dtype)
+            if copy:
+                result = result.copy()
+            mask = self.isna()
+            if mask.any():
+                result[mask] = na_value
+            return result
+        elif self._hasna:
+            data = self.copy()
+            data[self.isna()] = na_value
+            return np.asarray(data._pa_array, dtype=dtype)
+[/REPLACE]

@@ -1,0 +1,48 @@
+xarray/groupers.py
+[SEARCH]
+    def _factorize_unique(self) -> EncodedGroups:
+        # look through group to find the unique values
+        sort = not isinstance(self.group_as_index, pd.MultiIndex)
+        unique_values, codes_ = unique_value_groups(self.group_as_index, sort=sort)
+        if (codes_ == -1).all():
+            raise ValueError(
+                "Failed to group data. Are you grouping by a variable that is all NaN?"
+            )
+        codes = self.group.copy(data=codes_.reshape(self.group.shape))
+        unique_coord = Variable(
+            dims=codes.name, data=unique_values, attrs=self.group.attrs
+        )
+        full_index = pd.Index(unique_values)
+
+        return EncodedGroups(
+            codes=codes,
+            full_index=full_index,
+            unique_coord=unique_coord,
+            coords=_coordinates_from_variable(unique_coord),
+        )
+[/SEARCH]
+[REPLACE]
+    def _factorize_unique(self) -> EncodedGroups:
+        # look through group to find the unique values
+        sort = not isinstance(self.group_as_index, pd.MultiIndex)
+        unique_values, codes_ = unique_value_groups(self.group_as_index, sort=sort)
+        if (codes_ == -1).all():
+            raise ValueError(
+                "Failed to group data. Are you grouping by a variable that is all NaN?"
+            )
+        codes = self.group.copy(data=codes_.reshape(self.group.shape))
+        unique_coord = Variable(
+            dims=codes.name, data=unique_values, attrs=self.group.attrs
+        )
+        if isinstance(unique_values, pd.MultiIndex):
+            full_index = unique_values
+        else:
+            full_index = pd.Index(unique_values)
+
+        return EncodedGroups(
+            codes=codes,
+            full_index=full_index,
+            unique_coord=unique_coord,
+            coords=_coordinates_from_variable(unique_coord),
+        )
+[/REPLACE]

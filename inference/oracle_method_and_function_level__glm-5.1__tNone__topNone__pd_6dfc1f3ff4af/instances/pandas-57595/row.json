@@ -1,0 +1,57 @@
+{
+  "id": 62,
+  "scenario_id": "pandas-57595",
+  "repo": "pandas-dev/pandas",
+  "pr_number": 57595,
+  "baseline_sha": "a730486036790f3cd26145542257a837e241144c",
+  "reference_sha": "496763b9bad2769b98868e4623a314b1f8fd8432",
+  "task": "Optimize DataFrameGroupBy.__len__ for multi-key `groupby`",
+  "entry_point": "pandas.core.groupby.DataFrameGroupBy.__len__",
+  "whats_new": "Performance improvement in ``DataFrameGroupBy.__len__`` and ``SeriesGroupBy.__len__``",
+  "optimization_target": "Runtime",
+  "docker": {
+    "baseline": {
+      "tag": "ghcr.io/probench-swe/pandas-57595:baseline",
+      "digest": "sha256:9896565eea770f30a5fa024aba45a32a1b6418d9875c7f5b156091a525c54ed7"
+    },
+    "reference": {
+      "tag": "ghcr.io/probench-swe/pandas-57595:reference",
+      "digest": "sha256:dd7b7590d77672d9aef78d7f8190b218f9369015f2def9e992725e90a109849d"
+    }
+  },
+  "params": [
+    {
+      "name": "Num Rows",
+      "short_indicator": "R",
+      "explanation": "Number of rows in the DataFrame.",
+      "values": [
+        "1000",
+        "10000",
+        "100000"
+      ]
+    },
+    {
+      "name": "Num Columns",
+      "short_indicator": "C",
+      "explanation": "Number of columns in the DataFrame.",
+      "values": [
+        "10",
+        "100"
+      ]
+    },
+    {
+      "name": "Num Grouping Columns",
+      "short_indicator": "GC",
+      "explanation": "Number of columns used as grouping keys.",
+      "values": [
+        "3",
+        "5"
+      ]
+    }
+  ],
+  "core_tests": [
+    "pandas/tests/groupby/test_groupby.py::test_len",
+    "pandas/tests/groupby/test_groupby.py::test_len_nan_group"
+  ],
+  "text": "You are an expert Python performance engineer. Your objective is to optimize pandas.core.groupby.DataFrameGroupBy.__len__ for speed and memory efficiency without altering its behavior, public APIs, or test expectations.\n\nCONSTRAINTS:\n- Preserve exact semantics and outputs.\n- Preserve all public APIs and return types.\n- Do not modify tests or test expectations.\n- Only change what directly improves the optimization target.\n\nOPTIMIZATION REQUEST:\nOptimize DataFrameGroupBy.__len__ for multi-key `groupby`\nOptimization function: pandas.core.groupby.DataFrameGroupBy.__len__\n\n\n[start of pandas/core/groupby/groupby.py]\n### Relevant context\n#### Class `pandas.core.groupby.groupby.BaseGroupBy`\n**Class Signature**\n```python\nclass BaseGroupBy(PandasObject, SelectionMixin[NDFrameT], GroupByIndexingMixin):\n```\n**Class Attributes**\n```python\n    _hidden_attrs = PandasObject._hidden_attrs | {\n        \"as_index\",\n        \"dropna\",\n        \"exclusions\",\n        \"grouper\",\n        \"group_keys\",\n        \"keys\",\n        \"level\",\n        \"obj\",\n        \"observed\",\n        \"sort\",\n    }\n    _grouper: ops.BaseGrouper\n    keys: _KeysArgType | None = None\n    level: IndexLabel | None = None\n    group_keys: bool\n```\n##### Method `pandas.core.groupby.groupby.BaseGroupBy.__len__`\n```python\n@final\n    def __len__(self) -> int:\n        return len(self.groups)\n```\n[end of pandas/core/groupby/groupby.py]\n\n\nOUTPUT FORMAT — SEARCH/REPLACE BLOCKS:\n\nFor each change emit exactly one block:\n\npath/to/file.py\n[SEARCH]\n<code to find>\n[/SEARCH]\n[REPLACE]\n<replacement code>\n[/REPLACE]\n\nRULES:\n- Output ONLY the blocks. No prose, no explanations, no markdown fences.\n- Multiple blocks are allowed — one per logical change, in any order.\n- SEARCH must be copied VERBATIM from the file:\n    * exact line breaks — never collapse a multiline signature to one line\n    * exact indentation — do not add or remove leading whitespace\n    * exact quotes — do not change ' to \" or vice versa\n    * exact spacing — do not add or remove spaces around = or ()\n- SEARCH must be the SMALLEST snippet that uniquely identifies the location.\n  Never include whole functions or docstrings unless the whole thing changes.\n- REPLACE may be empty to delete the matched code.\n- Multiple blocks on the same file are applied top-to-bottom.\n\n\nANCHORING GUIDANCE:\n- REPLACE: SEARCH = the lines to change, REPLACE = the new lines.\n- ADD:     SEARCH = nearest unique surrounding line(s), REPLACE = those same\n           lines plus the new code inserted before or after.\n- DELETE:  SEARCH = the lines to remove, REPLACE = (empty).\n- If a function signature spans multiple lines in the file, your SEARCH must\n  span those exact same lines — do not rewrite it as a single line.\n\n\nEXAMPLES:\n\n# 1. Replace a function, method, or class body\nmypackage/module.py\n[SEARCH]\n    def compute(self, x):\n        return x * 2\n[/SEARCH]\n[REPLACE]\n    def compute(self, x: int) -> int:\n        return x * 3\n[/REPLACE]\n\n# 2. Replace a multiline signature\nmypackage/module.py\n[SEARCH]\n    def process(\n        self,\n        value: int,\n    ) -> int:\n[/SEARCH]\n[REPLACE]\n    def process(\n        self,\n        value: int,\n        scale: float = 1.0,\n    ) -> int:\n[/REPLACE]\n\n# 3. Add a function, method, or class after an existing one\nmypackage/module.py\n[SEARCH]\n    def existing_method(self):\n        pass\n[/SEARCH]\n[REPLACE]\n    def existing_method(self):\n        pass\n\n    def new_method(self):\n        return True\n[/REPLACE]\n\n# 4. Delete a function, method, or class\nmypackage/module.py\n[SEARCH]\n    def deprecated_method(self):\n        do_old_thing()\n        return result\n[/SEARCH]\n[REPLACE]\n[/REPLACE]\n"
+}

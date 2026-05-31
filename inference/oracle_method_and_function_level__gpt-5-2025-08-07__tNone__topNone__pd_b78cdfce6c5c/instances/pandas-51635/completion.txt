@@ -1,0 +1,47 @@
+pandas/core/arrays/arrow/array.py
+[SEARCH]
+        def convert_fill_value(value, pa_type, dtype):
+            if value is None:
+                return value
+            if isinstance(value, (pa.Scalar, pa.Array, pa.ChunkedArray)):
+                return value
+            if is_array_like(value):
+                pa_box = pa.array
+            else:
+                pa_box = pa.scalar
+            try:
+                value = pa_box(value, type=pa_type, from_pandas=True)
+            except pa.ArrowTypeError as err:
+                msg = f"Invalid value '{str(value)}' for dtype {dtype}"
+                raise TypeError(msg) from err
+            return value
+
+        fill_value = convert_fill_value(value, self._pa_array.type, self.dtype)
+[/SEARCH]
+[REPLACE]
+        def convert_fill_value(value, pa_type, dtype):
+            if value is None:
+                return value
+            if isinstance(value, (pa.Scalar, pa.Array, pa.ChunkedArray)):
+                return value
+            if is_array_like(value):
+                pa_box = pa.array
+            else:
+                pa_box = pa.scalar
+            try:
+                value = pa_box(value, type=pa_type, from_pandas=True)
+            except pa.ArrowTypeError as err:
+                msg = f"Invalid value '{str(value)}' for dtype {dtype}"
+                raise TypeError(msg) from err
+            return value
+
+        # Fastpath: if there are no nulls, avoid compute kernels.
+        # Preserve semantics by performing conversion to trigger potential errors
+        # when a non-None value is provided.
+        if self._pa_array.null_count == 0:
+            if value is not None:
+                convert_fill_value(value, self._pa_array.type, self.dtype)
+            return type(self)(self._pa_array)
+
+        fill_value = convert_fill_value(value, self._pa_array.type, self.dtype)
+[/REPLACE]

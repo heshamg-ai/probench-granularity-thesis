@@ -1,0 +1,70 @@
+pandas/core/frame.py
+[SEARCH]
+from pandas.core.dtypes.dtypes import (
+    ArrowDtype,
+    ExtensionDtype,
+)
+[/SEARCH]
+[REPLACE]
+from pandas.core.dtypes.dtypes import (
+    ArrowDtype,
+    ExtensionDtype,
+    BaseMaskedDtype,
+)
+[/REPLACE]
+
+pandas/core/frame.py
+[SEARCH]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            # We have EAs with the same dtype. We can preserve that dtype in transpose.
+            dtype = dtypes[0]
+            arr_type = dtype.construct_array_type()
+            values = self.values
+
+            new_values = [arr_type._from_sequence(row, dtype=dtype) for row in values]
+            result = type(self)._from_arrays(
+                new_values, index=self.columns, columns=self.index
+            )
+[/SEARCH]
+[REPLACE]
+        elif (
+            self._is_homogeneous_type
+            and dtypes
+            and isinstance(dtypes[0], ExtensionDtype)
+        ):
+            # We have EAs with the same dtype. We can preserve that dtype in transpose.
+            dtype = dtypes[0]
+            arr_type = dtype.construct_array_type()
+            if isinstance(dtype, BaseMaskedDtype):
+                # Optimized path for masked EAs: build transposed columns
+                # by transposing the underlying data and mask in a vectorized way.
+                arrays = list(self._iter_column_arrays())
+                if arrays and hasattr(arrays[0], "_data") and hasattr(arrays[0], "_mask"):
+                    data2d = np.stack([arr._data for arr in arrays], axis=1)
+                    mask2d = np.stack([arr._mask for arr in arrays], axis=1)
+                    new_values = [
+                        arr_type(data2d[i, :], mask2d[i, :], copy=False)
+                        for i in range(len(self))
+                    ]
+                    result = type(self)._from_arrays(
+                        new_values, index=self.columns, columns=self.index
+                    )
+                else:
+                    # Fallback if arrays don't expose _data/_mask as expected
+                    values = self.values
+                    new_values = [arr_type._from_sequence(row, dtype=dtype) for row in values]
+                    result = type(self)._from_arrays(
+                        new_values, index=self.columns, columns=self.index
+                    )
+            else:
+                values = self.values
+
+                new_values = [arr_type._from_sequence(row, dtype=dtype) for row in values]
+                result = type(self)._from_arrays(
+                    new_values, index=self.columns, columns=self.index
+                )
+[/REPLACE]
