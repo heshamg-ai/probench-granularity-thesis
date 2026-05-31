@@ -1,4 +1,4 @@
-# PRO-Bench: Granularity Study — Thesis Extension
+# Evaluating Large Language Models for Code Optimization
 
 This repository contains the code, inference outputs, and documentation for a Master's thesis extending the [PRO-Bench framework (SWE-Pro)](https://github.com/ezgiletta/SWE-Pro) with two new context granularities and five LLM models.
 
